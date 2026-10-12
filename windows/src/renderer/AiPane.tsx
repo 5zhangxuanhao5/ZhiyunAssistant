@@ -61,12 +61,36 @@ export function selectElementText(root: HTMLElement | null) { if (!root) return;
 
 export interface AnswerContentProps { answer?: string; parts?: CourseAnswerPart[]; references?: Course[]; onSeek: (at: number, course?: Course) => void; notesOpen?: boolean; onInsert?: (value: NoteInsertion) => void; reference?: NoteContentReference; at?: number; highlight?: boolean; selectionClass?: string; onInteraction?: () => void }
 export function AnswerContent({ answer = '', parts: incoming, references, onSeek, notesOpen, onInsert, reference, at = 0, highlight, selectionClass, onInteraction }: AnswerContentProps) {
-  const parts = incoming || answerContentParts(answer, references), root = useRef<HTMLDivElement>(null);
+  const liveParts = incoming || answerContentParts(answer, references), root = useRef<HTMLDivElement>(null);
+  // Keep native selection nodes stable while streaming adds or reparses Markdown.
+  // The full answer still arrives and is saved; only this selected DOM is held.
+  const visibleParts = useRef(liveParts), held = useRef(false), pressed = useRef(false);
+  const [, redraw] = useState(0);
+  if (!held.current) visibleParts.current = liveParts;
+  const parts = visibleParts.current;
+  useEffect(() => {
+    const release = () => { if (held.current) { held.current = false; redraw(value => value + 1); } };
+    const changed = () => {
+      if (pressed.current) return;
+      const value = window.getSelection(), element = root.current;
+      if (element && value && !value.isCollapsed && Array.from({ length: value.rangeCount }, (_, index) => value.getRangeAt(index)).some(range => range.intersectsNode(element))) held.current = true;
+      else release();
+    };
+    const pointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (root.current?.contains(target) || (target instanceof Element && target.closest('.selection-insert')?.parentElement === root.current?.parentElement)) return;
+      pressed.current = false; release();
+    };
+    const pointerUp = () => { pressed.current = false; changed(); };
+    document.addEventListener('selectionchange', changed); document.addEventListener('pointerdown', pointerDown);
+    window.addEventListener('pointerup', pointerUp); window.addEventListener('pointercancel', pointerUp);
+    return () => { document.removeEventListener('selectionchange', changed); document.removeEventListener('pointerdown', pointerDown); window.removeEventListener('pointerup', pointerUp); window.removeEventListener('pointercancel', pointerUp); };
+  }, []);
   const [selection, setSelection] = useState<{ start: number; end: number; x: number; y: number }>();
   useEffect(() => { const changed = () => { if (!root.current || !notesOpen) { setSelection(undefined); return; } const offset = selectionOffsets(root.current); if (!offset) { setSelection(undefined); return; } const rectangle = window.getSelection()!.getRangeAt(0).getBoundingClientRect(), box = root.current.getBoundingClientRect(); setSelection({ ...offset, x: Math.max(0, Math.min(box.width - 130, rectangle.left - box.left)), y: Math.max(0, rectangle.bottom - box.top) }); }; document.addEventListener('selectionchange', changed); return () => document.removeEventListener('selectionchange', changed); }, [notesOpen]);
   const insert = () => { if (!selection || !onInsert) return; const formatted = selectedAnswerParts(parts, selection.start, selection.end); onInsert({ kind: reference?.kind === 'summary' ? 'summary' : 'question', value: formatted.map(part => part.value).join(''), formatted, at: reference?.at ?? at, end: reference?.at ?? at, sourceId: '', reference }); window.getSelection()?.removeAllRanges(); setSelection(undefined); };
   return <div className={'answer-container ' + (selectionClass || '')}>
-    <div ref={root} data-select-content="true" className={'answer-content native-selectable ' + (highlight ? 'reference-highlight' : '')} onPointerDown={onInteraction}>
+    <div ref={root} data-select-content="true" className={'answer-content native-selectable ' + (highlight ? 'reference-highlight' : '')} onPointerDown={event => { if (event.button === 0 && event.pointerType !== 'touch') { pressed.current = true; held.current = true; } onInteraction?.(); }}>
       {parts.map((part, index) => { const style = { fontWeight: part.bold ? 650 : undefined, fontStyle: part.italic ? 'italic' : undefined }; return part.seconds >= 0 ? <a key={index} role="link" tabIndex={0} className="time-link" style={style} href="#" onClick={event => { event.preventDefault(); event.stopPropagation(); if (!window.getSelection()?.toString()) onSeek(part.seconds, part.course); }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); onSeek(part.seconds, part.course); } }}>{part.value}</a> : part.code ? <code style={style} key={index}>{part.value}</code> : <span style={style} key={index}>{part.value}</span>; })}
     </div>
     {selection && notesOpen && <button type="button" className="selection-insert" style={{ left: selection.x, top: selection.y + 6 }} onPointerDown={event => event.preventDefault()} onClick={insert}>插入到笔记</button>}

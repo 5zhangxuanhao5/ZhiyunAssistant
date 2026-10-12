@@ -13,7 +13,7 @@
 | Windows | 0.8.0-beta.1；Windows 10/11，x64 / ARM64 | Intel、AMD 的 64 位电脑选 x64；ARM 电脑选 ARM64；提供 Setup.exe 与 ZIP | 处于测试阶段。Mac 上的模型、服务及 Electron 检查不代替 Windows 原生验收；实际 CI 状态以 [Actions](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/actions) 为准 |
 | Mac 原生版 | 1.0.0；macOS 13 及以上 | 同一个 DMG 或 ZIP 包含 Intel 与 Apple Silicon | 当前 Apple Silicon Mac 已验证真实有权限课程的视频、键盘操作与身份恢复，19 项合成回归通过；Intel 为编译检查 |
 
-Mac 本次公开附件为智云助手-Mac-1.0.0.dmg、智云助手-Mac-1.0.0-PublicApp.zip 和智云助手-Mac-1.0.0-PublicSource.zip。[Mac 分发说明](macOS/DISTRIBUTION.md)列出三个文件的 SHA256。ZIP 的公开分发整理去除了归档元数据和日志私人路径，没有改应用二进制或版本。
+Mac 本次公开附件为ZhiyunAssistant-Mac-1.0.0.dmg、ZhiyunAssistant-Mac-1.0.0-PublicApp.zip 和ZhiyunAssistant-Mac-1.0.0-PublicSource.zip。[Mac 分发说明](macOS/DISTRIBUTION.md)列出三个文件的 SHA256。ZIP 的公开分发整理去除了归档元数据和日志私人路径，没有改应用二进制或版本。
 
 Mac 包采用 ad-hoc 签名，尚未完成 Apple Developer ID 签名与公证。Windows 当前也没有发布者代码签名。这些包作为预览版本提供，不保证所有电脑、显卡、外设或教室媒体格式都已通过测试。
 

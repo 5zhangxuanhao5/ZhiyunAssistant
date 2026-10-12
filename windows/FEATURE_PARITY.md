@@ -98,7 +98,16 @@
 
 ## 当前本机可复现结果与Windows门禁
 
-- `tests/core-port.test.cjs` 已从原基线继承144个纯模型及智云API行为测试，不含ArkUI源码字符串断言，也不依赖DevEco绝对路径；另加日历、输入法、视频时间/DVR/手势及发布审计行为，共151项，在当前macOS主机实际全部通过。
+- `tests/core-port.test.cjs` 已从原基线继承144个纯模型及智云API行为测试，不含ArkUI源码字符串断言，也不依赖DevEco绝对路径；另加日历、输入法、视频时间/DVR/手势、实际 HLS 构造配置及发布审计行为，共152项，在当前macOS主机实际全部通过。
+- `tests/lists.test.ts` 的9项实际列表逻辑检查通过：批量下载四种来源范围、允许/拒绝/未知过滤、增量权限合并、修读记录增减时的缓存复用、早期下载事件和删除后旧事件安全、2500门已下载记录对象复用、同名课程独立分组、排除课次后的未来课程排序。
+- `tests/e2e/calendar-selection.spec.ts` 与 `tests/e2e/lists.spec.ts` 共6项真实 macOS Electron 集成检查通过。覆盖日历滑动后立即点击与完整月格、课程转写纯文本复制和点击外部取消；本人批量缓存/默认不选、搜索及单门课程刷新范围、返回恢复搜索结果；早期下载进度/删除后旧事件不复活、2500条记录的80/160分页与已保存DOM位置稳定；不完整全课收藏补课次及部分收藏进入后只显示所选课。测试使用合成课程和隔离目录，无真实账号、课程内容或付费请求。
+- `tests/camera.test.ts` 的6项实际视觉机位逻辑检查与 `tests/e2e/camera.spec.ts` 的3项真实 macOS Electron 解码检查通过。MP4和HLS不同URL在同一课内两个时点取64×36 RGB帧；充分相同才合并，反相真实不同画面保留，黑屏/纯色/单帧/错时间/不同比例都不能作相同证据。当前选中机位作为合并组代表不改变主播放源；取帧不寻址主播放器。暂停取消后台比较，失败未验证的机位保留。本项不代替Windows显卡及真实课堂媒体检查。
 - `Calendar` 与 `Selections` 的独立macOS Electron检查覆盖当月格子、记录标记、无课日期、年切换/横划、阶梯选区、空白处取消、富文本图片复制载荷和时间标签排除。此项不代替Windows的实体键盘/触控板验收。
 - `.github/workflows/windows.yml` 在原生 `windows-2025`（x64）与 `windows-11-arm`（ARM64）分别执行类型、单元、Electron UI、NSIS+ZIP、PE/ASAR、中文含空格路径安装、已安装EXE启动及卸载检查；两者全部通过后，版本Tag只生成**预发布**，不自动标记稳定版。任务尚未运行不能提前写成Windows已经通过。
 - Windows10/11为目标支持范围；Windows7/8/8.1及32位系统不在分发范围。GitHub的x64运行器是WindowsServer2025，不能把其结果扩写成Windows10每个版本和任意显卡都已实测。参考[GitHub运行器说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/choose-the-runner-for-a-job)与[Electron旧Windows支持结束说明](https://www.electronjs.org/blog/windows-7-to-8-1-deprecation-notice)。
+
+## 仍需单独确认的平台边界
+
+- 视频机位视觉比较已实现桌面等效并在本机验证MP4/HLS：只在视频播放且有足够真实可比较时间区间时启动，首源不等待比较。不能取帧、没有足够历史区间或样本不确定时保留候选源。Windows原生CI与不同教室真实机位仍需核验，鸿蒙MediaKit路径不作为Windows结果证据。
+- Windows图片导入可使用文件选择与操作系统摄像设备。鸿蒙华为互联手机图库、相机、文档扫描接口不是Windows通用接口；电脑/手机系统能提供的摄像设备需要分别验收，不能把“默认摄像头能拍照”写成完整华为设备互联已等效。
+- 官方直播是否提供加入前的转写、历史课件和DVR区间由对应课程/教室接口决定。应用持续查询已授权的官方历史路径；缺失则说明原因，不补造历史、不绕过权限。合成媒体通过不代替真实教室与网络环境验证。

@@ -100,11 +100,32 @@ async function smokeExecutable(filename, expectedArch) {
     await page.waitForSelector('#root button', { timeout: 30000 });
     const info = await page.evaluate(() => window.zhiyun.call('app.info'));
     if (!info.packaged || info.platform !== 'win32' || info.arch !== expectedArch) throw Error('Installed app reported incorrect runtime metadata');
+    const encryption = await app.evaluate(({ safeStorage }) => {
+      if (!safeStorage.isEncryptionAvailable()) throw Error('Windows account encryption is unavailable');
+      const sample = 'zhiyun-synthetic-install-encryption-check';
+      const cipher = safeStorage.encryptString(sample);
+      if (cipher.includes(Buffer.from(sample)) || safeStorage.decryptString(cipher) !== sample) throw Error('Windows account encryption round trip failed');
+      return true;
+    });
+    const imageWorker = await app.evaluate(async ({ app }) => {
+      const { Worker } = require('node:worker_threads'), path = require('node:path');
+      const worker = new Worker(path.join(app.getAppPath() + '.unpacked', 'dist', 'desktop', 'image-worker.cjs'));
+      try {
+        return await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(Error('Installed image worker timeout')), 10000);
+          worker.once('error', error => { clearTimeout(timeout); reject(error); });
+          worker.once('message', result => { clearTimeout(timeout); if (result.error || result.value !== true) reject(Error(result.error || 'Installed image worker comparison failed')); else resolve(true); });
+          const width = 128, height = 72, pixels = new Uint8Array(width * height * 4);
+          for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) { const i = (y * width + x) * 4; pixels[i] = x * 7 % 256; pixels[i + 1] = y * 5 % 256; pixels[i + 2] = (x + y) * 3 % 256; pixels[i + 3] = 255; }
+          worker.postMessage({ id: 1, kind: 'compare', a: pixels.slice().buffer, b: pixels.slice().buffer, width, height, strideA: width * 4, strideB: width * 4 });
+        });
+      } finally { await worker.terminate(); }
+    });
     await page.setViewportSize({ width: 800, height: 620 });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     if (overflow > 3) throw Error('Startup page overflows the narrow desktop viewport');
     if (exceptions.length) throw Error('Renderer startup exceptions: ' + exceptions.join('; '));
-    return { passed: true, installedStartup: true, version: info.version, arch: info.arch, platform: info.platform, checkedAt: new Date().toISOString(), scope: 'Fresh installed startup and narrow-window shell; not live login/video or complete hardware QA' };
+    return { passed: true, installedStartup: true, accountEncryption: encryption, unpackedImageWorker: imageWorker, version: info.version, arch: info.arch, platform: info.platform, checkedAt: new Date().toISOString(), scope: 'Fresh installed startup, native account encryption, image worker and narrow-window shell; not live login/video or complete hardware QA' };
   } finally { await app.close(); }
 }
 async function main(argv = process.argv.slice(2)) {

@@ -1,0 +1,309 @@
+{
+  "basis": "package-lock.json packages whose dev is false or absent; no dependency changes",
+  "packages": [
+    {
+      "name": "@types/trusted-types",
+      "version": "2.0.7",
+      "license": "MIT",
+      "optional": true,
+      "directory": "@types__trusted-types",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        }
+      ]
+    },
+    {
+      "name": "core-util-is",
+      "version": "1.0.3",
+      "license": "MIT",
+      "optional": false,
+      "directory": "core-util-is",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "33b734d60042d0fe0c92dd1fc1e874193a1c899ec3e276a2eb935d2d0bf5b710"
+        }
+      ]
+    },
+    {
+      "name": "dompurify",
+      "version": "3.4.17",
+      "license": "(MPL-2.0 OR Apache-2.0)",
+      "optional": false,
+      "directory": "dompurify",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "file": "LICENSE-MPL",
+          "origin": "LICENSE-MPL",
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+        }
+      ]
+    },
+    {
+      "name": "hls.js",
+      "version": "1.6.19",
+      "license": "Apache-2.0",
+      "optional": false,
+      "directory": "hls.js",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "ca8773cf798c7ed997d4dd7c8e23c348699f8d5b7462636694cc14de6cda12db"
+        }
+      ]
+    },
+    {
+      "name": "immediate",
+      "version": "3.0.6",
+      "license": "MIT",
+      "optional": false,
+      "directory": "immediate",
+      "files": [
+        {
+          "file": "LICENSE.txt",
+          "origin": "LICENSE.txt",
+          "sha256": "809e66de579fb7d92503848bbe6d1f348f4f6521a71e5d294fe7cc0c87a3b4ff"
+        }
+      ]
+    },
+    {
+      "name": "inherits",
+      "version": "2.0.4",
+      "license": "ISC",
+      "optional": false,
+      "directory": "inherits",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "5ffe28e7ade7d8f10d85d5337a73fd793dac5c462fb9a28fbf8c5046c7fbca3b"
+        }
+      ]
+    },
+    {
+      "name": "isarray",
+      "version": "1.0.0",
+      "license": "MIT",
+      "optional": false,
+      "directory": "isarray",
+      "files": [
+        {
+          "file": "LICENSE-in-upstream-README.md",
+          "origin": "README.md",
+          "sha256": "ff138e683771b187f3629c383db72ee7d632009010a36d08e18e8d2a34222ec7"
+        }
+      ]
+    },
+    {
+      "name": "jszip",
+      "version": "3.10.1",
+      "license": "(MIT OR GPL-3.0-or-later)",
+      "optional": false,
+      "directory": "jszip",
+      "files": [
+        {
+          "file": "LICENSE.markdown",
+          "origin": "LICENSE.markdown",
+          "sha256": "566c953c6090b1218ca6217dd7359d45dde46581968586dc607d59a78af6a9c4"
+        }
+      ]
+    },
+    {
+      "name": "lie",
+      "version": "3.3.0",
+      "license": "MIT",
+      "optional": false,
+      "directory": "lie",
+      "files": [
+        {
+          "file": "license.md",
+          "origin": "license.md",
+          "sha256": "5c81b0caa98593408b03125efa25efe622341ed87ae55561968828cd887d64a4"
+        }
+      ]
+    },
+    {
+      "name": "marked",
+      "version": "16.4.2",
+      "license": "MIT",
+      "optional": false,
+      "directory": "marked",
+      "files": [
+        {
+          "file": "LICENSE.md",
+          "origin": "LICENSE.md",
+          "sha256": "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c"
+        }
+      ]
+    },
+    {
+      "name": "pako",
+      "version": "1.0.11",
+      "license": "(MIT AND Zlib)",
+      "optional": false,
+      "directory": "pako",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "a04665b3b2de56c66730c1f720f528175739e4104f79073614aa611da1e85539"
+        },
+        {
+          "file": "LICENSE-zlib-upstream-README.txt",
+          "origin": "lib/zlib/README",
+          "sha256": "d8b499598e43d755ea8918448128259ff01820c50d94d5a48c8883d0a594ddb1"
+        }
+      ]
+    },
+    {
+      "name": "process-nextick-args",
+      "version": "2.0.1",
+      "license": "MIT",
+      "optional": false,
+      "directory": "process-nextick-args",
+      "files": [
+        {
+          "file": "license.md",
+          "origin": "license.md",
+          "sha256": "ecdccbcf39024f624ded480c01c0b25458e1eca8f26ecf040933865ce56d9a4f"
+        }
+      ]
+    },
+    {
+      "name": "react",
+      "version": "19.3.0",
+      "license": "MIT",
+      "optional": false,
+      "directory": "react",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "name": "react-dom",
+      "version": "19.3.0",
+      "license": "MIT",
+      "optional": false,
+      "directory": "react-dom",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "name": "readable-stream",
+      "version": "2.3.8",
+      "license": "MIT",
+      "optional": false,
+      "directory": "readable-stream",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "ec62dc96da0099b87f4511736c87309335527fb7031639493e06c95728dc8c54"
+        }
+      ]
+    },
+    {
+      "name": "safe-buffer",
+      "version": "5.1.2",
+      "license": "MIT",
+      "optional": false,
+      "directory": "safe-buffer",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "c7cc929b57080f4b9d0c6cf57669f0463fc5b39906344dfc8d3bc43426b30eac"
+        }
+      ]
+    },
+    {
+      "name": "scheduler",
+      "version": "0.28.0",
+      "license": "MIT",
+      "optional": false,
+      "directory": "scheduler",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "name": "setimmediate",
+      "version": "1.0.5",
+      "license": "MIT",
+      "optional": false,
+      "directory": "setimmediate",
+      "files": [
+        {
+          "file": "LICENSE.txt",
+          "origin": "LICENSE.txt",
+          "sha256": "c4b4ad3a5746f1f5249a6dd90396ec519264e1bb02e01e48a6522c48a3a97cb4"
+        }
+      ]
+    },
+    {
+      "name": "string_decoder",
+      "version": "1.1.1",
+      "license": "MIT",
+      "optional": false,
+      "directory": "string_decoder",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "11f2aafb37d06b3ee5bdaf06e9811141d0da05263c316f3d627f45c20d43261b"
+        }
+      ]
+    },
+    {
+      "name": "util-deprecate",
+      "version": "1.0.2",
+      "license": "MIT",
+      "optional": false,
+      "directory": "util-deprecate",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "0154425673db15cdfa80ecba2c9b1f1a867f7197a006764712849bfc3a93cbb7"
+        }
+      ]
+    },
+    {
+      "name": "ws",
+      "version": "8.22.0",
+      "license": "MIT",
+      "optional": false,
+      "directory": "ws",
+      "files": [
+        {
+          "file": "LICENSE",
+          "origin": "LICENSE",
+          "sha256": "2b29dcfe0d6471f7e8c92c5fb38c9f93edee10330937055440192f1832b1ecef"
+        }
+      ]
+    }
+  ]
+}

@@ -12,3 +12,11 @@ ffmpeg -i test-pattern.mp4 -c copy -hls_time 2 -hls_list_size 0 -hls_playlist_ty
 ```
 
 FFmpeg 完整解码检查已通过（288帧、24秒视频及AAC音频均解码成功）。`tests/e2e/media.spec.ts` 进一步在真实 Electron 窗口测试受控协议下的 MP4/HLS 解码、时间推进、寻址、倍速、键盘、概览保持播放及全窗口几何；2026-10-12 已在当前 Mac 的原生 Electron 窗口实际运行并 4/4 通过（11.1秒，日志位于工作区 work/windows-media-e2e-recheck.log）。首次运行发现 HLS 构造参数冲突，修复后重新构建并完整通过。该结果不等同实际校园课程视频验证或 Windows 真机验证；没有使用真实校园资源或用户凭据。
+
+2026-10-13 添加 `test-pattern-different.mp4`：将本目录自生成样本的色值反相后再次编码为相同的 H.264 Baseline，移除音轨。它只用于确认视觉机位比较不会合并实际不同画面，不含课程或用户内容。生成命令：
+
+```sh
+ffmpeg -i test-pattern.mp4 -vf negate -an -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p -profile:v baseline -movflags +faststart -y test-pattern-different.mp4
+```
+
+`camera.spec.ts` 使用不同资源URL指向相同合成视频，并以同一课内的两个时刻比较64×36 RGB帧；另用反相样本、暂停中止及不可用机位检查误删和播放稳定性。此项仅验证本机 Electron 路径，不代表真实课堂或 Windows 外设已测。

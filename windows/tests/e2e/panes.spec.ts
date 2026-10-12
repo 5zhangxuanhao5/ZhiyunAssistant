@@ -35,7 +35,7 @@ async function start(kind: string, configured = true) {
     const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=';
     const slides = [0, 60, 120].map((t, i) => ({ id: 'slide-' + i, t, url: 'https://cmc.zju.edu.cn/fixture-' + i + '.png', thumb: '', note: '' }));
     const lines = [{ id: 'line-0', t: 0, end: 55, text: '第一段课堂讲解。' }, { id: 'line-1', t: 60, end: 115, text: '第二段课堂讲解。' }, { id: 'line-2', t: 120, end: 175, text: '第三段课堂讲解。' }];
-    const regular = { slides: false, transcript: kind === 'transcript', video: false, notes: ['notes', 'mixed', 'notes-missing'].includes(kind), ai: ['ai', 'mixed'].includes(kind), summary: kind === 'summary' };
+    const regular = { slides: false, transcript: kind === 'transcript', video: false, notes: ['notes', 'mixed', 'notes-missing'].includes(kind), ai: ['ai', 'mixed', 'streaming-ai'].includes(kind), summary: kind === 'summary' };
     ipcMain.removeHandler('zhiyun:call');
     ipcMain.handle('zhiyun:call', async (event, method, payload: any = {}) => {
       switch (method) {
@@ -53,10 +53,14 @@ async function start(kind: string, configured = true) {
         case 'notes.save': notes = notes.filter(n => n.id !== payload.note.id); notes.push(payload.note); return payload.note;
         case 'ai.settings': return { configured, model: 'deepseek-flash', models: ['deepseek-flash', 'deepseek-pro'] };
         case 'ai.chatSessions': return structuredClone(sessions);
-        case 'ai.saveChat': { const i = sessions.findIndex(s => s.id === payload.session.id); if (i < 0) sessions.push(payload.session); else sessions[i] = payload.session; return null; }
+        case 'ai.saveChat': { const i = sessions.findIndex(s => s.id === payload.session.id); if (i < 0) sessions.push(payload.session); else sessions[i] = payload.session; counters.savedSession = payload.session; return null; }
         case 'ai.start': {
           counters.starts++;
           const answer = '**核心知识**\n第一项 [00:05]。第二项 [01:10]。';
+          if (kind === 'streaming-ai') {
+            event.sender.send('zhiyun:ai.stream', { requestId: payload.requestId, text: '**核心知识**\n第一项课堂内容现在已经讲完。' });
+            await new Promise<void>(resolve => counters.releaseStream = resolve);
+          }
           for (let i = 1; i <= answer.length; i += 2) { event.sender.send('zhiyun:ai.stream', { requestId: payload.requestId, text: answer.slice(0, i) }); await new Promise(resolve => setTimeout(resolve, 5)); }
           return { answer, record: payload.kind === 'summary' ? { id: 'record-' + payload.currentId, answer, signature: 'test', savedAt: Date.now(), completed: true } : undefined };
         }
@@ -72,6 +76,23 @@ async function start(kind: string, configured = true) {
   await expect(page.getByRole('heading', { name: '我的课堂', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '进入学习', exact: true }).click();
   await expect(page.locator('.study-canvas')).toBeVisible();
+}
+async function answerTextPoints() {
+  return page.locator('.ai-pane .answer-content').evaluate(element => {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT), nodes: Text[] = [];
+    let node: Node | null; while ((node = walker.nextNode())) nodes.push(node as Text);
+    const character = (index: number, end: boolean) => {
+      for (const node of nodes) {
+        if (index >= node.length) { index -= node.length; continue; }
+        const range = document.createRange(); range.setStart(node, index); range.setEnd(node, index + 1);
+        const box = range.getBoundingClientRect();
+        if (!box.width || !box.height) throw new Error('Text anchor is not visibly laid out');
+        return { x: end ? box.right - 1 : box.left + 1, y: box.top + box.height / 2 };
+      }
+      throw new Error('Answer contains too few visible characters');
+    };
+    return { start: character(0, false), end: character(12, true) };
+  });
 }
 test('notes type digits and arrows natively, preserve cursor and formatting', async () => {
   await start('notes');
@@ -108,13 +129,34 @@ test('question Shift+Enter adds newline, IME confirmation does not send, normal 
   await expect(page.locator('.answer-content')).toContainText('第二项');
   await expect(page.locator('.answer-content')).not.toContainText('**');
   expect(await app.evaluate(() => (globalThis as any).__panesCounters.starts)).toBe(1);
-  const answerBox = await page.locator('.ai-pane .answer-content').boundingBox();
-  await page.mouse.move(answerBox!.x + 2, answerBox!.y + 12); await page.mouse.down();
-  await page.mouse.move(answerBox!.x + 220, answerBox!.y + 46, { steps: 12 }); await page.mouse.up();
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
+  const points = await answerTextPoints();
+  await page.mouse.move(points.start.x, points.start.y); await page.mouse.down();
+  await page.mouse.move(points.end.x, points.end.y, { steps: 12 }); await page.mouse.up();
   await expect.poll(() => page.evaluate(() => window.getSelection()?.toString().length || 0)).toBeGreaterThan(5);
   await input.click();
   await page.getByRole('link').filter({ hasText: '00:05' }).click();
   await expect(page.getByRole('button', { name: '回到刚刚', exact: true })).toBeVisible();
+});
+test('native answer selection survives streamed text and is released after clicking elsewhere', async () => {
+  await start('streaming-ai');
+  const input = page.getByRole('textbox', { name: '问问这节课', exact: true });
+  await input.fill('解释 123'); await input.press('Enter');
+  await expect(page.locator('.ai-pane .answer-content')).toContainText('课堂内容现在已经讲完');
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
+  const points = await answerTextPoints();
+  await page.mouse.move(points.start.x, points.start.y); await page.mouse.down();
+  await page.mouse.move(points.end.x, points.end.y, { steps: 12 }); await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.toString().length || 0)).toBeGreaterThan(5);
+  const selected = await page.evaluate(() => window.getSelection()!.toString());
+  await app.evaluate(() => (globalThis as any).__panesCounters.releaseStream());
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => window.getSelection()!.toString())).toBe(selected);
+  expect(await app.evaluate(() => (globalThis as any).__panesCounters.savedSession.turns[0].answer)).toContain('第二项');
+  await expect(page.locator('.ai-pane .answer-content')).toContainText('课堂内容现在已经讲完');
+  await input.click();
+  await expect(page.locator('.ai-pane .answer-content')).toContainText('第二项');
+  await expect(page.locator('.ai-pane .time-link')).toHaveCount(2);
 });
 test('mouse native answer selection preserves independent timestamps when inserting into note middle', async () => {
   await start('mixed');

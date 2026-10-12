@@ -80,7 +80,17 @@ export namespace fileIo {
   export interface File { fd: number }
   export enum OpenMode { READ_ONLY = fsNode.constants.O_RDONLY, WRITE_ONLY = fsNode.constants.O_WRONLY, READ_WRITE = fsNode.constants.O_RDWR, CREATE = fsNode.constants.O_CREAT, TRUNC = fsNode.constants.O_TRUNC, APPEND = fsNode.constants.O_APPEND }
   export function local(value: string): string { return value.startsWith('file://') ? fileURLToPath(value) : value; }
-  export function openSync(value: string, flags = OpenMode.READ_ONLY): File { return { fd: fsNode.openSync(local(value), flags, 0o600) }; }
+  export function openSync(value: string, flags = OpenMode.READ_ONLY): File {
+    if ((flags & OpenMode.TRUNC) && !(flags & OpenMode.CREATE)) {
+      // Windows/libuv's numeric TRUNCATE_EXISTING path can reject O_WRONLY
+      // with EINVAL. Open the existing file using exactly the requested access,
+      // then truncate that same descriptor. Never add CREATE or pre-check a path.
+      const fd = fsNode.openSync(local(value), flags & ~OpenMode.TRUNC, 0o600);
+      try { fsNode.ftruncateSync(fd, 0); return { fd }; }
+      catch (error) { try { fsNode.closeSync(fd); } catch (_) {} throw error; }
+    }
+    return { fd: fsNode.openSync(local(value), flags, 0o600) };
+  }
   export function closeSync(value: File | number): void { fsNode.closeSync(typeof value === 'number' ? value : value.fd); }
   export function accessSync(value: string): boolean { return fsNode.existsSync(local(value)); }
   export function mkdirSync(value: string, recursive = false): void { fsNode.mkdirSync(local(value), { recursive, mode: 0o700 }); }

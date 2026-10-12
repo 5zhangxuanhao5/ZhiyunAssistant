@@ -22,6 +22,21 @@ function fixture() { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zhiyun-
 test('file adapters use runtime OS flags, preserve binary data, append and truncate correctly', () => {
  const { root, cleanup } = fixture(); try { const destination = path.join(root, '文件 with spaces.bin'); let file = fileIo.openSync(destination, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC); fileIo.writeSync(file.fd, Uint8Array.from([0, 1, 254, 255])); fileIo.closeSync(file); file = fileIo.openSync(destination, fileIo.OpenMode.APPEND | fileIo.OpenMode.WRITE_ONLY); fileIo.writeSync(file.fd, Uint8Array.from([17])); fileIo.closeSync(file); assert.deepEqual([...fs.readFileSync(destination)], [0, 1, 254, 255, 17]); file = fileIo.openSync(destination, fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC); fileIo.writeSync(file.fd, '中文'); fileIo.closeSync(file); assert.equal(fs.readFileSync(destination, 'utf8'), '中文'); } finally { cleanup(); }
 });
+test('existing-only truncate preserves missing-file and read-only semantics with Unicode file URLs and binary read-write',()=>{
+ const {root,cleanup}=fixture();try{
+  const destination=path.join(root,'仅现存文件 读写.bin'),missing=path.join(root,'不可凭空创建.bin');
+  assert.equal(fileIo.OpenMode.WRITE_ONLY,fs.constants.O_WRONLY);assert.equal(fileIo.OpenMode.READ_WRITE,fs.constants.O_RDWR);assert.equal(fileIo.OpenMode.TRUNC,fs.constants.O_TRUNC);assert.equal(fileIo.OpenMode.APPEND,fs.constants.O_APPEND);
+  assert.throws(()=>fileIo.openSync(missing,fileIo.OpenMode.WRITE_ONLY|fileIo.OpenMode.TRUNC),(error:any)=>error.code==='ENOENT');assert.equal(fs.existsSync(missing),false);
+  fs.writeFileSync(destination,Uint8Array.from([9,8,7,6]));
+  assert.throws(()=>fileIo.openSync(destination,fileIo.OpenMode.READ_ONLY|fileIo.OpenMode.TRUNC));assert.deepEqual([...fs.readFileSync(destination)],[9,8,7,6]);
+  const uri=fileUri.getUriFromPath(destination);let file=fileIo.openSync(uri,fileIo.OpenMode.READ_WRITE|fileIo.OpenMode.TRUNC);
+  assert.equal(fileIo.statSync(file.fd).size,0);fileIo.writeSync(file.fd,Uint8Array.from([0,255,12]));fileIo.closeSync(file);
+  file=fileIo.openSync(uri,fileIo.OpenMode.READ_ONLY);const bytes=new ArrayBuffer(3);assert.equal(fileIo.readSync(file.fd,bytes),3);fileIo.closeSync(file);assert.deepEqual([...new Uint8Array(bytes)],[0,255,12]);
+ }finally{cleanup()}
+});
+test('download append descriptors can truncate a stale partial response and continue appending at the new end',()=>{
+ const {root,cleanup}=fixture();try{const destination=path.join(root,'续传 partial.bin');fs.writeFileSync(destination,Uint8Array.from([1,2,3,4]));const file=fileIo.openSync(destination,fileIo.OpenMode.CREATE|fileIo.OpenMode.WRITE_ONLY|fileIo.OpenMode.APPEND);try{fileIo.truncateSync(file.fd,2);fileIo.writeSync(file.fd,Uint8Array.from([8,9]));}finally{fileIo.closeSync(file)}assert.deepEqual([...fs.readFileSync(destination)],[1,2,8,9]);}finally{cleanup()}
+});
 test('persistent account isolation and permission freshness records survive reopening', () => {
  const { context, store, cleanup } = fixture(); try { store.saveJson('settings.json', '{"slides":false}'); store.savePermissions([{ courseId: course.courseId, subId: course.subId, permission: { live: true, video: false }, checkedAt: Date.now() / 1000 }]); const restored = new LocalStore(context, 'account-1'), other = new LocalStore(context, 'account-2'); assert.equal(restored.readJson('settings.json'), '{"slides":false}'); assert.equal(restored.permissionRecord(course.courseId, course.subId)?.permission.video, false); assert.equal(other.readJson('settings.json'), ''); assert.equal(other.permissionRecord(course.courseId, course.subId), undefined); } finally { cleanup(); }
 });

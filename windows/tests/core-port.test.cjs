@@ -565,12 +565,12 @@ test('linked course facets offer only combinations that still contain results',(
 });
 test('official catalogue without end_at retains lessons by resolving official sub info',async()=>{
  const api=new Zhiyun();api.request=async p=>p.includes('/catalogue?')?JSON.stringify({success:true,result:{code:0,data:[{sub_id:77,course_id:88,start_at:course.start,status:1,type:'ilive',room:'西1-304'}]}}):JSON.stringify({code:0,data:{start_at:course.start,end_at:course.end,sub_status:6}});
- const rows=await api.chapters({courseId:'88',title:'公共关系学',teacher:'教师',room:'',type:''});
+ const rows=await api.chapters({courseId:'88',title:'示例课程丙',teacher:'教师',room:'',type:''});
  assert.equal(rows.length,1);assert.equal(rows[0].subId,'77');assert.equal(rows[0].end,course.end);assert.equal(rows[0].status,'6');assert.equal(rows[0].room,'西1-304');
 });
 test('search results carry the official academic-year and semester label',async()=>{
- const api=new Zhiyun();api.request=async()=>JSON.stringify({code:0,total:{total:1,list:[{course_id:88,title:'公共关系学',term_name:'2025-20261',term:'_93_'}]}});
- const rows=await api.searchCourses({id:'student',tenantId:112},'公共关系学','',1);assert.equal(rows.list[0].year,'2025-2026');assert.equal(rows.list[0].term,'2025—2026学年 · 第1学期');
+ const api=new Zhiyun();api.request=async()=>JSON.stringify({code:0,total:{total:1,list:[{course_id:88,title:'示例课程丙',term_name:'2025-20261',term:'_93_'}]}});
+ const rows=await api.searchCourses({id:'student',tenantId:112},'示例课程丙','',1);assert.equal(rows.list[0].year,'2025-2026');assert.equal(rows.list[0].term,'2025—2026学年 · 第1学期');
 });
 test('download rechecks the current official lesson state rather than a stale live flag',async()=>{
  const api=new Zhiyun(),modes=[];api.info=async()=>({sub_status:6});api.checkPermission=async(c,live)=>{modes.push(live);};
@@ -585,7 +585,7 @@ test('a video seek to the page opening marks its first sentence even before its 
  const {spokenLineIndex}=load('model/TranscriptPlayback');const rows=[{id:'a',t:12,end:18,text:'第一句'}];assert.equal(spokenLineIndex(rows,10,10),0);assert.equal(spokenLineIndex(rows,9,10),-1);assert.equal(spokenLineIndex(rows,10),-1);assert.equal(spokenLineIndex(rows,18,10),-1);
 });
 test('multi-teacher and multi-semester hits contribute individual linked facet options',()=>{
- const {matchingSearchRows,searchFacetOptions}=load('model/SearchFacets');const rows=[{title:'公共关系学',teacher:'甲,乙',room:'101',term:'2024秋，2024冬'},{title:'公共关系学',teacher:'甲',room:'102',term:'2025春'}];
+ const {matchingSearchRows,searchFacetOptions}=load('model/SearchFacets');const rows=[{title:'示例课程丙',teacher:'甲,乙',room:'101',term:'2024秋，2024冬'},{title:'示例课程丙',teacher:'甲',room:'102',term:'2025春'}];
  assert.deepEqual(Array.from(searchFacetOptions(rows,{counterpart:'乙',room:'',term:''},false,'term')),['2024秋','2024冬'].sort((a,b)=>b.localeCompare(a)));
  assert.equal(matchingSearchRows(rows,{counterpart:'乙',room:'101',term:'2024冬'},false).length,1);
 });
@@ -600,8 +600,8 @@ test('note management prioritizes the last opened note and its course and lesson
  const folders=recentNoteFolders([old,newer,other]);assert.equal(folders[0].id,'other');assert.deepEqual(Array.from(folders[1].lessons,l=>l.subId),['sample','new']);assert.equal(noteOpenedAt({savedAt:12}),12);
 });
 test('archive naming preserves course teacher term and date with readable image names and collision protection',()=>{
- const {noteExportCourse,noteExportDate,noteExportName,notePictureName,uniqueExportName}=load('model/NoteExport');const note={title:'课堂笔记1',course:{...course,title:'公共关系学',teacher:'老师',term:'2026秋季学期'}};
- assert.equal(noteExportCourse(note),'公共关系学_老师_2026秋季学期');assert.equal(noteExportDate(note),'2026-10-09');assert.equal(noteExportName(note),'课堂笔记1');assert.equal(notePictureName('课堂笔记1',2,'png'),'课堂笔记1_图片2.png');const used=new Set();assert.equal(uniqueExportName('课堂笔记1',used),'课堂笔记1');assert.equal(uniqueExportName('课堂笔记1',used),'课堂笔记1 (2)');
+ const {noteExportCourse,noteExportDate,noteExportName,notePictureName,uniqueExportName}=load('model/NoteExport');const note={title:'课堂笔记1',course:{...course,title:'示例课程丙',teacher:'老师',term:'2026秋季学期'}};
+ assert.equal(noteExportCourse(note),'示例课程丙_老师_2026秋季学期');assert.equal(noteExportDate(note),'2026-10-09');assert.equal(noteExportName(note),'课堂笔记1');assert.equal(notePictureName('课堂笔记1',2,'png'),'课堂笔记1_图片2.png');const used=new Set();assert.equal(uniqueExportName('课堂笔记1',used),'课堂笔记1');assert.equal(uniqueExportName('课堂笔记1',used),'课堂笔记1 (2)');
 });
 test('note export obtains official school term dates and uses cached dates while offline',async()=>{
  const api=new Zhiyun(),values=new Map(),store={readJson:k=>values.get(k)||'',saveJson:(k,v)=>values.set(k,v)};api.request=async()=>JSON.stringify({result:{data:{'2026-2027':{autumn:{begin_date:'2026-09-01',end_date:'2026-11-01'}}}}});const lesson={...course};await api.annotateTerms({tenantId:1},[lesson],store);assert.equal(lesson.term,'2026—2027学年 · 秋季学期');const offline=new Zhiyun();offline.request=async()=>{throw Error('offline')};const next={...course};await offline.annotateTerms({tenantId:1},[next],store);assert.equal(next.term,lesson.term);

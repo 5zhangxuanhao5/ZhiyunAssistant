@@ -37,6 +37,44 @@ test('existing-only truncate preserves missing-file and read-only semantics with
 test('download append descriptors can truncate a stale partial response and continue appending at the new end',()=>{
  const {root,cleanup}=fixture();try{const destination=path.join(root,'续传 partial.bin');fs.writeFileSync(destination,Uint8Array.from([1,2,3,4]));const file=fileIo.openSync(destination,fileIo.OpenMode.CREATE|fileIo.OpenMode.WRITE_ONLY|fileIo.OpenMode.APPEND);try{fileIo.truncateSync(file.fd,2);fileIo.writeSync(file.fd,Uint8Array.from([8,9]));}finally{fileIo.closeSync(file)}assert.deepEqual([...fs.readFileSync(destination)],[1,2,8,9]);}finally{cleanup()}
 });
+test('append truncation preserves write-only access, validates length and can reset a response to zero',()=>{
+ const {root,cleanup}=fixture();try{
+  const destination=path.join(root,'追加 权限.bin');fs.writeFileSync(destination,Uint8Array.from([1,2,3,4]));
+  const file=fileIo.openSync(fileUri.getUriFromPath(destination),fileIo.OpenMode.WRITE_ONLY|fileIo.OpenMode.APPEND);
+  try{
+   assert.throws(()=>fileIo.readSync(file.fd,new ArrayBuffer(1)));
+   assert.throws(()=>fileIo.truncateSync(file.fd,Number.NaN));assert.deepEqual([...fs.readFileSync(destination)],[1,2,3,4]);
+   fileIo.truncateSync(file.fd,0);fileIo.writeSync(file.fd,Uint8Array.from([0,255,17]));
+   assert.throws(()=>fileIo.readSync(file.fd,new ArrayBuffer(1)));
+   assert.deepEqual([...fs.readFileSync(destination)],[0,255,17]);
+  }finally{fileIo.closeSync(file)}
+  const reader=fileIo.openSync(destination,fileIo.OpenMode.READ_ONLY);
+  try{assert.throws(()=>fileIo.truncateSync(reader.fd,0));assert.deepEqual([...fs.readFileSync(destination)],[0,255,17]);}finally{fileIo.closeSync(reader)}
+ }finally{cleanup()}
+});
+test('append truncation refuses a replaced path and leaves both files intact',()=>{
+ const {root,cleanup}=fixture();try{
+  const destination=path.join(root,'原文件.bin'),moved=path.join(root,'已移走 原文件.bin');fs.writeFileSync(destination,Uint8Array.from([1,2,3,4]));
+  const file=fileIo.openSync(destination,fileIo.OpenMode.WRITE_ONLY|fileIo.OpenMode.APPEND);
+  try{
+   fs.renameSync(destination,moved);fs.writeFileSync(destination,Uint8Array.from([9,8,7]));
+   assert.throws(()=>fileIo.truncateSync(file.fd,0),(error:any)=>error.code==='ESTALE');
+   assert.deepEqual([...fs.readFileSync(destination)],[9,8,7]);assert.deepEqual([...fs.readFileSync(moved)],[1,2,3,4]);
+   fileIo.writeSync(file.fd,Uint8Array.from([5]));assert.deepEqual([...fs.readFileSync(moved)],[1,2,3,4,5]);
+  }finally{fileIo.closeSync(file)}
+ }finally{cleanup()}
+});
+test('append truncation never creates a deleted destination and the existing descriptor stays usable',()=>{
+ const {root,cleanup}=fixture();try{
+  const destination=path.join(root,'失去路径的部分下载.bin');fs.writeFileSync(destination,Uint8Array.from([1,2,3]));
+  const file=fileIo.openSync(destination,fileIo.OpenMode.CREATE|fileIo.OpenMode.WRITE_ONLY|fileIo.OpenMode.APPEND);
+  try{
+   fs.unlinkSync(destination);
+   assert.throws(()=>fileIo.truncateSync(file.fd,0),(error:any)=>error.code==='ENOENT');assert.equal(fs.existsSync(destination),false);
+   fileIo.writeSync(file.fd,Uint8Array.from([4]));assert.equal(fileIo.statSync(file.fd).size,4);
+  }finally{fileIo.closeSync(file)}
+ }finally{cleanup()}
+});
 test('persistent account isolation and permission freshness records survive reopening', () => {
  const { context, store, cleanup } = fixture(); try { store.saveJson('settings.json', '{"slides":false}'); store.savePermissions([{ courseId: course.courseId, subId: course.subId, permission: { live: true, video: false }, checkedAt: Date.now() / 1000 }]); const restored = new LocalStore(context, 'account-1'), other = new LocalStore(context, 'account-2'); assert.equal(restored.readJson('settings.json'), '{"slides":false}'); assert.equal(restored.permissionRecord(course.courseId, course.subId)?.permission.video, false); assert.equal(other.readJson('settings.json'), ''); assert.equal(other.permissionRecord(course.courseId, course.subId), undefined); } finally { cleanup(); }
 });

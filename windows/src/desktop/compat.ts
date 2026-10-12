@@ -79,19 +79,30 @@ export namespace http {
 export namespace fileIo {
   export interface File { fd: number }
   export enum OpenMode { READ_ONLY = fsNode.constants.O_RDONLY, WRITE_ONLY = fsNode.constants.O_WRONLY, READ_WRITE = fsNode.constants.O_RDWR, CREATE = fsNode.constants.O_CREAT, TRUNC = fsNode.constants.O_TRUNC, APPEND = fsNode.constants.O_APPEND }
+  interface OpenFile { path: string; flags: number; identity: fsNode.BigIntStats }
+  const openedFiles = new Map<number, OpenFile>();
+  function sameFile(first: fsNode.BigIntStats, second: fsNode.BigIntStats): boolean { return first.ino !== 0n && first.dev === second.dev && first.ino === second.ino && first.isFile() && second.isFile(); }
+  function staleFile(): NodeJS.ErrnoException { return Object.assign(new Error('文件路径已变更，已停止截短以保护其他文件'), { code: 'ESTALE' }); }
+  function rememberFile(fd: number, filename: string, flags: number): File {
+    // Ordinary cache reads/writes do not need an additional stat or registry.
+    if (!(flags & OpenMode.APPEND)) return { fd };
+    try { openedFiles.set(fd, { path: filename, flags, identity: fsNode.fstatSync(fd, { bigint: true }) }); return { fd }; }
+    catch (error) { try { fsNode.closeSync(fd); } catch (_) {} throw error; }
+  }
   export function local(value: string): string { return value.startsWith('file://') ? fileURLToPath(value) : value; }
   export function openSync(value: string, flags = OpenMode.READ_ONLY): File {
+    const filename = path.resolve(local(value));
     if ((flags & OpenMode.TRUNC) && !(flags & OpenMode.CREATE)) {
       // Windows/libuv's numeric TRUNCATE_EXISTING path can reject O_WRONLY
       // with EINVAL. Open the existing file using exactly the requested access,
       // then truncate that same descriptor. Never add CREATE or pre-check a path.
-      const fd = fsNode.openSync(local(value), flags & ~OpenMode.TRUNC, 0o600);
-      try { fsNode.ftruncateSync(fd, 0); return { fd }; }
-      catch (error) { try { fsNode.closeSync(fd); } catch (_) {} throw error; }
+      const file = rememberFile(fsNode.openSync(filename, flags & ~OpenMode.TRUNC, 0o600), filename, flags);
+      try { truncateSync(file.fd, 0); return file; }
+      catch (error) { try { closeSync(file); } catch (_) {} throw error; }
     }
-    return { fd: fsNode.openSync(local(value), flags, 0o600) };
+    return rememberFile(fsNode.openSync(filename, flags, 0o600), filename, flags);
   }
-  export function closeSync(value: File | number): void { fsNode.closeSync(typeof value === 'number' ? value : value.fd); }
+  export function closeSync(value: File | number): void { const fd = typeof value === 'number' ? value : value.fd; try { fsNode.closeSync(fd); } finally { openedFiles.delete(fd); } }
   export function accessSync(value: string): boolean { return fsNode.existsSync(local(value)); }
   export function mkdirSync(value: string, recursive = false): void { fsNode.mkdirSync(local(value), { recursive, mode: 0o700 }); }
   export function listFileSync(value: string): string[] { return fsNode.readdirSync(local(value)); }
@@ -102,7 +113,22 @@ export namespace fileIo {
   export function renameSync(first: string, second: string): void { fsNode.renameSync(local(first), local(second)); }
   export function unlinkSync(value: string): void { fsNode.unlinkSync(local(value)); }
   export function rmdirSync(value: string): void { fsNode.rmSync(local(value), { recursive: true, force: true }); }
-  export function truncateSync(fd: number, length: number): void { fsNode.ftruncateSync(fd, length); }
+  export function truncateSync(fd: number, length: number): void {
+    const opened = openedFiles.get(fd);
+    if (!opened || !(opened.flags & OpenMode.APPEND)) { fsNode.ftruncateSync(fd, length); return; }
+    // Windows append handles have FILE_APPEND_DATA but cannot set the file end.
+    // Keep that handle (and its append position/permissions) unchanged. Acquire
+    // write-only, existing-only access briefly; never request read access/create
+    // or truncate a path before proving both handles refer to the original file.
+    if (!(opened.flags & (OpenMode.WRITE_ONLY | OpenMode.READ_WRITE))) throw Object.assign(new Error('文件未以写入权限打开'), { code: 'EBADF' });
+    const current = fsNode.fstatSync(fd, { bigint: true });
+    if (!sameFile(current, opened.identity)) throw staleFile();
+    const writer = fsNode.openSync(opened.path, OpenMode.WRITE_ONLY);
+    try {
+      if (!sameFile(current, fsNode.fstatSync(writer, { bigint: true }))) throw staleFile();
+      fsNode.ftruncateSync(writer, length);
+    } finally { fsNode.closeSync(writer); }
+  }
   export function copyFileSync(first: string | number, second: string | number): void {
     if (typeof first === 'string' && typeof second === 'string') { fsNode.copyFileSync(local(first), local(second)); return; }
     const input = typeof first === 'number' ? first : fsNode.openSync(local(first), 'r'), output = typeof second === 'number' ? second : fsNode.openSync(local(second), 'w');

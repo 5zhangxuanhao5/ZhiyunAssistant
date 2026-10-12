@@ -17,16 +17,14 @@
     "dist:win": "npm run build && electron-builder --win nsis zip --x64 --arm64 --publish never",
     "dist:mac-test": "npm run build && electron-builder --mac dir --arm64 --publish never"
   },
-  "dependencies": {
+  "devDependencies": {
     "dompurify": "3.4.17",
     "hls.js": "1.6.19",
     "jszip": "3.10.1",
     "marked": "16.4.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "ws": "8.22.0"
-  },
-  "devDependencies": {
+    "ws": "8.22.0",
     "@playwright/test": "1.56.0",
     "@types/node": "22.18.10",
     "@types/react": "19.2.2",

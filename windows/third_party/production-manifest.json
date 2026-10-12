@@ -1,5 +1,5 @@
 {
-  "basis": "package-lock.json packages whose dev is false or absent; no dependency changes",
+  "basis": "Pinned bundled runtime components and their existing license files. All npm modules are build-time dependencies because runtime code is bundled; dev flags do not determine security or attribution.",
   "packages": [
     {
       "name": "@types/trusted-types",

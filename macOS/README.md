@@ -4,9 +4,9 @@
 
 ## 安装与运行
 
-- 安装文件：`build/智云助手-Mac-1.0.0.dmg`。打开后将“智云助手”拖入 Applications。
-- 也提供 `智云助手-Mac-1.0.0-PublicApp.zip`。
-- 公开源码包：智云助手-Mac-1.0.0-PublicSource.zip。公开分发整理仅去除归档元数据和构建日志中的私人路径；应用二进制与版本没有改变。源码及安装 ZIP 使用新的文件名和 SHA256。
+- 安装文件：`ZhiyunAssistant-Mac-1.0.0.dmg`。打开后将“智云助手”拖入 Applications。
+- 也提供 `ZhiyunAssistant-Mac-1.0.0-PublicApp.zip`。
+- 公开源码包：ZhiyunAssistant-Mac-1.0.0-PublicSource.zip。源码包包含独立构建所需的模型、构建脚本和锁定的测试依赖，不需要相邻的鸿蒙工程。源码包整理没有改变已发布安装包中的应用二进制或版本；安装文件与源码包的校验值见 [DISTRIBUTION.md](DISTRIBUTION.md)。
 - 编译支持 Apple Silicon 与 Intel，最低 macOS 13。已在当前 Apple Silicon Mac 运行验证；Intel 是编译验证。
 - 登录使用弹出的浙江大学官方页面。密码不经过自建登录接口、不保存校园密码。登录会话与 DeepSeek API 密钥使用 macOS 钥匙串。
 - 当前为本机试用发行包，使用本地 ad-hoc 签名，尚未使用 Apple Developer ID 签名或完成公证。公开分发前需要正式签名、公证与权利材料。
@@ -45,12 +45,15 @@ API 实现依据：[DeepSeek 视觉接口](https://api-docs.deepseek.com/guides/
 
 ## 复现构建
 
-安装 Apple Command Line Tools 后运行 `./build.sh`。浏览器模块已包含在源码中，构建不需要 Electron 或 DevEco。此电脑有相邻的 `SuikeHarmony` 源码和 DevEco 编译器时，可用生成脚本同步共享模型；独立使用源码包时直接使用已生成的模块。
+源码已经包含 16 个适配后的浏览器模型；不读取相邻鸿蒙工程，不需要 DevEco，也不会在缺失模型时生成空文件。构建脚本会检查全部本地模块及其导出绑定后再编译。需要 Apple Command Line Tools 和 Node.js 20 或更新版本；Node 仅用于源码验证和开发测试，生成的应用运行不需要 Node 或 Electron。
 
-开发测试依赖 jsdom（只用于测试，不进入运行包）。
+开发测试依赖锁定的 jsdom（只用于测试，不进入运行包），可以从独立克隆目录执行：
 
 ```sh
-npm install --prefix ../../work/mac-tests jsdom@26.1.0 --no-audit --no-fund
-node --experimental-vm-modules --test tests/core.test.cjs
+npm ci
+npm run verify
+npm test
 ./build.sh
 ```
+
+默认构建产物位于本目录的 `build/`。可用 `ZHIYUN_MAC_BUILD_DIR` 指定独立目录，避免覆盖已有构建。本次公开源码自包含修复只涉及构建、测试依赖和说明，未修改已发布 DMG/PublicApp ZIP 的二进制或版本。

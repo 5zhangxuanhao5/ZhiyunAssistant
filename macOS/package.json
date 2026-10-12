@@ -1,0 +1,13 @@
+{
+  "name": "zhiyun-assistant-native-macos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build and synthetic regression tooling for the self-contained native macOS source",
+  "scripts": {
+    "verify": "node --experimental-vm-modules generate-models.cjs",
+    "test": "node --experimental-vm-modules --test tests/core.test.cjs",
+    "build": "./build.sh"
+  },
+  "engines": { "node": ">=20" },
+  "devDependencies": { "jsdom": "26.1.0" }
+}

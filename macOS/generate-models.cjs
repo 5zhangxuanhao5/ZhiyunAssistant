@@ -1,24 +1,20 @@
-const fs=require('fs'),path=require('path');
-const compiler='/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript/lib/typescript.js';
-if(!fs.existsSync(compiler)||!fs.existsSync(path.resolve(__dirname,'../SuikeHarmony/entry/src/main/ets/services/Zhiyun.ets'))){console.log('Using checked-in generated classroom modules');process.exit(0)}
-const ts=require(compiler);
-const from=path.resolve(__dirname,'../SuikeHarmony/entry/src/main/ets'),to=path.join(__dirname,'web/models');
-for(const name of ['Timeline','CaptionTime','Media','SlideSimilarity','BlackBorders','CourseCollections','SmartSkip','QuestionScope','CourseReference','AiStream','AiUsage','CourseContext','SlideGrid','TranscriptPlayback','NoteFormatting']){
- let s=fs.readFileSync(path.join(from,'model',name+'.ets'),'utf8').replace(/import \{ url \} from '@kit.ArkTS';/, 'const url = { URL };');
- let out=ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.ES2020}}).outputText.replace(/from '(\.\/[^']+)'/g,"from '$1.js'");fs.writeFileSync(path.join(to,name+'.js'),out);
+'use strict';
+// The public source contains the generated, platform-adapted modules. Validate
+// that self-contained graph; do not depend on a private HarmonyOS checkout/SDK.
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const root=path.join(__dirname,'web');
+const names=['Timeline','CaptionTime','Media','SlideSimilarity','BlackBorders','CourseCollections','SmartSkip','QuestionScope','CourseReference','AiStream','AiUsage','CourseContext','SlideGrid','TranscriptPlayback','NoteFormatting','Zhiyun'];
+function required(filename){const stat=fs.statSync(filename);if(!stat.isFile()||stat.size===0)throw Error('Missing or empty bundled source: '+path.relative(__dirname,filename));}
+async function verify(){
+ if(typeof vm.SourceTextModule!=='function')throw Error('Run with node --experimental-vm-modules generate-models.cjs');
+ for(const name of ['index.html','app.css','app.js','bridge.js','icon.png',...names.map(name=>'models/'+name+'.js')])required(path.join(root,name));
+ const modules=new Map();
+ function load(filename){const canonical=path.resolve(filename);if(!canonical.startsWith(root+path.sep))throw Error('Module import escapes the bundled web directory');if(modules.has(canonical))return modules.get(canonical);required(canonical);const source=fs.readFileSync(canonical,'utf8');const module=new vm.SourceTextModule(source,{identifier:canonical});modules.set(canonical,module);return module;}
+ function resolve(specifier,from){if(!specifier.startsWith('./')&&!specifier.startsWith('../'))throw Error('External module dependency is not bundled: '+specifier);if(specifier.includes('?')||specifier.includes('#'))throw Error('Module suffix must be resolved explicitly: '+specifier);return load(path.resolve(path.dirname(from.identifier),specifier));}
+ // Link without executing application boot/native calls. Linking verifies named
+ // exports too, rather than accepting a file whose imported bindings are missing.
+ const entries=['app.js','bridge.js',...names.map(name=>'models/'+name+'.js')];
+ for(const name of entries){const module=load(path.join(root,name));if(module.status==='unlinked')await module.link(resolve);}
+ console.log('Verified '+names.length+' bundled classroom models and all local module imports; no HarmonyOS SDK or compiler required.');
 }
-let source=fs.readFileSync(path.join(from,'services/Zhiyun.ets'),'utf8');
-const start=source.indexOf('  private async request('),end=source.indexOf('  async account()',start);
-source=source.slice(0,start)+`  private async request(path: string, post: string = '', origin: string = ORIGIN): Promise<string> {
-    const result = await window.native.call('request', {url:origin+path,body:post});
-    if(result.status===403) throw new AccessDenied('当前账号没有这节课的访问权限');
-    if(result.status===401) throw new Error('登录失效，请重新登录');
-    if(result.status!==200) throw new Error('智云暂时无法访问（'+result.status+'）');
-    if(!result.text.trim().startsWith('{')) throw new Error('请先登录智云课堂');
-    return result.text;
-  }
-`+source.slice(end);
-source=source.replace(/^import .*from '@kit.*;$/gm,'').replace(/import \{ LocalStore \}[^\n]*\n/,'').replace(/import \{ SessionStore \}[^\n]*\n/,'');
-let out=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.ES2020}}).outputText.replace(/from '\.\.\/model\/([^']+)'/g,"from './$1.js'");fs.writeFileSync(path.join(to,'Zhiyun.js'),out);
-fs.copyFileSync(path.resolve(__dirname,'../智云助手图标.png'),path.join(__dirname,'web/icon.png'));
-console.log('Shared classroom API and models generated');
+verify().catch(error=>{console.error('Bundled model verification failed: '+error.message);process.exitCode=1});

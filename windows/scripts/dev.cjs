@@ -1,0 +1,1 @@
+const {spawnSync,spawn}=require('node:child_process');const build=spawnSync(process.execPath,['scripts/build.cjs'],{stdio:'inherit'});if(build.status)process.exit(build.status);spawn(require('electron'),['.'],{stdio:'inherit'});

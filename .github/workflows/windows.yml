@@ -1,0 +1,128 @@
+name: Windows native verification and packages
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-2025
+            unpacked: release/win-unpacked
+          - arch: arm64
+            runner: windows-11-arm
+            unpacked: release/win-arm64-unpacked
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows
+    env:
+      CI: 'true'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          architecture: ${{ matrix.arch }}
+          cache: npm
+          cache-dependency-path: windows/package-lock.json
+      - name: Clean dependency install
+        run: npm ci
+      - name: Type check
+        run: npm run check
+      - name: Portable inherited and desktop unit checks
+        run: npm test
+      - name: Build isolated desktop application
+        run: npm run build
+      - name: Electron UI regression
+        run: npm run test:e2e
+      - name: Package native architecture without publishing
+        run: npx electron-builder --win nsis zip --${{ matrix.arch }} --publish never
+      - name: Verify PE architecture and ASAR privacy/resources
+        run: node scripts/package-audit.cjs --dir '${{ matrix.unpacked }}' --arch '${{ matrix.arch }}' --report 'work/package-audit-${{ matrix.arch }}.json'
+      - name: Install and launch from installed path
+        run: |
+          $setup = Get-ChildItem release -Filter '*${{ matrix.arch }}*Setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'Architecture-specific setup was not produced' }
+          $installDir = Join-Path $env:RUNNER_TEMP '智云助手 安装验证-${{ matrix.arch }}'
+          $installer = Start-Process -FilePath $setup.FullName -ArgumentList "/S /D=$installDir" -Wait -PassThru
+          if ($installer.ExitCode -ne 0) { throw "Installer failed: $($installer.ExitCode)" }
+          $appExe = Get-ChildItem -LiteralPath $installDir -Filter '*.exe' | Where-Object { $_.Name -notmatch 'Uninstall' } | Select-Object -First 1
+          if (-not $appExe) { throw 'Installed executable was not found' }
+          node scripts/package-audit.cjs --smoke $appExe.FullName --arch '${{ matrix.arch }}' --report 'work/installed-smoke-${{ matrix.arch }}.json'
+          if ($LASTEXITCODE -ne 0) { throw 'Installed app startup smoke failed' }
+          $uninstaller = Get-ChildItem -LiteralPath $installDir -Filter '*Uninstall*.exe' | Select-Object -First 1
+          if (-not $uninstaller) { throw 'Per-user uninstaller was not produced' }
+          $removed = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($removed.ExitCode -ne 0) { throw "Uninstall failed: $($removed.ExitCode)" }
+      - name: Retain test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-${{ matrix.arch }}-verification
+          path: |
+            windows/work/package-audit-*.json
+            windows/work/installed-smoke-*.json
+            windows/test-results/**
+            windows/playwright-report/**
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Retain verified downloadable packages
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-${{ matrix.arch }}
+          path: |
+            windows/release/*${{ matrix.arch }}*Setup.exe
+            windows/release/*${{ matrix.arch }}*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  prerelease:
+    name: Publish verified Windows preview
+    needs: windows
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Windows-*
+          path: artifacts
+          merge-multiple: true
+      - name: Publish only after both native verification jobs succeed
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum artifacts/*.exe artifacts/*.zip > artifacts/SHA256SUMS.txt
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            preview=$(gh release view "$RELEASE_TAG" --json isDraft,isPrerelease --jq '.isDraft or .isPrerelease')
+            test "$preview" = true || { echo 'Refusing to overwrite a stable release'; exit 1; }
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --prerelease --title "智云助手 $RELEASE_TAG · Windows 预览版" --notes '提供 x64 与 ARM64 安装包和 ZIP。两个架构分别完成原生 Windows CI 的类型检查、行为回归、界面回归、资源与 PE 架构审计、中文空格路径安装及已安装应用启动烟测。CI 启动验证不能替代所有电脑、显卡、外设和真实课堂媒体的完整兼容验收。本版本作为预发布供进一步测试，不自动标为正式稳定版。系统目标为 Windows 10/11 的 x64 与 ARM64，不支持 Windows 7/8/8.1 或 32 位系统。'
+          fi
+          gh release upload "$RELEASE_TAG" artifacts/*.exe artifacts/*.zip artifacts/SHA256SUMS.txt --clobber

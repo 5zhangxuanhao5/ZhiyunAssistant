@@ -1,0 +1,110 @@
+TAP version 13
+# [ZhiyunPermissions] lessons=1 requests=1 refresh=true
+# [ZhiyunPermissions] lessons=1 requests=1 refresh=true
+# [ZhiyunPermissions] lessons=1 requests=1 refresh=true
+# (node:93038) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: Mac app enters an authorized lesson, retrieves both official timelines
+ok 1 - Mac app enters an authorized lesson, retrieves both official timelines
+  ---
+  duration_ms: 101.529916
+  ...
+# Subtest: unauthorized course denial stops fetching PPT/ASR endpoints
+ok 2 - unauthorized course denial stops fetching PPT/ASR endpoints
+  ---
+  duration_ms: 11.843333
+  ...
+# Subtest: image URL boundary never admits attacker domains
+ok 3 - image URL boundary never admits attacker domains
+  ---
+  duration_ms: 11.37525
+  ...
+# Subtest: only continuous duplicate pages merge their transcripts in time order
+ok 4 - only continuous duplicate pages merge their transcripts in time order
+  ---
+  duration_ms: 8.769958
+  ...
+# Subtest: closing PPT and summary shows one complete transcript block
+ok 5 - closing PPT and summary shows one complete transcript block
+  ---
+  duration_ms: 32.640209
+  ...
+# Subtest: lesson navigation returns to its actual prior list
+ok 6 - lesson navigation returns to its actual prior list
+  ---
+  duration_ms: 44.051042
+  ...
+# Subtest: sliding screenshots changes transcript page, not video position
+ok 7 - sliding screenshots changes transcript page, not video position
+  ---
+  duration_ms: 43.602417
+  ...
+# Subtest: modal open never promotes a study pane to another layer
+ok 8 - modal open never promotes a study pane to another layer
+  ---
+  duration_ms: 57.62175
+  ...
+# Subtest: calendar includes current month only and accepts every date
+ok 9 - calendar includes current month only and accepts every date
+  ---
+  duration_ms: 31.763459
+  ...
+# Subtest: question explicitly asking whole lesson overrides current-time restriction
+ok 10 - question explicitly asking whole lesson overrides current-time restriction
+  ---
+  duration_ms: 35.211083
+  ...
+# Subtest: double-click slideshow full view does not mutate lesson/video timeline
+ok 11 - double-click slideshow full view does not mutate lesson/video timeline
+  ---
+  duration_ms: 34.810042
+  ...
+# Subtest: creating second unnamed note updates first name, keeps independent content
+ok 12 - creating second unnamed note updates first name, keeps independent content
+  ---
+  duration_ms: 26.562917
+  ...
+# Subtest: course-level selection and per-lesson exclusion use the same source of truth
+ok 13 - course-level selection and per-lesson exclusion use the same source of truth
+  ---
+  duration_ms: 6.883083
+  ...
+# Subtest: empty gaps skip only with confirmed complete history
+ok 14 - empty gaps skip only with confirmed complete history
+  ---
+  duration_ms: 8.670625
+  ...
+# Subtest: noise classifier cannot discard formulas, exams or examples
+ok 15 - noise classifier cannot discard formulas, exams or examples
+  ---
+  duration_ms: 6.127625
+  ...
+# Subtest: HLS download plan rejects unsupported protected formats
+ok 16 - HLS download plan rejects unsupported protected formats
+  ---
+  duration_ms: 7.118916
+  ...
+# Subtest: HLS download preserves AES keys and initializes hashed segment names
+ok 17 - HLS download preserves AES keys and initializes hashed segment names
+  ---
+  duration_ms: 10.264083
+  ...
+# Subtest: each cross-lesson time reference is independently clickable
+ok 18 - each cross-lesson time reference is independently clickable
+  ---
+  duration_ms: 8.597583
+  ...
+# Subtest: black-background slides are preserved instead of losing meaningful content
+ok 19 - black-background slides are preserved instead of losing meaningful content
+  ---
+  duration_ms: 8.087125
+  ...
+1..19
+# tests 19
+# suites 0
+# pass 19
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1084.937417

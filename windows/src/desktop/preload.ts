@@ -1,0 +1,3 @@
+import {contextBridge,ipcRenderer} from 'electron';
+const allowedEvents=new Set(['session','courses.history','permissions','lesson.update','lesson','lesson.transcript','ai.settings','smartSkip','lesson.status','downloads','ai.stream','notice']);
+contextBridge.exposeInMainWorld('zhiyun',Object.freeze({call:(method:string,payload:unknown)=>ipcRenderer.invoke('zhiyun:call',method,payload),on:(event:string,listener:(data:unknown)=>void)=>{if(!allowedEvents.has(event)||typeof listener!=='function')return()=>{};const wrapper=(_event:unknown,data:unknown)=>listener(data);ipcRenderer.on('zhiyun:'+event,wrapper);return()=>ipcRenderer.removeListener('zhiyun:'+event,wrapper);}}));

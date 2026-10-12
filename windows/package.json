@@ -1,0 +1,91 @@
+{
+  "name": "zhiyun-assistant",
+  "productName": "智云助手",
+  "version": "0.8.0-beta.1",
+  "description": "智云课堂课程学习桌面工具",
+  "private": true,
+  "license": "UNLICENSED",
+  "author": "智云助手 contributors",
+  "main": "dist/desktop/main.cjs",
+  "scripts": {
+    "dev": "node scripts/dev.cjs",
+    "build": "node scripts/build.cjs",
+    "start": "electron .",
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.*",
+    "test:e2e": "playwright test",
+    "dist:win": "npm run build && electron-builder --win nsis zip --x64 --arm64 --publish never",
+    "dist:mac-test": "npm run build && electron-builder --mac dir --arm64 --publish never"
+  },
+  "dependencies": {
+    "dompurify": "3.4.17",
+    "hls.js": "1.6.19",
+    "jszip": "3.10.1",
+    "marked": "16.4.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.0",
+    "@types/node": "22.18.10",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@types/ws": "8.18.1",
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.25.11",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  },
+  "build": {
+    "appId": "cn.suike.slides.windows",
+    "productName": "智云助手",
+    "copyright": "Copyright © 2026 智云助手 contributors",
+    "directories": {
+      "output": "release",
+      "app": "staging-app"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/icon.*",
+      "package.json",
+      "third_party/**/*",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "ZhiyunAssistant-${version}-Windows-${arch}.${ext}",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": false,
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
+      "artifactName": "ZhiyunAssistant-${version}-Windows-${arch}-Setup.${ext}"
+    },
+    "mac": {
+      "identity": null,
+      "icon": "assets/icon.png",
+      "target": "dir"
+    },
+    "asarUnpack": [
+      "dist/desktop/image-worker.cjs"
+    ]
+  }
+}

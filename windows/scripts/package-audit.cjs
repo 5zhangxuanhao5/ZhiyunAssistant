@@ -50,21 +50,25 @@ function allFiles(folder) {
   function visit(current) { for (const entry of fs.readdirSync(current, { withFileTypes: true })) { const filename = path.join(current, entry.name); if (entry.isDirectory()) visit(filename); else if (entry.isFile()) result.push(filename); else throw Error('Unexpected symlink or device in release: ' + path.relative(folder, filename)); } }
   visit(folder); return result;
 }
+function normalizeArchiveName(entry) { return String(entry).replace(/\\/g, '/').replace(/^\/+/, ''); }
+function asarFilename(entry) { return normalizeArchiveName(entry).split('/').join(path.sep); }
 function scanAsar(filename) {
   const findings = [], files = [];
   for (const entry of asar.listPackage(filename)) {
-    const name = entry.replace(/^\//, ''), stat = asar.statFile(filename, name, false);
+    // ASAR lists rooted paths using the host separator. Keep report/comparison
+    // names POSIX, while its filesystem lookup requires native relative paths.
+    const name = normalizeArchiveName(entry), archivePath = asarFilename(name), stat = asar.statFile(filename, archivePath, false);
     if (stat.files) continue;
     files.push({ name, size: stat.size });
     const sensitive = sensitiveEntry(name); if (sensitive) findings.push({ file: name, kind: sensitive });
     if (/\.(?:js|cjs|mjs|json|html|css|md|txt|svg|ya?ml)$/i.test(name)) {
       if (stat.size > 24 * 1024 * 1024) { findings.push({ file: name, kind: 'oversized unscanned text resource' }); continue; }
-      const text = asar.extractFile(filename, name).toString('utf8');
+      const text = asar.extractFile(filename, archivePath).toString('utf8');
       findings.push(...scanText(text).map((match) => ({ file: name, ...match })));
     }
   }
   const metadata = JSON.parse(asar.extractFile(filename, 'package.json').toString('utf8'));
-  if (!metadata.main || !files.some((entry) => entry.name === metadata.main)) findings.push({ file: 'package.json', kind: 'main entry missing from package' });
+  if (!metadata.main || !files.some((entry) => entry.name === normalizeArchiveName(metadata.main))) findings.push({ file: 'package.json', kind: 'main entry missing from package' });
   for (const required of ['dist/renderer/index.html', 'dist/renderer/app.js', 'dist/renderer/app.css', 'dist/desktop/preload.cjs', 'assets/icon.png']) if (!files.some((entry) => entry.name === required)) findings.push({ file: required, kind: 'required application resource missing' });
   return { files, findings, version: metadata.version };
 }
@@ -84,7 +88,7 @@ function auditPackage(folder, expectedArch) {
   const worker = 'dist/desktop/image-worker.cjs';
   const workerFile = path.join(root, 'resources', 'app.asar.unpacked', ...worker.split('/'));
   try {
-    const stat = asar.statFile(archive, worker, false);
+    const stat = asar.statFile(archive, asarFilename(worker), false);
     if (!stat.unpacked || !fs.existsSync(workerFile) || fs.statSync(workerFile).size !== stat.size) findings.push({ file: worker, kind: 'background image worker must be available outside ASAR' });
   } catch (_) { findings.push({ file: worker, kind: 'background image worker missing' }); }
   return { platform: 'Windows', arch: expectedArch, version: packageInfo.version, checkedAt: new Date().toISOString(), pe, asar: { files: packageInfo.files.length, bytes: fs.statSync(archive).size, sha256: crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex') }, findings, passed: !findings.length };
@@ -141,5 +145,5 @@ async function main(argv = process.argv.slice(2)) {
   console.log(JSON.stringify(report, null, 2)); if (!report.passed) process.exitCode = 1;
   return report;
 }
-module.exports = { inspectPe, scanText, sensitiveEntry, scanAsar, auditPackage, smokeExecutable, main };
+module.exports = { inspectPe, scanText, sensitiveEntry, normalizeArchiveName, scanAsar, auditPackage, smokeExecutable, main };
 if (require.main === module) main().catch((error) => { console.error('Release audit failed:', error.message); process.exitCode = 1; });

@@ -1,0 +1,7 @@
+export interface SearchFacetRow { title: string; teacher: string; room: string; term?: string }
+export interface SearchFilters { counterpart: string; room: string; term: string }
+export function facetValues(row: SearchFacetRow, field: string, teacherSearch: boolean): string[] { const value = field === 'counterpart' ? teacherSearch ? row.title : row.teacher : field === 'room' ? row.room : row.term || ''; return field === 'counterpart' && teacherSearch ? [value] : value.split(/[,，、;；]/).map((part: string) => part.trim()).filter((part: string) => !!part); }
+export function matchingSearchRows<T extends SearchFacetRow>(rows: T[], filters: SearchFilters, teacherSearch: boolean, omit: string = ''): T[] {
+  return rows.filter((row: T) => (omit === 'counterpart' || !filters.counterpart || facetValues(row, 'counterpart', teacherSearch).includes(filters.counterpart)) && (omit === 'room' || !filters.room || facetValues(row, 'room', teacherSearch).includes(filters.room)) && (omit === 'term' || !filters.term || facetValues(row, 'term', teacherSearch).includes(filters.term)));
+}
+export function searchFacetOptions<T extends SearchFacetRow>(rows: T[], filters: SearchFilters, teacherSearch: boolean, field: string): string[] { return Array.from(new Set(matchingSearchRows(rows, filters, teacherSearch, field).reduce((values: string[], row: T): string[] => values.concat(facetValues(row, field, teacherSearch)), []))).sort((a: string, b: string) => b.localeCompare(a)); }

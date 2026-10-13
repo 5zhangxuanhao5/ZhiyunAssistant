@@ -2,7 +2,7 @@
 
 把智云课堂中的课件、课堂转写、视频和笔记放在同一个学习窗口，按课程时间线回看。在线资源按校园账号的实际权限访问，AI 功能由用户自行配置 DeepSeek API。
 
-本仓库包含 Windows 测试版，以及此前独立开发的原生 Mac 版。两个客户端分别维护本机资料，目前没有跨端自动同步。
+本仓库包含 Windows 测试版、此前独立开发的原生 Mac 版，以及原生鸿蒙手机/平板版。各客户端分别维护本机资料，目前没有跨端自动同步。
 
 ## 下载
 
@@ -12,6 +12,9 @@
 | --- | --- | --- | --- |
 | Windows | 0.8.0-beta.1；Windows 10/11，x64 / ARM64 | Intel、AMD 的 64 位电脑选 x64；ARM 电脑选 ARM64；提供 Setup.exe 与 ZIP | 处于测试阶段。Mac 上的模型、服务及 Electron 检查不代替 Windows 原生验收；实际 CI 状态以 [Actions](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/actions) 为准 |
 | Mac 原生版 | 1.0.0；macOS 13 及以上 | 同一个 DMG 或 ZIP 包含 Intel 与 Apple Silicon | 当前 Apple Silicon Mac 已验证真实有权限课程的视频、键盘操作与身份恢复，19 项合成回归通过；Intel 为编译检查 |
+| HarmonyOS 原生版 | 0.7.4；最低 HarmonyOS 6.1.1 / API 24，手机 / 平板 | [鸿蒙下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/harmony-v0.7.4-preview)：未签名 HAP、源码和安装说明，需自行配置设备调试签名 | 374 项自动回归；此前在 HarmonyOS 7 手机/平板测试，不能视为全部设备或交互已验收 |
+
+鸿蒙版上架涉及备案、授权材料、发行签名和审核，目前尚未完成，先通过 GitHub 提供开发者自行签名安装的版本。可在设备开启开发者模式，通过 DevEco Studio 配置自己的调试签名后安装；**开发者模式本身不能免除签名或设备绑定要求**，详见[鸿蒙安装说明](harmonyOS/INSTALLATION.md)。不公开作者的私人签名材料或测试设备信息。
 
 Mac 提供 DMG、应用 ZIP 和源码 ZIP，文件名均以 `ZhiyunAssistant-Mac-1.0.0` 开头。校验值见同一发布中的 `SHA256SUMS.txt`。应用 ZIP 已去除归档附属元数据，公开源码去除了日志私人路径，并修复独立构建所需的模型验证与测试依赖；已发布的应用二进制和版本未改。
 
@@ -42,5 +45,8 @@ AI 仅在用户配置并启用相关功能后调用。问题及选定的课程�
 - [Windows 第三方说明](windows/THIRD_PARTY_NOTICES.md)
 - [原生 Mac 使用与构建](macOS/README.md)
 - [Mac 第三方说明](macOS/THIRD_PARTY_NOTICES.md)
+- [鸿蒙源码与构建](harmonyOS/README.md)
+- [鸿蒙开发者模式安装说明](harmonyOS/INSTALLATION.md)
+- [鸿蒙第三方说明](harmonyOS/THIRD_PARTY_NOTICES.md)
 
 仓库当前未新增本项目许可证，也没有将原作改为 MIT 授权。第三方组件保留各自现有许可证、版权和通知文件；如需其他使用授权，请与作者确认。

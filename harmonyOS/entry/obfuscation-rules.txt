@@ -1,0 +1,12 @@
+# Keep properties used by JSON storage, API data, ArkUI decorators and JS bridges.
+# Rename local identifiers only; persistence schema and bridge names must remain stable.
+-enable-toplevel-obfuscation
+-remove-log
+-keep-global-name
+EntryAbility
+ClassroomBridge
+-keep-property-name
+requestMedia
+update
+clicked
+diagnostic

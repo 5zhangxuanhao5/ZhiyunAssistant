@@ -1,0 +1,18 @@
+import { Course, Slide, Transcript, shanghaiDate, clockTime, stamp } from './Timeline';
+export interface PriorLesson { course: Course; slides: Slide[]; lines: Transcript[]; gaps: string[] }
+export interface PriorCourseContext { lessons: PriorLesson[]; gaps: string[]; wholeCourse?: boolean }
+export function priorLessons(rows: Course[], current: Course, includeLater: boolean = false): Course[] {
+  const unique = new Map<string, Course>();
+  rows.forEach((row: Course) => { if (row.courseId === current.courseId && row.subId !== current.subId && Number.isFinite(row.start) && row.start > 0 && (includeLater ? row.start <= Date.now() / 1000 : row.start < current.start)) unique.set(row.subId, row); });
+  return Array.from(unique.values()).sort((a: Course, b: Course) => a.start - b.start || a.subId.localeCompare(b.subId));
+}
+export function lessonLabel(course: Course): string { return shanghaiDate(course.start) + ' ' + clockTime(course.start); }
+export function priorMaterial(context: PriorCourseContext): string {
+  return context.gaps.map((gap: string) => '材料缺口：' + gap).join('\n') + '\n' + context.lessons.map((lesson: PriorLesson, index: number) => {
+    const header = `【${context.wholeCourse ? '关联' : '前序'}课次${index + 1}：${lessonLabel(lesson.course)}】`;
+    const pages = lesson.slides.map((slide: Slide, i: number) => `课件第${i + 1}页，课内时间${stamp(slide.t)}—${lesson.slides[i + 1] ? stamp(lesson.slides[i + 1].t) : '课次结束'}`).join('\n');
+    // Keep every sentence, including speech before the first slide; times are local to this lesson.
+    const speech = lesson.lines.map((line: Transcript) => `${lessonLabel(lesson.course)}课次 ${stamp(line.t)} ${line.text}`).join('\n');
+    return header + '\n' + lesson.gaps.map((gap: string) => '材料缺口：' + gap).join('\n') + '\n课件时间索引：\n' + pages + '\n此课次完整可用转写：\n' + speech;
+  }).join('\n\n');
+}

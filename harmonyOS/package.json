@@ -1,0 +1,12 @@
+{
+  "name": "zhiyun-assistant-harmony-tests",
+  "version": "0.7.4",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "test": "node --test tests/core.test.cjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

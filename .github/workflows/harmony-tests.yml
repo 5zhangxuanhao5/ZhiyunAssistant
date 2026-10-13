@@ -1,0 +1,29 @@
+name: HarmonyOS portable regression
+
+on:
+  push:
+    branches: [main]
+    paths: ['harmonyOS/**', '.github/workflows/harmony-tests.yml']
+  pull_request:
+    paths: ['harmonyOS/**', '.github/workflows/harmony-tests.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: harmonyOS
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: harmonyOS/package-lock.json
+      - run: npm ci
+      - run: npm test

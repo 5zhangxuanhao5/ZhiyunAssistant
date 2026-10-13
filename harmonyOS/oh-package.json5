@@ -1,0 +1,8 @@
+{
+  "modelVersion": "6.26.8",
+  "name": "zhiyun-assistant",
+  "version": "0.7.4",
+  "description": "智云助手：鸿蒙手机和平板课程学习工具",
+  "dependencies": {},
+  "devDependencies": {}
+}

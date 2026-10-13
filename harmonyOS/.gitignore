@@ -1,0 +1,14 @@
+node_modules/
+oh_modules/
+.hvigor/
+.idea/
+build/
+entry/build/
+local.properties
+/build-profile.json5
+*.p12
+*.p7b
+*.cer
+*.jks
+*.pem
+*.log

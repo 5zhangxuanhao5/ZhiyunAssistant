@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<style>
+html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden;touch-action:none}
+video{display:block;width:100%;height:100%;object-fit:contain;background:#000;touch-action:none}
+#error{position:absolute;inset:0;display:none;align-items:center;justify-content:center;color:#c7d8eb;font:14px sans-serif;padding:24px;pointer-events:none}
+#gesture{position:absolute;inset:0;display:none;align-items:center;justify-content:center;color:#fff;font:600 20px sans-serif;text-shadow:0 1px 4px #000;background:#0002;pointer-events:none}
+</style>
+</head>
+<body>
+<video id="v" playsinline preload="auto"></video>
+<div id="error"></div><div id="gesture"></div>
+<script src="hls.min.js"></script><script>
+(()=>{
+const v=document.getElementById('v'),e=document.getElementById('error'),g=document.getElementById('gesture');
+let hls=null,source=null,anchor=0,error='',desiredRate=1,initial=null,last=0,sequence=0,decoded=false,gesture=null,lastTap=0,hintTimer=0;
+const requests=new Map();
+class NativeLoader{
+ constructor(){this.stats={aborted:false,loaded:0,retry:0,total:0,chunkCount:0,bwEstimate:0,loading:{start:0,first:0,end:0},parsing:{start:0,end:0},buffering:{start:0,first:0,end:0}}}
+ load(context,config,callbacks){this.context=context;this.callbacks=callbacks;this.id=String(++sequence);this.stats.loading.start=performance.now();requests.set(this.id,this);this.timeout=setTimeout(()=>{requests.delete(this.id);callbacks.onTimeout(this.stats,context,null)},config.timeout||40000);try{ClassroomBridge.requestMedia(this.id,context.url,Number.isFinite(context.rangeStart)?context.rangeStart:-1,Number.isFinite(context.rangeEnd)?context.rangeEnd:-1)}catch(_){clearTimeout(this.timeout);requests.delete(this.id);callbacks.onError({code:503,text:'媒体加载服务未连接'},context,null,this.stats)}}
+ abort(){this.stats.aborted=true;clearTimeout(this.timeout);requests.delete(this.id)}destroy(){this.abort()}getCacheAge(){return null}
+}
+function reply(result){const loader=requests.get(result.id);if(!loader)return;requests.delete(result.id);clearTimeout(loader.timeout);const {context,callbacks,stats}=loader;if(result.status!==200&&result.status!==206){callbacks.onError({code:result.status,text:result.error||'视频加载失败'},context,null,stats);return}let data=result.text;if(context.responseType==='arraybuffer'){const binary=atob(result.base64),bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);data=bytes.buffer}stats.loading.first=stats.loading.end=performance.now();stats.loaded=stats.total=result.size;stats.bwEstimate=8*result.size*1000/Math.max(1,stats.loading.end-stats.loading.start);callbacks.onSuccess({url:context.url,data},stats,context,null)}
+function diagnostic(stage){try{ClassroomBridge.diagnostic(stage)}catch(_){}}
+function bounds(){let start=0,end=Number.isFinite(v.duration)?v.duration:0;if(v.seekable.length){start=v.seekable.start(0);end=v.seekable.end(v.seekable.length-1)}return{start,end}}
+function canScrub(){return (!source?.liveCourse||source?.replay)&&canSeek()}
+function canSeek(){const b=bounds();return !source?.live||(v.seekable.length>0&&b.end-b.start>=30)}
+let reportedState='';
+function report(){if(!source)return;const b=bounds();if(source.live&&!hls&&b.end>0)anchor=Math.max(0,Date.now()/1000-source.courseStart-b.end);try{const state=JSON.stringify({time:Math.max(0,v.currentTime+anchor),duration:b.end+anchor,start:b.start+anchor,end:b.end+anchor,paused:v.paused,rate:v.playbackRate,error,live:source.live,seekable:canSeek(),positionReady:initial===null&&v.readyState>=1,frameReady:decoded,width:v.videoWidth||0,height:v.videoHeight||0});if(state!==reportedState){ClassroomBridge.update(state);reportedState=state}}catch(_){}}
+function fail(message){error=message;e.textContent=message;e.style.display='flex';report()}
+function safeStart(b){const fragments=hls?.latestLevelDetails?.fragments||[];const first=fragments.find(f=>f.start>=b.start-.5);return source?.live?Math.min(b.end-.15,Math.max(b.start+.25,first?first.start+.25:b.start+.25)):b.start}
+function seek(seconds){if(!canScrub())return;const b=bounds();if(!b.end){initial=seconds;return}const target=Math.max(safeStart(b),Math.min(Math.max(b.start,b.end-.15),seconds-anchor));if(hls&&source?.live&&source?.replay){hls.stopLoad();v.currentTime=target;hls.startLoad(target,false)}else v.currentTime=target;report()}
+function showHint(value){g.textContent=value;g.style.display='flex';clearTimeout(hintTimer);hintTimer=setTimeout(()=>g.style.display='none',720)}
+function ready(){diagnostic('metadata width='+v.videoWidth+' height='+v.videoHeight+' duration='+v.duration);if(initial!==null){const at=initial;initial=null;if(source.liveCourse&&!source.replay)goLive();else seek(at)}setRate(desiredRate);if(source.autoplay!==false)v.play().catch(()=>{error='点击播放继续';report()});else{v.pause();report()}}
+function goLive(){const b=bounds();if(b.end>0)v.currentTime=Math.max(b.start,b.end-.3);setRate(1);if(source.autoplay!==false)v.play().catch(()=>{});else v.pause();report()}
+function replay(enabled){if(!source)return;source.replay=!!enabled;if(!enabled)goLive()}
+function setRate(rate){if(source?.liveCourse&&!source?.replay)rate=1;desiredRate=Math.max(.1,Math.min(16,rate));try{v.playbackRate=desiredRate}catch(_){fail('当前系统不支持此倍速，请调整倍速')}report()}
+function playbackHint(paused){showHint('');g.innerHTML='<svg width=44 height=44 viewBox="0 0 24 24" aria-hidden="true">'+(paused?'<rect x=7 y=5 width=3.5 height=14 rx=1 fill="white"/><rect x=13.5 y=5 width=3.5 height=14 rx=1 fill="white"/>':'<path d="M8 5.5v13l10-6.5z" fill="white"/>')+'</svg>'}
+function playToggle(){if(v.paused){v.play().catch(()=>fail('播放失败，请重试'));playbackHint(false)}else{v.pause();playbackHint(true)}}
+v.addEventListener('loadedmetadata',ready);
+v.addEventListener('loadeddata',()=>{if(v.videoWidth>0){decoded=true;report()}});
+v.addEventListener('error',()=>{diagnostic('media error code='+v.error?.code);fail('视频无法加载，请重试')});
+v.addEventListener('timeupdate',()=>{if(Date.now()-last>200){last=Date.now();report()}if(!decoded&&v.videoWidth>0&&v.currentTime>0.2){decoded=true;report();diagnostic('playing width='+v.videoWidth+' height='+v.videoHeight+' time='+v.currentTime.toFixed(2))}});
+['play','pause','ratechange','durationchange','progress'].forEach(t=>v.addEventListener(t,report));
+v.addEventListener('pointerdown',event=>{if(event.button!==undefined&&event.button!==0)return;gesture={id:event.pointerId,x:event.clientX,y:event.clientY,lastX:event.clientX,lastY:event.clientY,time:v.currentTime,dragged:false};try{v.setPointerCapture(event.pointerId)}catch(_){}});
+v.addEventListener('pointermove',event=>{if(!gesture||gesture.id!==event.pointerId)return;const dx=event.clientX-gesture.x,dy=event.clientY-gesture.y;if(!gesture.dragged&&Math.abs(dx)>12&&Math.abs(dx)>Math.abs(dy)*1.25)gesture.dragged=true;if(gesture.dragged&&canScrub()){const scale=Math.max(.18,Math.min(.8,120/Math.max(320,window.innerWidth))),b=bounds(),target=Math.max(safeStart(b),Math.min(Math.max(b.start,b.end-.15),gesture.time+dx*scale)),delta=Math.round(target-gesture.time);v.currentTime=target;report();showHint((delta>=0?'+':'')+delta+' 秒')}gesture.lastX=event.clientX;gesture.lastY=event.clientY;if(gesture.dragged&&event.cancelable)event.preventDefault()});
+v.addEventListener('pointerup',event=>{if(!gesture||gesture.id!==event.pointerId)return;const moved=gesture.dragged;gesture=null;if(moved){try{ClassroomBridge.clicked()}catch(_){}return}const now=Date.now();if(now-lastTap<320){lastTap=0;playToggle();try{ClassroomBridge.clicked()}catch(_){}return}lastTap=now;try{ClassroomBridge.clicked()}catch(_){}});
+v.addEventListener('pointercancel',()=>gesture=null);
+diagnostic('boot Hls='+!!window.Hls+' MSE='+!!window.MediaSource);
+window.Player={mediaReply:reply,load(s){reportedState='';decoded=false;diagnostic('load hls='+s.hls+' supported='+(window.Hls&&Hls.isSupported()));if(hls){hls.destroy();hls=null}requests.forEach(r=>r.abort());requests.clear();source=null;v.pause();v.removeAttribute('src');v.load();source=s;anchor=s.offset||0;initial=s.at||0;desiredRate=s.rate||1;error='';e.style.display='none';g.style.display='none';
+if((s.hls||/\.m3u8(?:\?|$)/i.test(s.url))&&window.Hls&&Hls.isSupported()){
+ hls=new Hls({loader:NativeLoader,enableWorker:false,backBufferLength:1800,maxBufferLength:40,liveSyncOnStallIncrease:0,liveMaxLatencyDurationCount:Infinity,maxLiveSyncPlaybackRate:1});hls.on(Hls.Events.LEVEL_LOADED,(_,data)=>{const d=data.details,frag=d.fragments.find(f=>f.programDateTime);if(frag&&s.courseStart)anchor=Math.max(0,frag.programDateTime/1000-s.courseStart-frag.start);else if(s.live&&d.edge)anchor=Math.max(0,Date.now()/1000-s.courseStart-d.edge);report()});hls.on(Hls.Events.ERROR,(_,data)=>{if(data.fatal){diagnostic('fatal '+data.type+' '+data.details+' code='+(data.response?.code||0));fail(data.response?.code===403?'当前账号没有此视频的访问权限':data.response?.code?'视频请求失败（'+data.response.code+'）':/codec|bufferAppend/i.test(data.details)?'此视频编码暂不支持，请切换画面':'视频加载失败，请重试')}});hls.on(Hls.Events.MEDIA_ATTACHED,()=>hls.loadSource(s.url));hls.attachMedia(v);
+}else{v.src=s.url}report()},seek,replay,goLive,courseLive(enabled){if(source)source.liveCourse=!!enabled},rate:setRate,toggle:playToggle,pause(){v.pause()},position(){report()}};
+})();
+</script>
+</body>
+</html>

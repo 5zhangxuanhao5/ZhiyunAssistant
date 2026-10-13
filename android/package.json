@@ -1,0 +1,6 @@
+{
+  "name":"zhiyun-assistant-android","version":"0.1.0-beta.1","private":true,"license":"UNLICENSED",
+  "scripts":{"build:web":"node scripts/build-web.cjs","check":"tsc --noEmit","test":"node --import tsx --test tests/*.test.*","test:ui":"playwright test"},
+  "dependencies":{"buffer":"6.0.3","dompurify":"3.4.17","hls.js":"1.6.19","jszip":"3.10.1","marked":"16.4.2","react":"19.3.0","react-dom":"19.3.0"},
+  "devDependencies":{"@playwright/test":"1.56.0","@types/node":"22.18.10","@types/react":"19.2.2","@types/react-dom":"19.2.2","esbuild":"0.25.11","tsx":"4.20.6","typescript":"5.9.3"}
+}

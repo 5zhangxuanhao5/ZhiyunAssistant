@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "src/renderer/**/*",
+    "src/shared/model/**/*",
+    "src/shared/services/**/*",
+    "src/shared/bridge.ts",
+    "src/desktop/android*.ts",
+    "src/desktop/compat.ts",
+    "src/desktop/services.ts",
+    "src/desktop/image-jobs.ts"
+  ],
+  "exclude": [
+    "src/shared/model/NativeSelections.ts",
+    "src/shared/model/OfflineRows.ts",
+    "src/shared/model/OverviewSource.ts",
+    "src/shared/model/PointerInput.ts",
+    "src/shared/model/SelectionKeys.ts",
+    "src/shared/model/SlideSpreadSource.ts"
+  ]
+}

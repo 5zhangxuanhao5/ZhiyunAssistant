@@ -1,0 +1,32 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'cn.suike.slides.android'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+    buildFeatures { buildConfig true }
+    defaultConfig {
+        applicationId 'cn.suike.slides.android'
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName '0.1.0-beta.1'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    buildTypes {
+        debug { debuggable true }
+        release { minifyEnabled false; debuggable false }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    packaging { resources { excludes += ['META-INF/DEPENDENCIES','META-INF/LICENSE*','META-INF/NOTICE*'] } }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+    implementation 'androidx.activity:activity:1.12.4'
+    implementation 'androidx.window:window:1.5.1'
+    implementation 'androidx.window:window-java:1.5.1'
+    implementation 'androidx.webkit:webkit:1.15.0'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+}

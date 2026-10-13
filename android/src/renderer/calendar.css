@@ -1,0 +1,23 @@
+.zy-calendar{width:min(560px,100%);max-height:100%;box-sizing:border-box;overflow:auto;background:#fff;color:#20344d;border-radius:18px;padding:20px 24px 18px;font-family:inherit;overscroll-behavior:contain}
+.zy-calendar button{font:inherit;box-sizing:border-box;cursor:pointer;border:0;color:#20344d;background:transparent;flex:none}
+.zy-calendar button:focus-visible{outline:2px solid #168bee;outline-offset:3px}
+.zy-calendar-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px}
+.zy-calendar-heading h2{font-size:18px;line-height:24px;font-weight:600;margin:0}
+.zy-calendar .zy-calendar-done{font-size:14px;color:#168bee;border-radius:12px;padding:8px 14px;background:#eaf4ff}
+.zy-calendar-navigation{display:grid;grid-template-columns:36px 36px minmax(0,1fr) 36px 36px;align-items:center;gap:6px;margin-bottom:16px}
+.zy-calendar-navigation button{height:36px;font-size:25px;line-height:32px;border-radius:11px;background:#f1f5fa}
+.zy-calendar-navigation strong{font-size:17px;line-height:24px;text-align:center;font-weight:600;white-space:nowrap}
+.zy-calendar-week,.zy-calendar-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.zy-calendar-week{color:#71839a;font-size:12px;text-align:center;margin-bottom:8px}
+.zy-calendar-week span{padding:6px 0}
+.zy-calendar-days{touch-action:pan-y;user-select:none}
+.zy-calendar .zy-calendar-day,.zy-calendar-blank{height:47px;min-width:0;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:15px;line-height:19px}
+.zy-calendar .zy-calendar-day:hover{background:#f0f5fb}
+.zy-calendar .zy-calendar-day.has-record{color:#087ccf;background:#f3f8ff;font-weight:600}
+.zy-calendar-day i{height:3px;width:3px;background:transparent;border-radius:50%}
+.zy-calendar-day.has-record i{background:#168bee}
+.zy-calendar .zy-calendar-day.selected{color:white;background:#168bee}
+.zy-calendar-day.selected i{background:white}
+.zy-calendar-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:17px;color:#71839a;font-size:12px;line-height:18px}
+.zy-calendar-footer button{font-size:13px;color:#168bee;padding:6px 12px;border-radius:10px;background:#eaf4ff}
+@media(max-width:430px){.zy-calendar{padding:18px 15px}.zy-calendar-navigation{grid-template-columns:32px 32px minmax(0,1fr) 32px 32px;gap:3px}.zy-calendar-navigation strong{font-size:15px}.zy-calendar-days{gap:3px}.zy-calendar .zy-calendar-day,.zy-calendar-blank{height:43px}.zy-calendar-footer{gap:8px;font-size:11px}}

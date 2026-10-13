@@ -166,6 +166,7 @@ test('mouse native answer selection preserves independent timestamps when insert
   const input = page.getByRole('textbox', { name: '问问这节课', exact: true });
   await input.fill('解释本页'); await input.press('Enter');
   await expect(page.locator('.answer-content')).toContainText('第二项');
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
   await page.locator('.ai-pane .answer-content').evaluate(element => { const range = document.createRange(); range.selectNodeContents(element); window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range); });
   await page.getByRole('button', { name: '插入到笔记', exact: true }).click();
   await expect(page.locator('.note-block')).toHaveCount(3);

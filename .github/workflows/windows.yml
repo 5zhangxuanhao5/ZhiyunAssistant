@@ -73,6 +73,16 @@ jobs:
           if (-not $uninstaller) { throw 'Per-user uninstaller was not produced' }
           $removed = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru
           if ($removed.ExitCode -ne 0) { throw "Uninstall failed: $($removed.ExitCode)" }
+          # NSIS may finish deleting through its temporary uninstaller copy.
+          # Observe bounded completion; a zero exit code alone is insufficient.
+          $installedArchive = Join-Path $installDir 'resources/app.asar'
+          $removalDeadline = (Get-Date).AddSeconds(10)
+          while (((Test-Path -LiteralPath $appExe.FullName) -or (Test-Path -LiteralPath $installedArchive)) -and ((Get-Date) -lt $removalDeadline)) {
+            Start-Sleep -Milliseconds 200
+          }
+          if ((Test-Path -LiteralPath $appExe.FullName) -or (Test-Path -LiteralPath $installedArchive)) {
+            throw 'Uninstaller reported success but installed application files remain'
+          }
       - name: Retain test evidence
         if: always()
         uses: actions/upload-artifact@v4

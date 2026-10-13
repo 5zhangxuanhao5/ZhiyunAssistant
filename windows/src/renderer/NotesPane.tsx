@@ -74,14 +74,20 @@ export function NotesPane(props: NotesPaneProps) {
   const [manage, setManage] = useState(false), [colors, setColors] = useState(false), [format, setFormat] = useState('md'), [busy, setBusy] = useState(false), [error, setError] = useState(''), [allSelected, setAllSelected] = useState(false), [capture, setCapture] = useState(false), [captureStatus, setCaptureStatus] = useState('');
   const body = useRef<HTMLDivElement>(null), editors = useRef(new Map<string, EditorHandle>()), noteRef = useRef(note), activeRef = useRef(''), caretRef = useRef(0), saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined), saves = useRef<Promise<unknown>>(Promise.resolve()), generation = useRef(0), lastInsertion = useRef(-1), previousA = useRef<{ target: string; at: number } | null>(null), camera = useRef<HTMLVideoElement>(null), stream = useRef<MediaStream | undefined>(undefined), range = useRef<Range | undefined>(undefined), lastFocus = useRef('');
   noteRef.current = note; activeRef.current = active;
+  const pendingCaret = useRef<{ noteId?: string; blockId: string; offset: number } | undefined>(undefined);
   const persist = useCallback((value: LessonNote, immediate = false) => {
     clearTimeout(saveTimer.current); const save = () => { const prepared = prepareNote(value); saves.current = saves.current.catch(() => {}).then(() => ipc('notes.save', { note: prepared })); void saves.current.catch(err => setError(errorMessage(err))); setNotes(previous => { const found = previous.findIndex(item => item.id === prepared.id), next = previous.slice(); if (found < 0) next.unshift(prepared); else next[found] = prepared; return next; }); }; if (immediate) save(); else saveTimer.current = setTimeout(save, 350);
   }, []);
   const change = useCallback((blocks: NoteBlock[], nextActive = activeRef.current, nextCaret?: number) => {
-    const previous = noteRef.current; if (!previous) return; const next = { ...previous, blocks, savedAt: Date.now() }; noteRef.current = next; setNote(next); if (nextActive !== activeRef.current) { activeRef.current = nextActive; setActive(nextActive); } if (nextCaret !== undefined) { caretRef.current = nextCaret; requestAnimationFrame(() => { const editor = editors.current.get(nextActive); editor?.focus(nextCaret); editor?.element()?.scrollIntoView({ block: 'nearest', behavior: 'instant' }); }); } persist(next);
+    const previous = noteRef.current; if (!previous) return; const next = { ...previous, blocks, savedAt: Date.now() }; if (nextCaret !== undefined) { caretRef.current = nextCaret; pendingCaret.current = { noteId: next.id, blockId: nextActive, offset: nextCaret }; } noteRef.current = next; setNote(next); if (nextActive !== activeRef.current) { activeRef.current = nextActive; setActive(nextActive); } persist(next);
   }, [persist]);
+  useLayoutEffect(() => {
+    const pending = pendingCaret.current; if (!pending || pending.noteId !== note?.id) return;
+    const editor = editors.current.get(pending.blockId); if (!editor) return;
+    pendingCaret.current = undefined; editor.focus(pending.offset); editor.element()?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+  }, [note]);
   const open = useCallback((value: LessonNote) => {
-    if (noteRef.current?.savedAt) persist(noteRef.current, true); const normalized = { ...value, openedAt: Date.now(), blocks: noteBlocks(value) }; noteRef.current = normalized; setNote(normalized); setActive(''); activeRef.current = ''; setManage(false); setAllSelected(false); range.current = undefined; setError(''); if (normalized.savedAt) persist(normalized, true);
+    if (noteRef.current?.savedAt) persist(noteRef.current, true); pendingCaret.current = undefined; const normalized = { ...value, openedAt: Date.now(), blocks: noteBlocks(value) }; noteRef.current = normalized; setNote(normalized); setActive(''); activeRef.current = ''; setManage(false); setAllSelected(false); range.current = undefined; setError(''); if (normalized.savedAt) persist(normalized, true);
   }, [persist]);
   useEffect(() => {
     const epoch = ++generation.current; setNote(undefined); setNotes([]); setAllSelected(false); lastInsertion.current = -1;

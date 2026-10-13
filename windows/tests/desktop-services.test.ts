@@ -129,6 +129,38 @@ test('desktop lesson respects fresh denial and never requests resource or altern
  const { root, cleanup } = fixture(); const calls: string[] = []; const backend = createServices(sessionFixture(root, async url => { calls.push(url); return apiFixture(url, false); }), root, () => {}, securityAdapters);
  try { await backend.handle('session.restore'); await assert.rejects(backend.handle('lesson.open', { course }), /访问权限/); assert.equal(calls.filter(url => /search-ppt|search-trans-result/.test(url)).length, 0); assert.equal(calls.some(url => url.includes('interactivemeta')), false); } finally { await backend.dispose(); cleanup(); }
 });
+test('progress service persists transcript bookmark across backend restart, isolates lessons and preserves it when clearing caches', async () => {
+ const { root, cleanup } = fixture(); const session = sessionFixture(root, async url => apiFixture(url)); let backend = createServices(session, root, () => {}, securityAdapters);
+ const anchor = { id: 'synthetic-caption', t: 669, offset: -11.5, browsing: true };
+ try {
+  await backend.handle('session.restore'); await backend.handle('progress.set', { course, seconds: 669, slideId: '', slideSeconds: 0, video: false, followVideo: false, transcriptAnchor: anchor });
+  assert.deepEqual((await backend.handle('progress.get', { course })).transcriptAnchor, anchor);
+  assert.equal(await backend.handle('progress.get', { course: { ...course, subId: 'other-lesson' } }), null);
+  await backend.dispose(); backend = createServices(session, root, () => {}, securityAdapters); await backend.handle('session.restore');
+  assert.deepEqual((await backend.handle('progress.get', { course })).transcriptAnchor, anchor);
+  await backend.handle('cache.clearAll'); assert.deepEqual((await backend.handle('progress.get', { course })).transcriptAnchor, anchor);
+ } finally { await backend.dispose(); cleanup(); }
+});
+test('progress service drops invalid bookmark fields without changing video playback seconds', async () => {
+ const { root, cleanup } = fixture(), backend = createServices(sessionFixture(root, async url => apiFixture(url)), root, () => {}, securityAdapters);
+ try {
+  await backend.handle('session.restore');
+  const saved = await backend.handle('progress.set', { course, seconds: 80, video: true, transcriptAnchor: { id: 'old-reading', t: 669, offset: -2, browsing: true } });
+  assert.equal(saved.seconds, 80); assert.equal((await backend.handle('progress.get', { course })).seconds, 80);
+  const invalid = await backend.handle('progress.set', { course, seconds: 90, video: true, transcriptAnchor: { id: 'bad', t: -1, offset: 0, browsing: true } });
+  assert.equal(invalid.seconds, 90); assert.equal(invalid.transcriptAnchor, undefined);
+ } finally { await backend.dispose(); cleanup(); }
+});
+test('progress service keeps the same lesson bookmark separate between signed-in accounts', async () => {
+ const { root, cleanup } = fixture(); let accountId = 'account-1';
+ const session = sessionFixture(root, async url => new URL(url).pathname.endsWith('/infosimple') ? Response.json({ params: { id: accountId, realname: '合成测试账户', tenant_id: 112 } }) : apiFixture(url));
+ const backend = createServices(session, root, () => {}, securityAdapters), anchor = { id: 'synthetic-caption', t: 120, offset: -3, browsing: true };
+ try {
+  await backend.handle('session.restore'); await backend.handle('progress.set', { course, seconds: 120, transcriptAnchor: anchor });
+  accountId = 'account-2'; await backend.handle('session.account'); assert.equal(await backend.handle('progress.get', { course }), null);
+  accountId = 'account-1'; await backend.handle('session.account'); assert.deepEqual((await backend.handle('progress.get', { course })).transcriptAnchor, anchor);
+ } finally { await backend.dispose(); cleanup(); }
+});
 test('offline network error retains logged-in account and exposes account-scoped downloads', async () => {
  const { root, cleanup } = fixture(); const backend = createServices(sessionFixture(root, async () => { throw new Error('network offline'); }), root, () => {}, securityAdapters);
  try { const account = await backend.handle('session.restore'); assert.equal(account.id, 'account-1'); assert.equal(account.offline, true); await backend.handle('storage.set', { key: 'preference', value: { video: false } }); assert.deepEqual(await backend.handle('storage.get', { key: 'preference' }), { video: false }); assert.deepEqual((await backend.handle('download.list')).entries, []); } finally { await backend.dispose(); cleanup(); }

@@ -145,6 +145,9 @@ test('full screen covers the entire window, uses a black surround, hides control
   const geometry = await full.evaluate(element => { const box = element.getBoundingClientRect(); return { x: box.x, y: box.y, width: box.width, height: box.height, windowWidth: innerWidth, windowHeight: innerHeight }; });
   expect(Math.abs(geometry.x)).toBeLessThan(1.5); expect(Math.abs(geometry.y)).toBeLessThan(1.5); expect(Math.abs(geometry.width - geometry.windowWidth)).toBeLessThan(1.5); expect(Math.abs(geometry.height - geometry.windowHeight)).toBeLessThan(1.5);
   await expect(page.locator('.video-is-fullscreen .video-picture')).toHaveCSS('background-color', 'rgb(0, 0, 0)');
+  await expect.poll(() => page.locator('.video-pane video').evaluate((video: HTMLVideoElement) => video.currentTime)).toBeGreaterThan(.1);
+  const picture = (await page.locator('.video-is-fullscreen .video-picture').boundingBox())!;
+  await page.mouse.move(picture.x + picture.width / 2, picture.y + picture.height / 2);
   await expect(page.locator('.video-is-fullscreen .video-controls')).toHaveCSS('opacity', '0', { timeout: 6000 });
   await page.locator('.video-picture').click({ position: { x: 20, y: 60 } }); await expect(page.locator('.video-is-fullscreen .video-controls')).toHaveCSS('opacity', '1');
   await page.getByRole('button', { name: '退出全屏', exact: true }).click(); await expect(full).toHaveCount(0);

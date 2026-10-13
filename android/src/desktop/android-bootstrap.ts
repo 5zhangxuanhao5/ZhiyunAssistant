@@ -22,7 +22,7 @@ export function installAndroidServices(): void {
     if (!login) login = (async () => { let result: any; try { result = await native.call<any>('app.login'); } catch (error) { if (/已取消登录/.test((error as Error).message)) return null; throw error; } if (result === false || result?.cancelled) return null; const account = await services.handle('session.account'); emit('session', account); return account; })().finally(() => { login = undefined; });
     return login as Promise<T>;
    }
-   if (method === 'app.info') return { version: '0.1.0-beta.1', platform: 'android', arch: 'universal', packaged: true } as T;
+   if (method === 'app.info') return { version: '0.1.0-beta.2', platform: 'android', arch: 'universal', packaged: true } as T;
    if (method === 'app.external') return native.call('app.openExternal', payload);
    if (method === 'clipboard.write') return native.call('app.clipboard', payload);
    if (method === 'clipboard.read') return native.call('app.clipboardRead');

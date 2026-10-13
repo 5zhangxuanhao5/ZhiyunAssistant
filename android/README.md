@@ -4,7 +4,7 @@ Android 手机、平板和折叠屏客户端。沿用智云助手现有学习页
 
 ## 安装
 
-在本仓库 [Releases](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases) 下载 `ZhiyunAssistant-0.1.0-beta.1-Android.apk`，核对同一发布的 SHA256 后打开安装。适用于 Android 8.0 / API26 及以上，需 Android System WebView 100 或更新版本；不要求安装开发工具。安装确认由系统处理，不需要关闭系统安全防护。
+在本仓库 [Releases](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases) 下载 `ZhiyunAssistant-0.1.0-beta.2-Android.apk`，核对同一发布的 SHA256 后打开安装。适用于 Android 8.0 / API26 及以上，需 Android System WebView 100 或更新版本；不要求安装开发工具。安装确认由系统处理，不需要关闭系统安全防护。
 
 一个 APK 可用于手机、Android 平板和折叠屏；代码不依赖 CPU 原生库。当前为预览版，实际验证范围见 [VERIFICATION.md](VERIFICATION.md)，功能对照见 [FEATURE_PARITY.md](FEATURE_PARITY.md)。
 

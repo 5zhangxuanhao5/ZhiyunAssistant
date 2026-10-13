@@ -13,7 +13,7 @@
 | Windows | 0.8.0-beta.1；Windows 10/11，x64 / ARM64 | Intel、AMD 的 64 位电脑选 x64；ARM 电脑选 ARM64；提供 Setup.exe 与 ZIP | 处于测试阶段。Mac 上的模型、服务及 Electron 检查不代替 Windows 原生验收；实际 CI 状态以 [Actions](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/actions) 为准 |
 | Mac 原生版 | 1.1.0；macOS 13 及以上 | [Mac 下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/mac-v1.1.0-preview)：同一 DMG / ZIP 包含 Intel 与 Apple Silicon | 新版有完整页面回归、隐藏真实 WebKit 流程、合成视频实际解码与原生桥验证，见 [Mac 验证记录](macOS/VERIFICATION.md)；Intel 为编译检查 |
 | HarmonyOS 原生版 | 0.7.4；最低 HarmonyOS 6.1.1 / API 24，手机 / 平板 | [鸿蒙下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/harmony-v0.7.4-preview)：未签名 HAP、源码和安装说明，需自行配置设备调试签名 | 374 项自动回归；此前在 HarmonyOS 7 手机/平板测试，不能视为全部设备或交互已验收 |
-| Android | 0.1.0-beta.1；Android 8.0 及以上，手机 / 平板 / 折叠屏 | [Android 下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/android-v0.1.0-beta.1)：已签名通用 APK | vivo X Fold5 已验证官方登录、视频及内外屏切换；240 项共享测试、7 项合成界面检查和 10 项原生 JVM 测试通过；双铰链为合成布局检查，见 [Android 验证记录](android/VERIFICATION.md) |
+| Android | 0.1.0-beta.2；Android 8.0 及以上，手机 / 平板 / 折叠屏 | [Android 下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/android-v0.1.0-beta.2)：已签名通用 APK | 本次修正 vivo 图标裁切；0.1.0-beta.1 已验证登录、视频及内外屏切换，并通过 240 项共享测试、7 项合成界面检查和 10 项原生 JVM 测试通过；双铰链为合成布局检查，见 [Android 验证记录](android/VERIFICATION.md) |
 
 鸿蒙版上架涉及备案、授权材料、发行签名和审核，目前尚未完成，先通过 GitHub 提供开发者自行签名安装的版本。可在设备开启开发者模式，通过 DevEco Studio 配置自己的调试签名后安装；**开发者模式本身不能免除签名或设备绑定要求**，详见[鸿蒙安装说明](harmonyOS/INSTALLATION.md)。不公开作者的私人签名材料或测试设备信息。
 

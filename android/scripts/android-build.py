@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Build and sign APKs. Local secrets are never stored in the project or command-line args."""
-import argparse, hashlib, json, os, pathlib, subprocess
+import argparse, hashlib, json, os, pathlib, subprocess, re
 
 project = pathlib.Path(__file__).resolve().parent.parent
+version = re.search(r"versionName\s+'([^']+)'", (project/'app/build.gradle').read_text()).group(1)
+if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{1,63}', version): raise ValueError('Invalid version name')
 parser = argparse.ArgumentParser()
 parser.add_argument('--debug', action='store_true')
 parser.add_argument('--unsigned', action='store_true')
@@ -27,7 +29,7 @@ secret = json.loads(config.read_text())
 env['ZHIYUN_KEYSTORE_PASSWORD'] = secret['password']
 destination = project/'dist'
 destination.mkdir(exist_ok=True)
-output = destination/('ZhiyunAssistant-0.1.0-beta.1-Android' + ('-tests' if args.instrumentation else '-debug' if args.debug else '') + '.apk')
+output = destination/('ZhiyunAssistant-' + version + '-Android' + ('-tests' if args.instrumentation else '-debug' if args.debug else '') + '.apk')
 unsigned = destination/('temporary-' + kind + '.apk')
 buildtools = sdk/'build-tools/36.0.0'
 subprocess.run([str(buildtools/'zipalign'), '-f','-p','4',str(apk),str(unsigned)], check=True, env=env)

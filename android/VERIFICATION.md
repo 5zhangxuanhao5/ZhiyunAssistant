@@ -1,6 +1,14 @@
-# Android 0.1.0-beta.1 验证记录
+# Android 验证记录
 
-检查日期：2026-10-13。包名 `cn.suike.slides.android`，版本号 1，最低 Android 8.0 / API26，目标 API36。需要 Android System WebView 100 或更新版本；旧组件会显示原生更新提示，不运行不兼容的界面。
+## 0.1.0-beta.2 图标修订
+
+仅修正 Android 自适应图标的前景比例、蓝色背景和单色主题图标边距，原图像素未改变；版本号升至 2，版本名为 `0.1.0-beta.2`。本次通过 TypeScript、正式签名构建及 APK 扫描，实际图标在 vivo X Fold5 上检查。覆盖安装沿用原签名，保留已有账号与本机资料。
+
+下面的全量测试与学习功能真机记录来自 `0.1.0-beta.1`，本次图标修订没有重复整套学习功能验收。
+
+## 0.1.0-beta.1 学习功能记录
+
+检查日期：2026-10-13。包名 `cn.suike.slides.android`，最低 Android 8.0 / API26，目标 API36。需要 Android System WebView 100 或更新版本；旧组件会显示原生更新提示，不运行不兼容的界面。
 
 ## 自动检查
 

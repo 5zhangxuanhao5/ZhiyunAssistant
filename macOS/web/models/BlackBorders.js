@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 // A short compression fringe may separate the black margin from the bright slide.
 export function blackBorderRegion(pixels, width, height, stride = width * 4) {
     if (width < 32 || height < 32 || stride < width * 4 || pixels.length < stride * height)

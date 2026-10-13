@@ -1,5 +1,28 @@
-node_modules/
+# Local build products, test dependencies and OS metadata
 build/
+node_modules/
 .DS_Store
 *.log
-npm-debug.log*
+*.crash
+*.trace
+*.dSYM/
+
+# Captures and device/user data must never be published
+work/
+raw/
+recordings/
+screenshots/
+*原始截图*
+*未模糊*
+构建结果.txt
+测试结果.txt
+*.har
+cookies*.json
+session*.json
+secrets*.json
+*.pem
+*.p12
+*.pfx
+*.mobileprovision
+.env
+.env.*

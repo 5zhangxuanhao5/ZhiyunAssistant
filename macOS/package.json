@@ -1,13 +1,22 @@
 {
-  "name": "zhiyun-assistant-native-macos",
-  "version": "1.0.0",
+  "name": "zhiyun-assistant-mac",
+  "version": "1.1.0",
   "private": true,
-  "description": "Build and synthetic regression tooling for the self-contained native macOS source",
+  "description": "Native macOS shell with shared HarmonyOS classroom models",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "verify": "node --experimental-vm-modules generate-models.cjs",
-    "test": "node --experimental-vm-modules --test tests/core.test.cjs",
-    "build": "./build.sh"
+    "test": "node --experimental-vm-modules --test tests/*.test.cjs",
+    "sync:harmony": "node sync-harmony-models.cjs",
+    "build": "./build.sh",
+    "test:native": "./tests/native-contract.sh",
+    "test:webkit": "./tests/webkit-smoke.sh"
   },
-  "engines": { "node": ">=20" },
-  "devDependencies": { "jsdom": "26.1.0" }
+  "devDependencies": {
+    "jsdom": "26.1.0",
+    "typescript": "5.9.3"
+  },
+  "type": "module"
 }

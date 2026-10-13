@@ -2,7 +2,7 @@
 
 把智云课堂中的课件、课堂转写、视频和笔记放在同一个学习窗口，按课程时间线回看。在线资源按校园账号的实际权限访问，AI 功能由用户自行配置 DeepSeek API。
 
-本仓库包含 Windows 测试版、此前独立开发的原生 Mac 版，以及原生鸿蒙手机/平板版。各客户端分别维护本机资料，目前没有跨端自动同步。
+本仓库包含 Windows 测试版、原生 Mac 版，以及原生鸿蒙手机/平板版。各客户端分别维护本机资料，目前没有跨端自动同步。
 
 ## 下载
 
@@ -11,12 +11,12 @@
 | 客户端 | 版本与目标系统 | 下载选择 | 验证范围 |
 | --- | --- | --- | --- |
 | Windows | 0.8.0-beta.1；Windows 10/11，x64 / ARM64 | Intel、AMD 的 64 位电脑选 x64；ARM 电脑选 ARM64；提供 Setup.exe 与 ZIP | 处于测试阶段。Mac 上的模型、服务及 Electron 检查不代替 Windows 原生验收；实际 CI 状态以 [Actions](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/actions) 为准 |
-| Mac 原生版 | 1.0.0；macOS 13 及以上 | 同一个 DMG 或 ZIP 包含 Intel 与 Apple Silicon | 当前 Apple Silicon Mac 已验证真实有权限课程的视频、键盘操作与身份恢复，19 项合成回归通过；Intel 为编译检查 |
+| Mac 原生版 | 1.1.0；macOS 13 及以上 | [Mac 下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/mac-v1.1.0-preview)：同一 DMG / ZIP 包含 Intel 与 Apple Silicon | 新版有完整页面回归、隐藏真实 WebKit 流程、合成视频实际解码与原生桥验证，见 [Mac 验证记录](macOS/VERIFICATION.md)；Intel 为编译检查 |
 | HarmonyOS 原生版 | 0.7.4；最低 HarmonyOS 6.1.1 / API 24，手机 / 平板 | [鸿蒙下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/harmony-v0.7.4-preview)：未签名 HAP、源码和安装说明，需自行配置设备调试签名 | 374 项自动回归；此前在 HarmonyOS 7 手机/平板测试，不能视为全部设备或交互已验收 |
 
 鸿蒙版上架涉及备案、授权材料、发行签名和审核，目前尚未完成，先通过 GitHub 提供开发者自行签名安装的版本。可在设备开启开发者模式，通过 DevEco Studio 配置自己的调试签名后安装；**开发者模式本身不能免除签名或设备绑定要求**，详见[鸿蒙安装说明](harmonyOS/INSTALLATION.md)。不公开作者的私人签名材料或测试设备信息。
 
-Mac 提供 DMG、应用 ZIP 和源码 ZIP，文件名均以 `ZhiyunAssistant-Mac-1.0.0` 开头。校验值见同一发布中的 `SHA256SUMS.txt`。应用 ZIP 已去除归档附属元数据，公开源码去除了日志私人路径，并修复独立构建所需的模型验证与测试依赖；已发布的应用二进制和版本未改。
+Mac 1.1.0 把学习页、六个自由功能区、键鼠选择、笔记引用和下载队列迁到与鸿蒙一致的操作逻辑，同时修复首版缺失的原生确认/输入对话框。提供 DMG、应用 ZIP、独立源码 ZIP 和 `SHA256SUMS.txt`；公开资料不含用户账号、密钥或课程内容。
 
 Mac 包采用 ad-hoc 签名，尚未完成 Apple Developer ID 签名与公证。Windows 当前也没有发布者代码签名。这些包作为预览版本提供，不保证所有电脑、显卡、外设或教室媒体格式都已通过测试。
 
@@ -28,7 +28,7 @@ Mac 包采用 ad-hoc 签名，尚未完成 Apple Developer ID 签名与公证。
 - 下载当前账号可访问的课件、转写和视频，管理离线资料与普通缓存。
 - 使用课程问答、本页速览及可选的无实质讲解分析；AI 材料按课件和讲解时间对应，费用由用户的 DeepSeek 账户承担。
 
-各平台实现与验证细节请读 [Windows 说明](windows/README.md)、[Mac 说明](macOS/README.md)及 [Mac 分发说明](macOS/DISTRIBUTION.md)。[Windows 功能对照](windows/FEATURE_PARITY.md)包含迁移目标及未验收事项，不是一份全部完成的承诺清单。
+各平台实现与验证细节请读 [Windows 说明](windows/README.md)、[Mac 说明](macOS/README.md)、[Mac 功能对照](macOS/FEATURE_PARITY.md)及 [Mac 分发说明](macOS/DISTRIBUTION.md)。[Windows 功能对照](windows/FEATURE_PARITY.md)包含迁移目标及未验收事项，不是一份全部完成的承诺清单。
 
 ## 使用边界与隐私
 

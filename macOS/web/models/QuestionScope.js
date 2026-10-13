@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 export function questionScope(question, slides, whole, selectedIds) {
     const normalized = question.replace(/\s+/g, '').replace(/[－—～~]/g, '-').replace(/、|，/g, ',');
     const negativeWhole = /(?:不要|不用|无需|不结合|不参考)(?:结合|参考|总结)?(?:整节课|整堂课|全部内容)/.test(normalized);

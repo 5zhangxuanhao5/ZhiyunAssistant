@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 export function slideGridLayout(width, height, count, ratio = 16 / 9, gap = 12) {
     count = Math.max(1, Math.floor(count));
     ratio = Math.max(0.2, Math.min(5, ratio));

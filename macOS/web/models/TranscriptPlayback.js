@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 export function spokenLineIndex(lines, at, pageStart = -1) {
     if (!Number.isFinite(at) || at < 0)
         return -1;

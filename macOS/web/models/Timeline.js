@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 export function pageHasContent(group) { return group.skipContent ?? group.lines.length > 0; }
 export function copyStringMap(source) {
     const result = {};

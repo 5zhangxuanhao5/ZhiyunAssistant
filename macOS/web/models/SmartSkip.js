@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 export function fillerOnly(value) { return !!value.trim() && !value.replace(/[嗯啊呃唔唉诶欸噢哦呀哎嗐哈\s，。！？、,.!?…～~]+/g, ''); }
 export function conservativeRanges(group, end, decision, complete, historyMissing) {
     if (group.lines.some((line) => !Number.isFinite(line.t) || line.end !== undefined && !Number.isFinite(line.end)) || !complete || historyMissing || !Number.isFinite(end) || end <= group.slide.t || !decision || !Array.isArray(decision.spans))

@@ -1,0 +1,23 @@
+/* A caret and its placeholder share the same WebKit line box. No fixed editor
+   height, vertical centering or custom physical-key character replacement. */
+.parity-notes.notes-editor{min-height:100%;white-space:normal;line-height:1.72;font-size:14px;position:relative;outline:none;padding:0 0 16px;cursor:text;text-align:left}
+.parity-notes.notes-editor:empty:before{content:none}
+.parity-notes.notes-editor figure.note-block{margin:0;padding:8px 11px 10px;background:var(--note-color,#FFF5D9);border:1px solid #799ab015;border-radius:10px;overflow:visible;white-space:normal;min-width:0}
+.parity-notes .note-block-header{display:flex;align-items:center;gap:9px;min-height:23px;line-height:1.3;font-size:11px;color:#647d93;cursor:pointer;user-select:none;outline:none;padding-bottom:4px}
+.parity-notes .note-block-header:focus-visible{outline:2px solid #99c9f1;outline-offset:2px;border-radius:4px}
+.parity-notes .note-source-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.parity-notes .note-block-time{font-variant-numeric:tabular-nums;flex:none;color:#8092a2}
+.parity-notes .note-remove{height:22px!important;min-width:22px;padding:0!important;margin-left:auto;border:0!important;border-radius:5px;color:#758a9c!important;background:transparent!important;font-size:17px!important;cursor:pointer;flex:none;line-height:22px}
+.parity-notes .note-remove:hover{background:#527f9a12!important}
+.parity-notes .note-body{position:relative;display:block;outline:none;white-space:pre-wrap;overflow-wrap:anywhere;min-height:24px;line-height:24px;font-size:14px;color:#20344d;cursor:text;user-select:text;-webkit-user-select:text;text-align:left;padding:0;margin:0}
+.parity-notes .note-body:empty:before{content:attr(data-placeholder);color:#98a2b0;pointer-events:none;font:inherit;line-height:inherit;position:absolute;top:0;left:0}
+.parity-notes .note-body:has(>br:only-child):before{content:attr(data-placeholder);color:#98a2b0;pointer-events:none;font:inherit;line-height:inherit;position:absolute;top:0;left:0}
+.parity-notes .note-reference-content{padding:0;margin:0;user-select:text;-webkit-user-select:text;cursor:text;min-width:0;overflow-wrap:anywhere}
+.parity-notes .note-reference-content p{margin:4px 0}.parity-notes .note-reference-content>:first-child{margin-top:0}.parity-notes .note-reference-content>:last-child{margin-bottom:0}
+.parity-notes figure.note-block img{display:block;max-width:100%;height:auto;max-height:none;object-fit:contain;margin:5px 0 0;border-radius:5px;user-select:all;-webkit-user-select:all;cursor:default}
+.parity-notes .note-gap{display:block;width:100%;height:15px!important;min-height:15px;border:0!important;border-radius:5px;padding:0!important;margin:0;background:transparent!important;color:#8ca0b2!important;box-shadow:none!important;cursor:text;line-height:15px;font-size:10px!important;position:relative}
+.parity-notes .note-gap span{opacity:0;position:absolute;left:0;right:0;text-align:center;pointer-events:none;transition:opacity .12s}.parity-notes .note-gap:hover span,.parity-notes .note-gap:focus-visible span{opacity:1}.parity-notes .note-gap:focus-visible{outline:1px solid #9ac9ee}
+.parity-notes.note-whole-selected .note-block{background:color-mix(in srgb,var(--note-color) 65%,#a8d7ff 35%)}.parity-notes.note-whole-selected .note-gap{background:#c4e3ff80!important}
+.parity-notes .note-copy-menu{position:sticky;bottom:10px;display:flex;justify-content:center;pointer-events:none;z-index:9;height:0}.parity-notes .note-copy-menu button{pointer-events:auto;align-self:flex-end;box-shadow:0 2px 13px #294a6828;background:#f8fcff;border:1px solid #a9c9e4;height:30px;min-height:30px}
+.note-color-settings{max-height:100%;overflow:auto;padding:8px;display:grid;gap:12px;min-height:0;scrollbar-gutter:stable}.note-color-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.note-color-row>span{font-size:12px;color:#526f88;width:75px;flex:none}.note-color-swatch{width:25px;height:25px!important;padding:0!important;border:2px solid transparent;border-radius:50%;flex:none}.note-color-swatch[aria-pressed=true]{border-color:#168bee;box-shadow:0 0 0 2px #fff inset}
+@media(prefers-reduced-motion:reduce){.parity-notes .note-gap span{transition:none}}

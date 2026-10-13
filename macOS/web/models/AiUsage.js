@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 export function addUsage(previous, usage) {
     const amount = (value) => Number.isFinite(value) && Number(value) >= 0 ? Number(value) : 0;
     const prompt = amount(usage.prompt_tokens), hit = Math.min(prompt, amount(usage.prompt_cache_hit_tokens));

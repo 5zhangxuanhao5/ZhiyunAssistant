@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 export class AiStream {
     constructor() {
         this.buffer = '';

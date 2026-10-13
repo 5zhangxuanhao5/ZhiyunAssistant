@@ -1,0 +1,42 @@
+name: macOS checks and build
+on:
+  push:
+    branches: [main]
+    paths: ['macOS/**', '.github/workflows/macos.yml']
+  pull_request:
+    paths: ['macOS/**', '.github/workflows/macos.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: macOS
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: macOS/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run verify
+      - run: npm run test:native
+      - run: npm run test:webkit
+        timeout-minutes: 5
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macOS-universal-preview
+          path: |
+            macOS/build/*.dmg
+            macOS/build/*.zip
+            macOS/build/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

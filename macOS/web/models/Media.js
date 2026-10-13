@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 import { imageUrl } from './Timeline.js';
 const url = { URL };
 export function mediaUrl(value) { return imageUrl(value); }

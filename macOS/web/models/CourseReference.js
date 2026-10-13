@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 import { answerParts } from './AiStream.js';
 import { lessonLabel } from './CourseContext.js';
 export function courseAnswerParts(answer, context) {

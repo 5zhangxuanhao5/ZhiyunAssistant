@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 // Compare only neighbouring captures. A small Gaussian filter removes JPEG
 // ringing while 16-pixel tiles retain local changes in words, numbers and diagrams.
 function smoothScreenshot(source, width, height, stride) {

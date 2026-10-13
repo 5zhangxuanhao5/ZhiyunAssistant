@@ -1,0 +1,13 @@
+const test=require('node:test'),assert=require('node:assert/strict');
+const{runtime}=require('./runtime-helper.cjs');
+const wait=()=>new Promise(resolve=>setTimeout(resolve,10));
+async function start(t,names=[]){const r=runtime({extraTestingNames:names,replies:{ai:{answer:'Fixture answer',calls:[],usage:{}}}}),app=(await r.load('app.js')).testing;app.setup();t.after(()=>{app.cleanup();r.dom.window.close()});return{r,app,doc:r.win.document}}
+test('leaving during prior-course context preparation prevents a new paid AI request from starting',async t=>{
+  const{r,app,doc}=await start(t,['sendQuestion']);await app.enter(r.current);app.put({apiReady:true});app.togglePane('question');let resolveCatalogue;app.api.chapters=()=>new Promise(resolve=>resolveCatalogue=resolve);doc.querySelector('#questionInput').value='请总结整门课';const asking=app.sendQuestion();await wait();assert.ok(resolveCatalogue);const next={...r.current,subId:'next',courseId:'next-course',title:'Next course'};await app.enter(next);const before=r.calls.filter(([action])=>action==='ai').length;resolveCatalogue([]);await asking;assert.equal(r.calls.filter(([action])=>action==='ai').length,before,'Old request must stop before starting AI on the new lesson');assert.equal(app.state().lesson.subId,'next');
+});
+test('canceling the save panel does not claim that a batch export succeeded',async t=>{
+  const r=runtime({replies:{exportBundle:false}}),app=(await r.load('app.js')).testing;app.setup();t.after(()=>{app.cleanup();r.dom.window.close()});const key=app.courseKey(r.current);r.data.set('notes-index.json',JSON.stringify([{key,course:r.current,count:1}]));r.data.set('notes-'+key+'.json',JSON.stringify([{id:'note',name:'Fixture note',html:'<div>Text</div>',course:r.current}]));await app.batchNotes();const buttons=()=>[...r.win.document.querySelectorAll('button')];buttons().find(b=>b.textContent==='全部选择').click();await wait();buttons().find(b=>b.textContent==='打包导出').click();await wait();assert.ok(!r.win.document.querySelector('#toast').textContent.includes('已导出'));
+});
+test('a late loadedmetadata event from a closed video pane cannot throw or alter another pane',async t=>{
+  const{r,app,doc}=await start(t);await app.enter(r.current);app.togglePane('video');const old=doc.querySelector('video'),errors=[];assert.ok(old);r.win.addEventListener('error',event=>{errors.push(event.message);event.preventDefault()});app.togglePane('video');old.dispatchEvent(new r.win.Event('loadedmetadata'));await wait();assert.deepEqual(errors,[],'Detached video callbacks must be inert');assert.equal(doc.querySelector('video'),null);
+});

@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 export function selectedAnswerParts(parts, start, end) {
     let offset = 0;
     const selected = [];

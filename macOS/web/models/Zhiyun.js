@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 import { captionSeconds } from './CaptionTime.js';
 import { mediaSources } from './Media.js';
 import { imageUrl, plain, shanghaiDate } from './Timeline.js';
@@ -157,16 +158,30 @@ export class Zhiyun {
         return states;
     }
     async request(path, post = '', origin = ORIGIN) {
-        const result = await window.native.call('request', { url: origin + path, body: post });
-        if (result.status === 403)
-            throw new AccessDenied('当前账号没有这节课的访问权限');
-        if (result.status === 401)
-            throw new Error('登录失效，请重新登录');
-        if (result.status !== 200)
-            throw new Error('智云暂时无法访问（' + result.status + '）');
-        if (!result.text.trim().startsWith('{'))
-            throw new Error('请先登录智云课堂');
-        return result.text;
+        const generation = this.stopped;
+        const task = window.native.call('request', { url: origin + path, body: post });
+        const handle = { destroy: () => {
+                if (task.id)
+                    window.native.call('cancelRequest', { id: task.id }).catch(() => { });
+            } };
+        this.pending.add(handle);
+        try {
+            const result = await task;
+            if (generation !== this.stopped)
+                throw new Error('已取消');
+            if (result.status === 403)
+                throw new AccessDenied('当前账号没有这节课的访问权限');
+            if (result.status === 401)
+                throw new Error('登录失效，请重新登录');
+            if (result.status !== 200)
+                throw new Error('智云暂时无法访问（' + result.status + '）');
+            if (!result.text.trim().startsWith('{'))
+                throw new Error('请先登录智云课堂');
+            return result.text;
+        }
+        finally {
+            this.pending.delete(handle);
+        }
     }
     async account() {
         const data = JSON.parse(await this.request('/userapi/v1/infosimple'));

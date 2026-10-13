@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 import { shanghaiDate, clockTime, stamp } from './Timeline.js';
 export function priorLessons(rows, current, includeLater = false) {
     const unique = new Map();

@@ -1,3 +1,4 @@
+// Generated from shared HarmonyOS sources by sync-harmony-models.cjs.
 // Official classrooms use relative seconds, Unix seconds/milliseconds or China-local date strings.
 export function captionSeconds(value, courseStart) {
     if (value === undefined || value === null || String(value).trim() === '')

@@ -24,14 +24,16 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+          log-accepted-android-sdk-licenses: false
       - name: Shared logic and web assets
         run: |
           npm ci --ignore-scripts
           npm run check
           npm test
           npm run build:web
-      - name: Android SDK
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - name: Native policies, lint and unsigned release
         run: ./gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleRelease --no-daemon
       - name: APK privacy and resource audit

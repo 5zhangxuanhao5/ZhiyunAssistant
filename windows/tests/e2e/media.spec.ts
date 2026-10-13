@@ -41,9 +41,9 @@ test.afterAll(async () => {
   fs.rmSync(folder, { recursive: true, force: true });
 });
 
-async function start(format: 'mp4' | 'hls') {
+async function start(format: 'mp4' | 'hls', resume?: number, waitReady=true,scheduledSeconds=24) {
   await app.evaluate(({ ipcMain, protocol, net }, setup) => {
-    const { files, course: currentCourse, format } = setup;
+    const { files, course: currentCourse, format, resume } = setup;
     const requests: string[] = []; (globalThis as any).__syntheticMediaRequests = requests;
     protocol.unhandle('zhiyun-resource');
     protocol.handle('zhiyun-resource', async request => {
@@ -79,20 +79,22 @@ async function start(format: 'mp4' | 'hls') {
         case 'courses.permissions': return { [currentCourse.subId]: 'allowed' };
         case 'courses.history': return { courses: [currentCourse], complete: true };
         case 'collection.get': return { favorite: [], later: [] };
-        case 'lesson.open': return { course: currentCourse, slides, lines, live: false, sources: [chosen, { ...chosen, id: 'duplicate-source' }] };
+        case 'lesson.open': (globalThis as any).__savedMediaProgress=[];return { course: currentCourse, slides, lines, live: false, sources: [chosen, { ...chosen, id: 'duplicate-source' }] };
         case 'video.sources': return [chosen, { ...chosen, id: 'duplicate-source' }];
         case 'video.resolve': return { ...payload.source, url: 'zhiyun-resource://asset/synthetic-media/' + (format === 'mp4' ? 'test-pattern.mp4' : 'hls/index.m3u8'), hls: format === 'hls', offset: 0 };
         case 'resource.image': return image;
-        case 'progress.get': return null;
+        case 'progress.get': if(resume!==undefined){await new Promise(resolve=>setTimeout(resolve,1200));return {seconds:resume,slideId:'synthetic-slide-2',followVideo:true}} return null;
+        case 'progress.set': (globalThis as any).__savedMediaProgress.push(payload);return null;
         case 'ai.settings': return { configured: false, models: [] };
         case 'notes.list': return [];
         default: return null;
       }
     });
-  }, { files: fixtureFiles, course, format });
+  }, { files: fixtureFiles, course:{...course,end:course.start+scheduledSeconds}, format, resume });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByRole('heading', { name: '我的课堂', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '进入学习', exact: true }).click();
+  if(!waitReady)return;
   await expect(page.locator('.video-pane video')).toBeVisible();
   await expect.poll(() => page.locator('.video-pane video').evaluate((element: HTMLVideoElement) => ({ ready: element.readyState >= 3, width: element.videoWidth, height: element.videoHeight, error: element.error?.code || 0 }))).toEqual({ ready: true, width: 640, height: 360, error: 0 });
 }
@@ -151,4 +153,48 @@ test('full screen covers the entire window, uses a black surround, hides control
   await expect(page.locator('.slides-pane .pane-title')).toHaveCSS('background-color', 'rgb(255, 255, 255)'); await expect(page.locator('.transcript-pane .pane-title')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
   const blank = await page.locator('.study-canvas').evaluate(canvas => { const box = canvas.getBoundingClientRect(); for (let y = box.top + 2; y < box.bottom; y += 14) for (let x = box.left + 2; x < box.right; x += 14) { let element = document.elementFromPoint(x, y); if (!element || element.closest('.free-pane')) continue; while (element) { const color = getComputedStyle(element).backgroundColor; if (color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') return color; element = element.parentElement; } } return null; });
   expect(blank).not.toBeNull(); expect(blank).not.toBe('rgb(0, 0, 0)');
+});
+
+test('delayed saved progress is restored before the first decoded video frame can overwrite it', async()=>{
+ await start('mp4',12);
+ expect(await videoTime()).toBeGreaterThanOrEqual(11.9);
+ await pause();
+ await expect(page.locator('.slide-meta').first()).toContainText('第 3 页');
+});
+
+test('leaving before saved progress arrives does not replace it with the default zero position',async()=>{
+ await start('mp4',12,false);
+ await page.getByRole('button',{name:'返回',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'我的课堂',exact:true})).toBeVisible();
+ await page.waitForTimeout(1400);
+ expect(await app.evaluate(()=>(globalThis as any).__savedMediaProgress)).toEqual([]);
+});
+
+
+test('real video duration controls time navigation even when the timetable is shorter or longer',async()=>{
+ await start('mp4',undefined,true,8);await pause();
+ await nativeRange(page.getByRole('slider',{name:'播放进度',exact:true}),.12);
+ const initial=await videoTime();await page.locator('.video-picture').click({position:{x:20,y:20}});
+ await page.keyboard.press('ArrowRight');await expect.poll(videoTime).toBeGreaterThan(initial+14.5);
+ await page.getByRole('button',{name:'跳转时间',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'跳转时间',exact:true})).toContainText('总时长 00:24');
+ await page.getByRole('button',{name:'完成',exact:true}).click();
+ await start('mp4',undefined,true,1200);await pause();
+ await page.getByRole('button',{name:'跳转时间',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'跳转时间',exact:true})).toContainText('总时长 00:24');
+ await page.getByRole('button',{name:'完成',exact:true}).click();
+});
+
+test('reading without video updates saved question and lesson time when jumping to another page',async()=>{
+ await start('mp4');await pause();
+ await page.locator('.study-toolbar').getByRole('button',{name:'✓ 视频',exact:true}).click();
+ await expect(page.locator('video')).toHaveCount(0);
+ await page.getByRole('button',{name:'跳转页数',exact:true}).click();
+ await page.getByRole('dialog',{name:'跳转页数',exact:true}).getByRole('spinbutton').fill('3');
+ await page.getByRole('button',{name:'跳转',exact:true}).click();
+ await expect(page.locator('.slide-meta').first()).toContainText('第 3 页');
+ await page.getByRole('button',{name:'返回',exact:true}).click();
+ await expect(page.getByRole('heading',{name:'我的课堂',exact:true})).toBeVisible();
+ const saved=await app.evaluate(()=>(globalThis as any).__savedMediaProgress);
+ expect(saved.at(-1).seconds).toBe(12);expect(saved.at(-1).slideId).toBe('synthetic-slide-2');
 });

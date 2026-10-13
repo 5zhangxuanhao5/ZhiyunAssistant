@@ -1,4 +1,4 @@
-import { questionScope } from '../model/QuestionScope';
+import { questionScope, questionAllowsFuture, QuestionViewingMode } from '../model/QuestionScope';
 import { AiUsage, AiUsageTotals, addUsage } from '../model/AiUsage';
 import { PageGroup } from '../model/Timeline';
 import { SkipDecision } from '../model/SmartSkip';
@@ -126,11 +126,16 @@ export class AiClient {
       await ended; if (!parser.done) throw new Error('回答连接中断，请重试'); this.recordUsage(parser.usage); return parser;
     } finally { req.destroy(); this.pending.delete(req); this.aborts.delete(abort); }
   }
-  async ask(store: LocalStore, slides: Slide[], lines: Transcript[], question: string, at: number, whole: boolean, model: string, history: ChatTurn[], progress: (value: string) => void, mode: string = 'auto', currentId: string = '', changed: (answer: string) => void = () => {}, selectedIds: string[] = [], prior: PriorCourseContext | undefined = undefined, loadContext: (() => Promise<CourseMaterials>) | undefined = undefined, onScope: (whole: boolean, expanded: boolean) => void = () => {}): Promise<string> {
+  async ask(store: LocalStore, slides: Slide[], lines: Transcript[], question: string, at: number, whole: boolean, model: string, history: ChatTurn[], progress: (value: string) => void, mode: string = 'auto', currentId: string = '', changed: (answer: string) => void = () => {}, selectedIds: string[] = [], prior: PriorCourseContext | undefined = undefined, loadContext: (() => Promise<CourseMaterials>) | undefined = undefined, onScope: (whole: boolean, expanded: boolean) => void = () => {}, viewingMode: QuestionViewingMode | undefined = undefined): Promise<string> {
     this.usageStore = store;
     const gen = this.epoch, apiKey = await AiClient.savedKey(); if (!apiKey) throw new Error('请先设置 API 密钥');
     const course = store.activeCourse;
-    const scope = questionScope(question, slides, whole, selectedIds); whole = scope.whole; selectedIds = scope.selectedIds;
+    slides = slides.slice().sort((a, b) => a.t - b.t || a.id.localeCompare(b.id));
+    lines = lines.slice().sort((a, b) => a.t - b.t || a.id.localeCompare(b.id));
+    const providedMaterials: CourseMaterials = { slides, lines };
+    const scope = questionScope(question, slides, whole, selectedIds, viewingMode ? currentId : ''); whole = scope.whole; selectedIds = scope.selectedIds;
+    const requestedCurrentOnly = scope.currentPageOnly === true;
+    let currentPageOnly = requestedCurrentOnly, allowFuture = questionAllowsFuture(scope, viewingMode);
     let explicit = selectedIds.length > 0;
     let included = slides.filter((s: Slide) => explicit ? selectedIds.includes(s.id) : whole || s.t <= at);
     onScope(whole, whole || included.some((slide: Slide) => slide.t > at));
@@ -149,10 +154,10 @@ export class AiClient {
     };
     const materialParts = included.map((s: Slide) => {
       const i = slides.findIndex((p: Slide) => p.id === s.id), end = slides[i + 1]?.t;
-      return `[第${i + 1}页 ${stamp(s.t)}—${end === undefined ? '当前结束' : stamp(end)}]\n` + lines.filter((l: Transcript) => l.t >= s.t && (end === undefined || l.t < end) && (whole || explicit || l.t <= at)).map((l: Transcript) => `[${stamp(l.t)}] ${l.text}`).join('\n');
+      return `[第${i + 1}页 ${stamp(s.t)}—${end === undefined ? '当前结束' : stamp(end)}]\n` + lines.filter((l: Transcript) => l.t >= s.t && (end === undefined || l.t < end) && (allowFuture || l.t <= at)).map((l: Transcript) => `[${stamp(l.t)}] ${l.text}`).join('\n');
     });
     const material = materialParts.join('\n\n');
-    const leading = lines.filter((l: Transcript) => (whole || explicit || l.t <= at) && (!slides.length || l.t < slides[0].t)).map((l: Transcript) => `[${stamp(l.t)}] ${l.text}`).join('\n');
+    const leading = explicit ? '' : lines.filter((l: Transcript) => (allowFuture || l.t <= at) && (!slides.length || l.t < slides[0].t)).map((l: Transcript) => `[${stamp(l.t)}] ${l.text}`).join('\n');
     const past = prior ? priorMaterial(prior) : '';
     const context = leading + '\n' + material;
     const coverage = !lines.length ? '当前没有转写材料，不得声称知道老师的具体讲解；可根据图片解释并明确依据。' : lines.some((l: Transcript) => l.timing === 'source' || l.timing === 'received') && !lines.some((l: Transcript) => l.timing === 'history') ? '平台未提供整节课的历史转写，以下只有本设备接收保存的部分实时转写，进入前或断开期间可能缺失；不得把缺失当成老师没有讲过，不得承诺完整课程概述。' : '';
@@ -164,7 +169,8 @@ export class AiClient {
     // Keep closed-page evidence units stable as a live course grows or the question changes.
     if (leading) messages.push({ role: 'system', content: '课件出现前或无课件时的课程转写（按时间排序）：\n' + leading });
     materialParts.forEach((part: string) => messages.push({ role: 'system', content: '本节课程资料（此区间转写与该课件对应）：\n' + part }));
-    const conditions = `提问发生在课程 ${stamp(at)}（${Math.floor(at)} 秒）。当前查看第${slides.findIndex((slide: Slide) => slide.id === currentId) + 1}页。${whole || explicit ? '材料可包含提问之后的内容，必须区分提问前后；后面才讲到的知识注明老师的讲解时间。' : '默认资料仅含提问时间及之前。若用户问题明确要求整节课或其他页面，先调用read_course_context取得对应资料；没有这类请求则不得自行读取提问之后的资料，不编造后续安排。'}${explicit ? '用户在界面选了若干课件作为参考偏好；用户问题要求其他范围时可调用read_course_context扩展或改选，后续内容注明发生在提问之后。' : ''}${mode === 'never' ? '用户强制不结合课件，仅以转写为证据；历史回答也不作为课件证据。' : mode === 'always' ? '用户要求结合课件，优先使用已提供的当前图像识别，必要时调用read_slides查询相关页。' : '优先只参考转写；用户询问图像、这页PPT内容、公式图表或转写缺少必要信息时，调用read_slides读取当前页或少量相关页，不为了完整而读取所有页。'}${coverage}${prior ? prior.wholeCourse ? '其他课次包含本节之前和之后，后续材料是事后背景，不能说提问时老师已讲过。' : '其他课次资料均为本节之前的课堂。' : ''}`;
+    const currentPageHint = requestedCurrentOnly ? viewingMode === 'reading' ? '用户正在阅读本页，参考范围只含本页现有完整讲解；保留上述提问时点，不能把页面后来才讲到的知识说成该时刻已讲完。需要前文说明概念时可调用read_course_context的before范围。' : '用户询问当前查看页，可读取本页图像，但课堂转写严格截至上述真实播放时点；查看页面不表示已播放其后续讲解，不主动扩展到整节课或其他页。需要前文时只读取before范围。' : explicit ? '用户指定了若干课件作为参考；问题明确要求其他范围时可调用read_course_context扩展或改选，后续内容注明发生在提问之后。' : '';
+    const conditions = `提问发生在课程 ${stamp(at)}（${Math.floor(at)} 秒）。当前查看第${slides.findIndex((slide: Slide) => slide.id === currentId) + 1}页。${allowFuture ? '材料可包含提问之后的内容，必须区分提问前后；后面才讲到的知识注明老师的讲解时间。' : '课堂转写仅含提问时间及之前。若用户明确要求整节课或指定其他页面，先调用read_course_context取得对应资料；没有这类请求则不得读取提问之后的讲解，不编造后续安排。'}${currentPageHint}${mode === 'never' ? '用户强制不结合课件，仅以转写为证据；历史回答也不作为课件证据。' : mode === 'always' ? '用户要求结合课件，优先使用已提供的当前图像识别，必要时调用read_slides查询相关页。' : '优先只参考转写；用户询问图像、这页PPT内容、公式图表或转写缺少必要信息时，调用read_slides读取当前页或少量相关页，不为了完整而读取所有页。'}${coverage}${prior ? prior.wholeCourse ? '其他课次包含本节之前和之后，后续材料是事后背景，不能说提问时老师已讲过。' : '其他课次资料均为本节之前的课堂。' : ''}`;
     const readPriorPages = async (lessonIndex: number, pages: number[]): Promise<string> => {
       const lesson = prior?.lessons[lessonIndex - 1]; if (!lesson) return '前序课次不存在';
       const contexts: string[] = [];
@@ -195,12 +201,19 @@ export class AiClient {
         let content = '工具不可用';
         if (call.function.name === 'read_course_context') {
           try { const args = JSON.parse(call.function.arguments) as ContextArguments; if (!['whole', 'pages', 'before'].includes(args.scope)) throw new Error('请指定有效资料范围');
-            const source: CourseMaterials = loadContext ? await loadContext() : { slides, lines }; if (gen !== this.epoch) throw new Error('已取消');
-            slides = source.slides; lines = source.lines; whole = args.scope === 'whole'; selectedIds = args.scope === 'pages' ? slides.filter((slide: Slide, index: number) => Array.isArray(args.pages) && args.pages.includes(index + 1)).map((slide: Slide) => slide.id) : []; explicit = args.scope === 'pages';
+            if (requestedCurrentOnly && viewingMode === 'playback' && args.scope !== 'before' && (args.scope !== 'pages' || !args.pages?.length || args.pages.some(page => providedMaterials.slides[page - 1]?.id !== currentId))) throw new Error('本页问题未请求扩展到未播放的其他讲解，只能读取本页或播放时点前文');
+            // The current page has already been provided in display order, including
+            // duplicate-page grouping. Reuse that snapshot instead of reintroducing
+            // raw duplicate indices or issuing a redundant full-context load.
+            const source: CourseMaterials = requestedCurrentOnly && args.scope === 'pages' ? providedMaterials : loadContext ? await loadContext() : { slides, lines }; if (gen !== this.epoch) throw new Error('已取消');
+            slides = source.slides.slice().sort((a, b) => a.t - b.t || a.id.localeCompare(b.id)); lines = source.lines.slice().sort((a, b) => a.t - b.t || a.id.localeCompare(b.id)); whole = args.scope === 'whole'; selectedIds = args.scope === 'pages' ? slides.filter((slide: Slide, index: number) => Array.isArray(args.pages) && args.pages.includes(index + 1)).map((slide: Slide) => slide.id) : []; explicit = args.scope === 'pages';
+            currentPageOnly = requestedCurrentOnly && explicit && selectedIds.length === 1 && selectedIds[0] === currentId;
+            allowFuture = questionAllowsFuture({ whole, selectedIds, currentPageOnly }, viewingMode);
             included = slides.filter((slide: Slide) => explicit ? selectedIds.includes(slide.id) : whole || slide.t <= at);
+            if (requestedCurrentOnly && args.scope === 'before' && !included.some(slide => slide.id === currentId)) included = slides.filter(slide => slide.id === currentId || slide.t <= at);
             onScope(whole, whole || included.some((slide: Slide) => slide.t > at));
             if (explicit && !included.length) throw new Error('所选页码没有可用课件');
-            content = '补充资料按课程时间排序；资料范围：' + args.scope + '，用户提问时点：' + stamp(at) + '。时间晚于提问的内容须明确其讲解时间。\n' + included.map((slide: Slide) => { const i = slides.findIndex((item: Slide) => item.id === slide.id), end = slides[i + 1]?.t ?? Infinity; return '[第' + (i + 1) + '页 ' + stamp(slide.t) + ']\n' + lines.filter((line: Transcript) => line.t >= slide.t && line.t < end && (whole || explicit || line.t <= at)).map((line: Transcript) => '[' + stamp(line.t) + '] ' + line.text).join('\n'); }).join('\n\n') + (explicit ? '' : '\n课件前或无课件转写：\n' + lines.filter((line: Transcript) => (!slides.length || line.t < slides[0].t) && (whole || line.t <= at)).map((line: Transcript) => '[' + stamp(line.t) + '] ' + line.text).join('\n'));
+            content = '补充资料按课程时间排序；资料范围：' + args.scope + '，用户提问时点：' + stamp(at) + '。时间晚于提问的内容须明确其讲解时间。\n' + included.map((slide: Slide) => { const i = slides.findIndex((item: Slide) => item.id === slide.id), end = slides[i + 1]?.t ?? Infinity; return '[第' + (i + 1) + '页 ' + stamp(slide.t) + ']\n' + lines.filter((line: Transcript) => line.t >= slide.t && line.t < end && (allowFuture || line.t <= at)).map((line: Transcript) => '[' + stamp(line.t) + '] ' + line.text).join('\n'); }).join('\n\n') + (explicit ? '' : '\n课件前或无课件转写：\n' + lines.filter((line: Transcript) => (!slides.length || line.t < slides[0].t) && (whole || line.t <= at)).map((line: Transcript) => '[' + stamp(line.t) + '] ' + line.text).join('\n'));
             if (content.length > 1800000) throw new Error('请求范围过大，请缩小页码范围');
           } catch (err) { if (gen !== this.epoch) throw err as Error; content = '课程资料读取失败：' + (err as Error).message; }
         }

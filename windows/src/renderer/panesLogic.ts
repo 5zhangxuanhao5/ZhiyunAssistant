@@ -3,7 +3,7 @@ import type { NoteAtom, NoteInsertion, LessonNote } from '../shared/model/Notes'
 import type { NoteBlock } from '../shared/model/NoteBlocks';
 import { emptyNoteBlock, insertNoteBlock, cleanNoteBlocks, blockText, sliceNoteAtoms } from '../shared/model/NoteBlocks';
 import { referenceAtoms } from '../shared/model/NoteFormatting';
-import { questionScope } from '../shared/model/QuestionScope';
+import { questionScope, questionAllowsFuture, QuestionViewingMode } from '../shared/model/QuestionScope';
 
 export interface DesktopBridge {
   call<T = unknown>(method: string, payload?: unknown): Promise<T>;
@@ -37,13 +37,13 @@ export function splitOwnBlock(blocks: NoteBlock[], activeId: string, caret: numb
   return { blocks: result, activeId: next.id, caret: 0 };
 }
 export function cleanedBlocks(blocks: NoteBlock[], activeId = '') { return cleanNoteBlocks(blocks, activeId); }
-export function materialForQuestion(course: Course, slides: Slide[], lines: Transcript[], question: string, at: number, whole: boolean, selectedIds: string[]) {
-  const scope = questionScope(question, slides, whole, selectedIds);
+export function materialForQuestion(course: Course, slides: Slide[], lines: Transcript[], question: string, at: number, whole: boolean, selectedIds: string[], currentPageId = '', viewingMode: QuestionViewingMode = 'playback') {
+  const scope = questionScope(question, slides, whole, selectedIds, currentPageId), allowFuture = questionAllowsFuture(scope, viewingMode);
   const ordered = slides.slice().sort((a, b) => a.t - b.t);
   const include = scope.selectedIds.length ? ordered.filter(slide => scope.selectedIds.includes(slide.id)) : ordered.filter(slide => scope.whole || slide.t <= at);
   const selected = new Set(include.map(slide => slide.id));
-  const captions = lines.filter(line => scope.selectedIds.length ? ordered.some((slide, index) => selected.has(slide.id) && line.t >= slide.t && line.t < (ordered[index + 1]?.t ?? Infinity)) : scope.whole || line.t <= at).slice().sort((a, b) => a.t - b.t || a.id.localeCompare(b.id));
-  return { course, slides: ordered, lines: captions, at, whole: scope.whole, selectedIds: scope.selectedIds, includedPageIds: include.map(slide => slide.id) };
+  const captions = lines.filter(line => (allowFuture || line.t <= at) && (scope.selectedIds.length ? ordered.some((slide, index) => selected.has(slide.id) && line.t >= slide.t && line.t < (ordered[index + 1]?.t ?? Infinity)) : true)).slice().sort((a, b) => a.t - b.t || a.id.localeCompare(b.id));
+  return { course, slides: ordered, lines: captions, at, whole: scope.whole, selectedIds: scope.selectedIds, currentPageOnly: scope.currentPageOnly, viewingMode, includedPageIds: include.map(slide => slide.id) };
 }
 export function summaryRecordKey(scope: string, pageId: string) { return scope + ':' + pageId; }
 export function summaryContext(scope: string, pageId: string, slides: Slide[], now: number) {

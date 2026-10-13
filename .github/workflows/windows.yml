@@ -118,11 +118,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sha256sum artifacts/*.exe artifacts/*.zip > artifacts/SHA256SUMS.txt
+          (cd artifacts && sha256sum *.exe *.zip > SHA256SUMS.txt)
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             preview=$(gh release view "$RELEASE_TAG" --json isDraft,isPrerelease --jq '.isDraft or .isPrerelease')
             test "$preview" = true || { echo 'Refusing to overwrite a stable release'; exit 1; }
           else
-            gh release create "$RELEASE_TAG" --verify-tag --prerelease --title "智云助手 $RELEASE_TAG · Windows 预览版" --notes '提供 x64 与 ARM64 安装包和 ZIP。两个架构分别完成原生 Windows CI 的类型检查、行为回归、界面回归、资源与 PE 架构审计、中文空格路径安装及已安装应用启动烟测。CI 启动验证不能替代所有电脑、显卡、外设和真实课堂媒体的完整兼容验收。本版本作为预发布供进一步测试，不自动标为正式稳定版。系统目标为 Windows 10/11 的 x64 与 ARM64，不支持 Windows 7/8/8.1 或 32 位系统。'
+            gh release create "$RELEASE_TAG" --verify-tag --prerelease --title "智云助手 $RELEASE_TAG · Windows 预览版" --notes '提供 x64 与 ARM64 安装包和 ZIP。两个架构分别完成原生 Windows CI 的类型检查、行为回归、界面回归、资源与 PE 架构审计、中文空格路径安装及已安装应用启动烟测。CI 启动验证不能替代所有电脑、显卡、外设和真实课堂媒体的完整兼容验收。安装包目前未做 Authenticode 代码签名，Windows 可能显示未知发布者；请核对来源和 SHA256，企业策略也可能阻止运行。不要关闭系统安全防护。本版本作为预发布供进一步测试，不自动标为正式稳定版。系统目标为 Windows 10/11 的 x64 与 ARM64，不支持 Windows 7/8/8.1 或 32 位系统。'
           fi
           gh release upload "$RELEASE_TAG" artifacts/*.exe artifacts/*.zip artifacts/SHA256SUMS.txt --clobber

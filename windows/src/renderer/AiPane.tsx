@@ -5,6 +5,7 @@ import { stamp } from '../shared/model/Timeline';
 import type { NoteContentReference, NoteInsertion } from '../shared/model/Notes';
 import { CourseAnswerPart, courseAnswerParts } from '../shared/model/CourseReference';
 import { selectedAnswerParts } from '../shared/model/NoteFormatting';
+import type { QuestionViewingMode } from '../shared/model/QuestionScope';
 import { bridge, ipc, errorMessage, enterAction, materialForQuestion, selectAllPhase } from './panesLogic';
 import './panes.css';
 
@@ -15,6 +16,7 @@ export interface AiStreamEvent { requestId: string; text?: string; status?: stri
 export interface AiResult { record?: PageSummaryRecord; answer: string; references?: Course[]; completed?: boolean; signature?: string }
 export interface AiPaneProps {
   course: Course; slides: Slide[]; lines: Transcript[]; currentTime: number; currentPageId?: string; notesOpen?: boolean;
+  viewingMode?: QuestionViewingMode;
   onSeek: (at: number, course?: Course) => void; onInsert?: (value: NoteInsertion) => void;
   onChooseSlides?: () => void; selectedSlideIds?: string[]; requestedReference?: NoteContentReference;
   returnVisible?: boolean; onReturn?: () => void; onDismissReturn?: () => void;
@@ -136,11 +138,11 @@ export function AiPane(props: AiPaneProps) {
     if (!slides.length && !lines.length) { setError('当前还没有可用的课程内容'); return; }
     const text = question.trim(), epoch = ++generation.current, id = crypto.randomUUID(), at = currentTime, prior = turnsRef.current.slice(), currentSession = session.current?.id || crypto.randomUUID();
     request.current = id; target.current = prior.length; followAnswer.current = true; session.current = session.current || { id: currentSession, title: text.slice(0, 36), turns: [], savedAt: Date.now() }; setSessionId(currentSession);
-    const context = materialForQuestion(course, slides, lines, text, at, whole, selectedSlideIds);
+    const context = materialForQuestion(course, slides, lines, text, at, whole, selectedSlideIds, currentPageId, props.viewingMode || 'playback');
     const next = [...prior, { question: text, answer: '', at, whole: context.whole, mode, complete: false }]; setTurns(next); turnsRef.current = next; setQuestion(''); setBusy(true); setError(''); setStatus('正在读取课程内容'); persist(next, currentSession);
     requestAnimationFrame(() => scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' }));
     try {
-      const result = await ipc<AiResult | string>('ai.start', { requestId: id, kind: 'question', ...context, lines, question: text, model: configuration.settings.model, mode, history: prior, currentId: currentPageId });
+      const result = await ipc<AiResult | string>('ai.start', { requestId: id, kind: 'question', ...context, question: text, model: configuration.settings.model, mode, history: prior, currentId: currentPageId });
       if (epoch !== generation.current || request.current !== id) return;
       const answer = typeof result === 'string' ? result : result.answer;
       setTurns(previous => { const final = previous.map((turn, index) => index === target.current ? { ...turn, answer, complete: true, references: typeof result === 'string' ? undefined : result.references } : turn); turnsRef.current = final; persist(final, currentSession); return final; });

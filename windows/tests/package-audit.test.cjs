@@ -5,7 +5,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const asar = require('@electron/asar');
-const { normalizeArchiveName, scanAsar, auditPackage } = require('../scripts/package-audit.cjs');
+const vm = require('node:vm');
+const esbuild = require('esbuild');
+const { normalizeArchiveName, scanAsar, auditPackage, checkInstalledImageWorker } = require('../scripts/package-audit.cjs');
 
 async function fixture(extra = {}, omitted = []) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zhiyun-asar-paths-'));
@@ -65,4 +67,35 @@ test('native ASAR path normalization does not relax privacy scans or missing ren
     assert.ok(result.findings.some(finding => finding.file === 'resource-cache/slides/private.png' && finding.kind === 'user or course resource directory'));
     assert.ok(result.findings.some(finding => finding.file === 'dist/renderer/app.css' && finding.kind === 'required application resource missing'));
   } finally { value.cleanup(); }
+});
+
+test('serialized installed-worker smoke runs actual production comparison without a global CJS require', async () => {
+  const compiled = esbuild.buildSync({ entryPoints: [path.resolve(__dirname, '../src/desktop/image-worker.ts')], bundle: true, platform: 'node', format: 'cjs', target: 'node22', write: false }).outputFiles[0].text;
+  const value = await fixture({ 'dist/desktop/image-worker.cjs': compiled });
+  try {
+    // Model Playwright's main-process function evaluation, which has process and
+    // builtin modules but no CommonJS module-local require. Run the real worker.
+    const check = vm.runInNewContext('(' + checkInstalledImageWorker.toString() + ')', { process, setTimeout, clearTimeout, Uint8Array, Error });
+    assert.equal(await check({ app: { getAppPath: () => value.archive } }), true);
+  } finally { value.cleanup(); }
+});
+
+test('NSIS archives use decoder-compatible compression even when the environment asks for another CPU filter', () => {
+  const { compute7zCompressArgs } = require('app-builder-lib/out/targets/archive');
+  const previousFilter = process.env.ELECTRON_BUILDER_7Z_FILTER, previousLevel = process.env.ELECTRON_BUILDER_COMPRESSION_LEVEL;
+  try {
+    delete process.env.ELECTRON_BUILDER_COMPRESSION_LEVEL;
+    for (const requested of ['BCJ2', 'ARM']) {
+      process.env.ELECTRON_BUILDER_7Z_FILTER = requested;
+      for (const compression of ['normal', 'maximum']) {
+        const args = compute7zCompressArgs('7z', { installTimeDecodable: true, compression });
+        assert.equal(args.filter(arg => arg.startsWith('-mf=')).join(' '), '-mf=BCJ');
+      }
+      const stored = compute7zCompressArgs('7z', { installTimeDecodable: true, compression: 'store' });
+      assert.ok(stored.includes('-mx=0')); assert.equal(stored.some(arg => arg.startsWith('-mf=')), false);
+    }
+  } finally {
+    if (previousFilter === undefined) delete process.env.ELECTRON_BUILDER_7Z_FILTER; else process.env.ELECTRON_BUILDER_7Z_FILTER = previousFilter;
+    if (previousLevel === undefined) delete process.env.ELECTRON_BUILDER_COMPRESSION_LEVEL; else process.env.ELECTRON_BUILDER_COMPRESSION_LEVEL = previousLevel;
+  }
 });

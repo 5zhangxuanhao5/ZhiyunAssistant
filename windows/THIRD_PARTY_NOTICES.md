@@ -39,7 +39,7 @@ isarray 没有单独的 LICENSE 文件，其完整 MIT 许可包含在上游 REA
 | 组件 | 版本 | 组件声明的许可证 | 许可原文目录 |
 | --- | --- | --- | --- |
 | electron | 44.7.0 | MIT | [third_party/electron](third_party/electron) |
-| electron-builder | 26.15.3 | MIT | [third_party/electron-builder](third_party/electron-builder) |
+| electron-builder | 26.15.6 | MIT | [third_party/electron-builder](third_party/electron-builder) |
 | typescript | 5.9.3 | Apache-2.0 | [third_party/typescript](third_party/typescript) |
 | tsx | 4.20.6 | MIT | [third_party/tsx](third_party/tsx) |
 | esbuild | 0.25.11 | MIT | [third_party/esbuild](third_party/esbuild) |

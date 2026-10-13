@@ -1,10 +1,17 @@
 import '../../src/shared/bridge';
 import {test,expect,_electron as electron,ElectronApplication,Page} from '@playwright/test';import path from 'node:path';import fs from 'node:fs';import os from 'node:os';
+import {checkInstalledImageWorker} from '../../scripts/package-audit.cjs';
 let app:ElectronApplication,page:Page,folder:string;
 const course={subId:'fixture-lesson',courseId:'fixture-course',title:'测试课程',teacher:'测试教师',room:'测试教室',term:'2026-2027 秋学期',start:1791508800,end:1791516000,status:'6'};
 test.beforeAll(async()=>{folder=fs.mkdtempSync(path.join(os.tmpdir(),'智云助手 自动检查 '));app=await electron.launch({args:[path.resolve('.')],env:{...process.env,ZHIYUN_TEST_DATA:folder},timeout:30000});page=await app.firstWindow();await page.waitForLoadState('domcontentloaded');await expect(page.getByRole('heading',{name:'隐私与数据'})).toBeVisible()});test.afterAll(async()=>{await app?.close();fs.rmSync(folder,{recursive:true,force:true})});
 test('fresh isolated user opens consent and then login without developer runtime or data',async()=>{await expect(page.getByRole('heading',{name:'隐私与数据'})).toBeVisible();await page.getByRole('button',{name:'同意并继续'}).click();await expect(page.getByRole('button',{name:'登录智云课堂',exact:true})).toBeVisible();const result=await page.evaluate(()=>window.zhiyun.call('app.info'));expect(result.platform).toBe(process.platform);const bounds=await app.evaluate(({BrowserWindow,screen})=>({window:BrowserWindow.getAllWindows()[0].getBounds(),work:screen.getPrimaryDisplay().workAreaSize}));expect(bounds.window.width).toBeLessThanOrEqual(bounds.work.width);expect(bounds.window.height).toBeLessThanOrEqual(bounds.work.height);expect(await page.evaluate(()=>typeof (window as any).require)).toBe('undefined');const consent=await page.evaluate(()=>window.zhiyun.call('storage.get',{key:'privacy-consent'}));expect(consent).toBe(true)});
 test('unknown IPC commands and external protocols are rejected',async()=>{const result=await page.evaluate(async()=>{const out=[];for(const [method,payload]of[['unsafe.read',{filePath:'/etc/passwd'}],['app.external',{url:'file:///etc/passwd'}]]){try{await window.zhiyun.call(method as string,payload);out.push(false)}catch{out.push(true)}}return out});expect(result).toEqual([true,true])});
+test('bare Electron main evaluation executes the real image-worker smoke without a CommonJS require binding',async()=>{
+ const scope=await app.evaluate(()=>({requireBinding:typeof (globalThis as any).require,builtinLoader:typeof process.getBuiltinModule}));
+ expect(scope).toEqual({requireBinding:'undefined',builtinLoader:'function'});
+ const worker=path.resolve('dist/desktop/image-worker.cjs');expect(fs.existsSync(worker)).toBe(true);
+ expect(await app.evaluate(checkInstalledImageWorker,worker)).toBe(true);
+});
 test('native desktop clipboard round trips plain text and rich formatting',async()=>{
  await app.evaluate(async({clipboard,ClipboardItem})=>{const saved=[];for(const item of await clipboard.read()){const data:Record<string,string|Blob|{title:string;url:string}>={};for(const type of item.types)data[type]=await item.getType(type);if(Object.keys(data).length)saved.push(new ClipboardItem(data));}(globalThis as any).__savedClipboard=saved});
  try{await page.evaluate(()=>window.zhiyun.call('clipboard.write',{text:'剪贴板数字123',html:'<p><strong>剪贴板数字123</strong></p>',images:[]}));

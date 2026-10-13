@@ -93,6 +93,21 @@ function auditPackage(folder, expectedArch) {
   } catch (_) { findings.push({ file: worker, kind: 'background image worker missing' }); }
   return { platform: 'Windows', arch: expectedArch, version: packageInfo.version, checkedAt: new Date().toISOString(), pe, asar: { files: packageInfo.files.length, bytes: fs.statSync(archive).size, sha256: crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex') }, findings, passed: !findings.length };
 }
+async function checkInstalledImageWorker({ app }, workerFilename) {
+  // Inspector-evaluated main-process functions have no CJS require binding.
+  const { Worker } = globalThis.process.getBuiltinModule('node:worker_threads'), path = globalThis.process.getBuiltinModule('node:path');
+  const worker = new Worker(workerFilename || path.join(app.getAppPath() + '.unpacked', 'dist', 'desktop', 'image-worker.cjs'));
+  try {
+    return await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(Error('Installed image worker timeout')), 10000);
+      worker.once('error', error => { clearTimeout(timeout); reject(error); });
+      worker.once('message', result => { clearTimeout(timeout); if (result.error || result.value !== true) reject(Error(result.error || 'Installed image worker comparison failed')); else resolve(true); });
+      const width = 128, height = 72, pixels = new Uint8Array(width * height * 4);
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) { const i = (y * width + x) * 4; pixels[i] = x * 7 % 256; pixels[i + 1] = y * 5 % 256; pixels[i + 2] = (x + y) * 3 % 256; pixels[i + 3] = 255; }
+      worker.postMessage({ id: 1, kind: 'compare', a: pixels.slice().buffer, b: pixels.slice().buffer, width, height, strideA: width * 4, strideB: width * 4 });
+    });
+  } finally { await worker.terminate(); }
+}
 async function smokeExecutable(filename, expectedArch) {
   if (process.platform !== 'win32') throw Error('Windows startup smoke requires a Windows host');
   if (!fs.existsSync(filename)) throw Error('Installed executable missing');
@@ -111,20 +126,7 @@ async function smokeExecutable(filename, expectedArch) {
       if (cipher.includes(Buffer.from(sample)) || safeStorage.decryptString(cipher) !== sample) throw Error('Windows account encryption round trip failed');
       return true;
     });
-    const imageWorker = await app.evaluate(async ({ app }) => {
-      const { Worker } = require('node:worker_threads'), path = require('node:path');
-      const worker = new Worker(path.join(app.getAppPath() + '.unpacked', 'dist', 'desktop', 'image-worker.cjs'));
-      try {
-        return await new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => reject(Error('Installed image worker timeout')), 10000);
-          worker.once('error', error => { clearTimeout(timeout); reject(error); });
-          worker.once('message', result => { clearTimeout(timeout); if (result.error || result.value !== true) reject(Error(result.error || 'Installed image worker comparison failed')); else resolve(true); });
-          const width = 128, height = 72, pixels = new Uint8Array(width * height * 4);
-          for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) { const i = (y * width + x) * 4; pixels[i] = x * 7 % 256; pixels[i + 1] = y * 5 % 256; pixels[i + 2] = (x + y) * 3 % 256; pixels[i + 3] = 255; }
-          worker.postMessage({ id: 1, kind: 'compare', a: pixels.slice().buffer, b: pixels.slice().buffer, width, height, strideA: width * 4, strideB: width * 4 });
-        });
-      } finally { await worker.terminate(); }
-    });
+    const imageWorker = await app.evaluate(checkInstalledImageWorker);
     await page.setViewportSize({ width: 800, height: 620 });
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     if (overflow > 3) throw Error('Startup page overflows the narrow desktop viewport');
@@ -145,5 +147,5 @@ async function main(argv = process.argv.slice(2)) {
   console.log(JSON.stringify(report, null, 2)); if (!report.passed) process.exitCode = 1;
   return report;
 }
-module.exports = { inspectPe, scanText, sensitiveEntry, normalizeArchiveName, scanAsar, auditPackage, smokeExecutable, main };
+module.exports = { inspectPe, scanText, sensitiveEntry, normalizeArchiveName, scanAsar, auditPackage, checkInstalledImageWorker, smokeExecutable, main };
 if (require.main === module) main().catch((error) => { console.error('Release audit failed:', error.message); process.exitCode = 1; });

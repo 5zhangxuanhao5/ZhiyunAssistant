@@ -2,6 +2,22 @@ import Cocoa
 import WebKit
 import Network
 
+// The production URLSession delegate is tested against synthetic official URLs.
+// URLProtocol answers locally and never forwards anything to the network.
+final class SyntheticCourseProtocol:URLProtocol {
+    static var responses=[String:[(Int,String,[String:String])]](),hits=[String:Int](),observed=[URLRequest]()
+    override class func canInit(with request:URLRequest)->Bool{request.url?.host=="classroom.zju.edu.cn"}
+    override class func canonicalRequest(for request:URLRequest)->URLRequest{request}
+    override func startLoading(){
+        let path=request.url!.path;Self.hits[path,default:0]+=1;Self.observed.append(request)
+        guard var rows=Self.responses[path],!rows.isEmpty else{client?.urlProtocol(self,didFailWithError:appError("Unexpected synthetic API request"));return}
+        let row=rows.removeFirst();Self.responses[path]=rows
+        let response=HTTPURLResponse(url:request.url!,statusCode:row.0,httpVersion:"HTTP/1.1",headerFields:row.2)!
+        client?.urlProtocol(self,didReceive:response,cacheStoragePolicy:.notAllowed);client?.urlProtocol(self,didLoad:Data(row.1.utf8));client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading(){}
+}
+
 @main struct NativeContractTests {
     static var checks=0
     static func check(_ condition:Bool,_ name:String){precondition(condition,name);checks+=1}
@@ -66,7 +82,96 @@ import Network
         check(noteAssetRelativePath("note-assets/"+String(repeating:"A",count:64)+".png")==nil,"attachment hash is canonical lowercase")
         check(noteAssetRelativePath("note-assets/"+String(repeating:"a",count:64)+".html")==nil,"non-image attachment types rejected")
         var configuredBridge=false
-        view.evaluateJavaScript("window.native={receive:payload=>{const next=window.bridgePending.get(payload.id);if(next){window.bridgePending.delete(payload.id);payload.error?next.reject(new Error(payload.error)):next.resolve(payload.value)}},event:()=>{}};window.bridgePending=new Map();window.bridgeSequence=0;window.callBridge=(action,params={})=>new Promise((resolve,reject)=>{const id='contract-'+(++window.bridgeSequence);window.bridgePending.set(id,{resolve,reject});window.webkit.messageHandlers.native.postMessage({id,action,params})});void 0"){_,_ in configuredBridge=true};try waitUntil({configuredBridge})
+        view.evaluateJavaScript("window.native={receive:payload=>{const next=window.bridgePending.get(payload.id);if(next){window.bridgePending.delete(payload.id);payload.error?next.reject(new Error(payload.error)):next.resolve(payload.value)}},event:payload=>window.toolbarEvents.push(payload)};window.toolbarEvents=[];window.bridgePending=new Map();window.bridgeSequence=0;window.callBridge=(action,params={})=>new Promise((resolve,reject)=>{const id='contract-'+(++window.bridgeSequence);window.bridgePending.set(id,{resolve,reject});window.webkit.messageHandlers.native.postMessage({id,action,params})});void 0"){_,_ in configuredBridge=true};try waitUntil({configuredBridge})
+        // Actual native toolbar appears in the title bar, independently of HTML.
+        var toolbarSynced=false;view.callAsyncJavaScript("return await window.callBridge('toolbar',{name:'测试姓名',loggedIn:true});",arguments:[:],in:nil,in:.page){_ in toolbarSynced=true};try waitUntil({toolbarSynced})
+        let loggedItems=app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}
+        check(loggedItems==["brand","NSToolbarFlexibleSpaceItem","name","home","privacy","logout"],"signed-in native title bar contains identity and three actions")
+        check((app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue=="name"})?.view as? NSTextField)?.stringValue=="测试姓名","native title bar displays synced user name")
+        for key in ["home","privacy","logout"]{(app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue==key})!.view as! NSButton).performClick(nil)}
+        var toolbarValues:String?,readToolbar=false;view.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,80));return JSON.stringify(window.toolbarEvents.map(event=>event.value));",arguments:[:],in:nil,in:.page){result in if case .success(let value)=result{toolbarValues=value as? String};readToolbar=true};try waitUntil({readToolbar});check(toolbarValues=="[\"home\",\"privacy\",\"logout\"]","real native toolbar buttons emit string action contract")
+        app.updateToolbar(name:"",loggedIn:false);check(app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}==["brand","NSToolbarFlexibleSpaceItem","privacy"],"signed-out title bar only offers privacy")
+        check(!window.isVisible,"toolbar synchronization preserves hidden window")
+        // Complete Cookie -> WK store -> encrypted snapshot rows -> new WK store
+        // roundtrip, with no real profile, keychain, university or API call.
+        let fixtureExpiry=Date().addingTimeInterval(3600),httpOnly=HTTPCookiePropertyKey(rawValue:"HttpOnly"),sameSite=HTTPCookiePropertyKey(rawValue:"SameSite")
+        let secureCookie=HTTPCookie(properties:[.name:"secure-fixture",.value:"secure",.domain:".zju.edu.cn",.path:"/",.secure:"TRUE",httpOnly:"TRUE",sameSite:"Strict",.expires:fixtureExpiry])!
+        let plainCookie=HTTPCookie(properties:[.name:"plain-fixture",.value:"plain",.domain:"classroom.zju.edu.cn",.path:"/"])!
+        let pathCookie=HTTPCookie(properties:[.name:"path-fixture",.value:"path",.domain:"classroom.zju.edu.cn",.path:"/courseapi"])!
+        let bearerCookie=HTTPCookie(properties:[.name:"_token",.value:"{i:0;s:6:\"_token\";i:1;s:13:\"synthetic-jwt\";}",.domain:"classroom.zju.edu.cn",.path:"/",.secure:"TRUE",httpOnly:"TRUE"])!
+        let cloudCookie=HTTPCookie(properties:[.name:"cloud-fixture",.value:"cloud",.domain:".chinamcloud.com",.path:"/",.secure:"TRUE",httpOnly:"TRUE"])!
+        var cookiesInstalled=false;app.installCookies([secureCookie,plainCookie,pathCookie,bearerCookie,cloudCookie]){cookiesInstalled=true};try waitUntil({cookiesInstalled})
+        var originalCookies=[HTTPCookie](),readCookies=false;app.store.httpCookieStore.getAllCookies{originalCookies=$0;readCookies=true};try waitUntil({readCookies})
+        let snapshot=try encodedCookies(originalCookies),restored=App();restored.testSkipCookiePersistence=true;restored.root=isolated.appendingPathComponent("restored")
+        var restoredDone=false;restored.restoreCookies(from:snapshot){restoredDone=true};try waitUntil({restoredDone});var restoredCookies=[HTTPCookie]();readCookies=false;restored.store.httpCookieStore.getAllCookies{restoredCookies=$0;readCookies=true};try waitUntil({readCookies})
+        let restoredSecure=restoredCookies.first{$0.name=="secure-fixture"}!,restoredPlain=restoredCookies.first{$0.name=="plain-fixture"}!
+        check(restoredSecure.isSecure && restoredSecure.isHTTPOnly,"WK Cookie roundtrip retains Secure and HttpOnly")
+        check(restoredSecure.expiresDate != nil && abs(restoredSecure.expiresDate!.timeIntervalSince(fixtureExpiry))<2,"WK Cookie roundtrip retains expiry")
+        check(!restoredPlain.isSecure && restoredPlain.isSessionOnly && !restoredPlain.isHTTPOnly,"WK Cookie roundtrip retains nonsecure session metadata")
+        check(restoredCookies.contains{$0.name=="cloud-fixture"},"trusted cloud session cookies survive restart")
+        let decoded=decodedCookies(try encodedCookies([secureCookie]));check(decoded.first?.properties?[sameSite] as? String=="strict","cookie serialization retains SameSite")
+        let expired=HTTPCookie(properties:[.name:"expired",.value:"old",.domain:"classroom.zju.edu.cn",.path:"/",.expires:Date().addingTimeInterval(-30)])!,foreign=HTTPCookie(properties:[.name:"foreign",.value:"test",.domain:"attacker.example",.path:"/"])!
+        check(decodedCookies(try encodedCookies([expired,foreign])).isEmpty,"expired and unrelated cookies are excluded")
+        var requestReady=false,restoredRequest:URLRequest?;restored.cookieRequest(URL(string:"https://classroom.zju.edu.cn/courseapi/test")!){restoredRequest=$0;requestReady=true};try waitUntil({requestReady})
+        check(restoredRequest?.value(forHTTPHeaderField:"Authorization")=="Bearer synthetic-jwt","restored cookie yields fresh official Bearer header")
+        check(restoredRequest?.value(forHTTPHeaderField:"Accept")=="application/json","API requests explicitly accept JSON")
+        check(restoredRequest?.value(forHTTPHeaderField:"Cookie")?.hasPrefix("path-fixture=path;")==true,"longest matching cookie path is sent first")
+        requestReady=false;restored.cookieRequest(URL(string:"https://interactivemeta.cmc.zju.edu.cn/asr/test")!){restoredRequest=$0;requestReady=true};try waitUntil({requestReady});check(restoredRequest?.value(forHTTPHeaderField:"Authorization")=="Bearer synthetic-jwt","trusted realtime-transcription origin receives campus Bearer")
+        check(restoredRequest?.value(forHTTPHeaderField:"Cookie")?.contains("plain-fixture")==false,"host-only cookie does not leak to sibling hosts")
+        requestReady=false;restored.cookieRequest(URL(string:"https://media.chinamcloud.com/video.mp4")!){restoredRequest=$0;requestReady=true};try waitUntil({requestReady});check(restoredRequest?.value(forHTTPHeaderField:"Authorization")==nil,"media CDN never receives campus Bearer")
+        let cookieResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Set-Cookie":"just-written=ready; Path=/; Secure; HttpOnly"])!
+        requestReady=false;restored.absorbCookies(cookieResponse){restored.cookieRequest(URL(string:"https://classroom.zju.edu.cn/courseapi/test")!){restoredRequest=$0;requestReady=true}};try waitUntil({requestReady});check(restoredRequest?.value(forHTTPHeaderField:"Cookie")?.contains("just-written=ready")==true,"Set-Cookie is installed before dependent API request")
+        var handshakes=0,resumed=0;restored.testSessionBootstrap={done in handshakes+=1;DispatchQueue.main.asyncAfter(deadline:.now()+0.02){done(true)}};restored.resumeOfficialSession{if $0{resumed+=1}};restored.resumeOfficialSession{if $0{resumed+=1}};try waitUntil({resumed==2});check(handshakes==1,"concurrent cold-session requests share one official handshake")
+        check(restored.account=="guest","session restore never manufactures an account identity")
+        let loginResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/login")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"text/html"])!
+        let forbidden=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/courseapi/test")!,statusCode:403,httpVersion:"HTTP/1.1",headerFields:[:])!
+        check(authenticationExpired(loginResponse,Data("<!doctype html>".utf8)),"HTML login page is recognized as expired session")
+        check(!authenticationExpired(forbidden,Data("{\"code\":401}".utf8)),"explicit course denial never triggers automatic retry")
+        let unavailable=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/courseapi/test")!,statusCode:502,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"text/html"])!
+        check(!authenticationExpired(unavailable,Data("<!doctype html>gateway unavailable".utf8)),"server HTML errors are not misidentified as authentication failures")
+        let apiConfiguration=URLSessionConfiguration.ephemeral;apiConfiguration.httpCookieStorage=nil;apiConfiguration.urlCache=nil;apiConfiguration.protocolClasses=[SyntheticCourseProtocol.self]
+        app.network=URLSession(configuration:apiConfiguration,delegate:app,delegateQueue:nil);defer{app.network.invalidateAndCancel()}
+        SyntheticCourseProtocol.responses=[
+            "/contract-401":[(401,"{\"code\":401}",["Content-Type":"application/json","Set-Cookie":"response-cookie=ready; Path=/; Secure; HttpOnly"]),(200,"{\"code\":200,\"data\":\"success\"}",["Content-Type":"application/json"])],
+            "/contract-403":[(403,"{\"code\":403}",["Content-Type":"application/json"])],
+            "/contract-post":[(401,"{\"code\":401}",["Content-Type":"application/json"])],
+            "/contract-502":[(502,"<!doctype html>gateway unavailable",["Content-Type":"text/html"])]
+        ]
+        var retryHandshakes=0,cookieReadyBeforeRetry=false
+        app.testSessionBootstrap={done in retryHandshakes+=1;app.store.httpCookieStore.getAllCookies{cookies in
+            cookieReadyBeforeRetry=cookies.contains{$0.name=="response-cookie" && $0.value=="ready"}
+            let fresh=HTTPCookie(properties:[.name:"_token",.value:"{i:0;s:6:\"_token\";i:1;s:13:\"refreshed-jwt\";}",.domain:"classroom.zju.edu.cn",.path:"/",.secure:"TRUE",httpOnly:"TRUE"])!
+            app.installCookies([fresh]){done(true)}
+        }}
+        func bridgeCall(_ action:String,_ params:[String:Any]=[:])throws->Any?{
+            var finished=false,value:Any?,error:Error?
+            view.callAsyncJavaScript("return await window.callBridge(action,params);",arguments:["action":action,"params":params],in:nil,in:.page){result in switch result{case .success(let output):value=output;case .failure(let failure):error=failure};finished=true}
+            try waitUntil({finished});if let error=error{throw error};return value
+        }
+        let retryResult=try bridgeCall("request",["url":"https://classroom.zju.edu.cn/contract-401"]) as! [String:Any]
+        check(retryResult["status"] as? Int==200 && SyntheticCourseProtocol.hits["/contract-401"]==2 && retryHandshakes==1,"safe GET retries once after official session refresh")
+        check(cookieReadyBeforeRetry,"authentication refresh sees response cookie before retrying")
+        let replayed=SyntheticCourseProtocol.observed.filter{$0.url?.path=="/contract-401"}.last!
+        check(replayed.value(forHTTPHeaderField:"Authorization")=="Bearer refreshed-jwt","retried GET uses renewed campus token")
+        let denialResult=try bridgeCall("request",["url":"https://classroom.zju.edu.cn/contract-403"]) as! [String:Any]
+        check(denialResult["status"] as? Int==403 && SyntheticCourseProtocol.hits["/contract-403"]==1 && retryHandshakes==1,"explicit permission denial is returned without refresh or replay")
+        let postResult=try bridgeCall("request",["url":"https://classroom.zju.edu.cn/contract-post","body":"{}"] ) as! [String:Any]
+        check(postResult["status"] as? Int==401 && SyntheticCourseProtocol.hits["/contract-post"]==1 && retryHandshakes==1,"POST authentication failures never replay mutations")
+        let serverResult=try bridgeCall("request",["url":"https://classroom.zju.edu.cn/contract-502"]) as! [String:Any]
+        check(serverResult["status"] as? Int==502 && SyntheticCourseProtocol.hits["/contract-502"]==1 && retryHandshakes==1,"upstream outage preserves status and does not trigger SSO")
+        app.setupMenu();let editMenu=NSApp.mainMenu!.items[1].submenu!,copyItem=editMenu.items.first{$0.keyEquivalent=="c"}!
+        check(copyItem.target === app && copyItem.action==#selector(App.copyContent(_:)),"Cmd-C menu targets real native image-aware copy dispatcher")
+        check(app.isMainWebResponder(window,view),"native copy dispatcher recognizes main WebKit responder")
+        let unrelated=NSWindow(contentRect:view.frame,styleMask:[.titled],backing:.buffered,defer:false);unrelated.isReleasedWhenClosed=false;defer{unrelated.close()};check(!app.isMainWebResponder(unrelated,view),"native copy dispatcher never intercepts another window")
+        let drag=try preparedImageDrag(fixturePNG,name:"第3页课件.jpg"),dragSource=ImageDragSource(drag){_ in},writer=ImagePromiseWriter(drag,delegate:dragSource)
+        check(drag.fileName=="第3页课件.png" && drag.png.starts(with:[0x89,0x50,0x4e,0x47]),"dragged file uses real PNG bytes and matching filename")
+        let board=NSPasteboard.withUniqueName();defer{board.releaseGlobally()}
+        check(writer.writableTypes(for:board).contains(.png) && writer.writableTypes(for:board).contains(.tiff),"native image drag provides interoperable PNG and TIFF flavors")
+        check(writer.pasteboardPropertyList(forType:.png) as? Data==drag.png,"native image drag carries image bytes rather than a local URL")
+        check((writer.pasteboardPropertyList(forType:.tiff) as? Data)?.isEmpty==false,"native image drag lazily provides actual TIFF bytes")
+        let nativePrepared=try bridgeCall("prepareImageDrag",["image":fixturePNG,"name":"第3页课件.png"]) as! [String:Any];check((nativePrepared["token"] as? String)?.count==64,"native image preparation returns a ready content token")
+        let promised=isolated.appendingPathComponent("promised.png");try FileManager.default.createDirectory(at:isolated,withIntermediateDirectories:true);var promisedDone=false,promisedFailure:Error?;dragSource.filePromiseProvider(writer,writePromiseTo:promised){promisedFailure=$0;promisedDone=true};try waitUntil({promisedDone});if let promisedFailure=promisedFailure{throw promisedFailure};check(try Data(contentsOf:promised)==drag.png,"Finder file promise writes the exact PNG image")
+        do{try app.dragImage(["image":fixturePNG]);fatalError("programmatic drag accepted without a real pressed mouse")}catch{checks+=1}
         var imagePath:String?,savedImage=false,imageFailure:Error?
         view.callAsyncJavaScript("return await window.callBridge('saveNoteImage',{data:image});",arguments:["image":fixturePNG],in:nil,in:.page){result in switch result{case .success(let value):imagePath=value as? String;case .failure(let error):imageFailure=error};savedImage=true};try waitUntil({savedImage});if let imageFailure=imageFailure{throw imageFailure}
         guard let imagePath=imagePath else{throw appError("Native image bridge did not return a path")};check(noteAssetRelativePath(imagePath) != nil,"actual native bridge stores a stable note asset")
@@ -89,6 +194,19 @@ import Network
         var flushCount:Any?,readCount=false;view.evaluateJavaScript("window.flushCalls"){value,_ in flushCount=value;readCount=true};try waitUntil({readCount});check(flushCount as? Int==1,"simultaneous close requests share one JavaScript flush")
         configured=false;view.evaluateJavaScript("window.zhiyunFlush=()=>{window.heldFlush=new Promise(resolve=>{window.resolveFlush=resolve});return window.heldFlush};void 0"){_,_ in configured=true};try waitUntil({configured});var timeoutFinished=false;let closingBegan=Date();app.flushBeforeClosing{timeoutFinished=true};try waitUntil({timeoutFinished},seconds:3)
         let elapsed=Date().timeIntervalSince(closingBegan);check(elapsed>=1.8 && elapsed<3,"unresponsive JavaScript close flush has bounded timeout")
+        let markerProfile=isolated.appendingPathComponent("explicit-logout"),markerApp=App();markerApp.root=markerProfile;markerApp.testSkipCookiePersistence=true
+        var credentialReads=0,syntheticIdentity=Data("{\"id\":\"offline-fixture\"}".utf8),allowIdentityWrite=false
+        markerApp.testSessionKeychain={name,data,remove in
+            if remove{return nil};if let data=data{if allowIdentityWrite{syntheticIdentity=data;return data};return nil}
+            credentialReads+=1;return name=="identity" ? syntheticIdentity:snapshot
+        }
+        try writeLogoutMarker(in:markerProfile);check(markerApp.hasLogoutMarker(),"explicit logout is persisted before clearing credentials")
+        check(markerApp.storedIdentity().isEmpty && credentialReads==0,"logout marker blocks stale identity without accessing keychain")
+        var markerRestore=false;markerApp.restoreCookies{markerRestore=true};try waitUntil({markerRestore});var blockedCookies=[HTTPCookie]();readCookies=false;markerApp.store.httpCookieStore.getAllCookies{blockedCookies=$0;readCookies=true};try waitUntil({readCookies});check(blockedCookies.isEmpty && credentialReads==0,"logout marker prevents restoring stale cookie snapshot")
+        do{try markerApp.saveIdentity("{\"id\":\"new-fixture\"}");fatalError("failed keychain write accepted")}catch{check(markerApp.hasLogoutMarker(),"failed identity save cannot clear explicit logout")}
+        allowIdentityWrite=true;try markerApp.saveIdentity("{\"id\":\"new-fixture\"}");check(!markerApp.hasLogoutMarker() && markerApp.storedIdentity().contains("new-fixture"),"successful fresh identity save clears explicit logout marker")
+        let impossible=isolated.appendingPathComponent("not-a-directory");try Data("blocked".utf8).write(to:impossible)
+        do{try writeLogoutMarker(in:impossible);fatalError("marker write accepted invalid directory")}catch{checks+=1}
         window.contentView=nil;view.uiDelegate=nil;view.navigationDelegate=nil;window.close()
         print("Native bridge contract checks passed: \(checks)")
     }

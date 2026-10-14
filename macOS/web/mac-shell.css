@@ -2,53 +2,6 @@
   display: flex;
   flex-direction: column;
 }
-#appHeader {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  height: 54px;
-  flex-shrink: 0;
-  padding: 9px 18px;
-  background: #f3f6fa;
-  border-bottom: 1px solid #e4eaf1;
-}
-.brand {
-  padding: 0;
-  gap: 8px;
-  font-size: 18px;
-}
-.brand img {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-}
-.brand strong {
-  font-weight: 650;
-}
-#myClassHome {
-  height: 29px;
-  font-size: 12px;
-  background: #e7f0fb;
-  color: #2777bc;
-}
-#identity {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: 0 0 0 auto;
-  padding: 0;
-  white-space: nowrap;
-}
-#identity button {
-  display: inline-block;
-  margin: 0;
-  height: 27px;
-  font-size: 12px;
-}
-.account-name {
-  font-size: 12px;
-  color: #526e8a;
-}
 #navigation {
   display: flex;
   gap: 4px;
@@ -90,12 +43,23 @@ main {
 }
 .study-mode #content {
   padding: 0 10px 10px;
+  scrollbar-gutter: auto;
 }
 .study-mode #studyTools {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 37px;
   padding: 0 8px 8px;
   gap: 6px;
   min-height: 37px;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
 }
+.study-mode #studyTools::-webkit-scrollbar { display: none; }
+.study-mode #studyTools > * { flex-shrink: 0; }
 .study-mode #studyTools button {
   height: 28px;
   font-size: 12px;
@@ -259,23 +223,12 @@ main {
   background: #e7f2ff;
   color: #168bee;
 }
-body:not(.logged-in) #myClassHome,
 body:not(.logged-in) #navigation {
   display: none;
 }
 @media (max-width: 950px) {
   #topActions {
     gap: 5px;
-  }
-  #appHeader {
-    padding-inline: 12px;
-  }
-  #identity {
-    gap: 5px;
-  }
-  #studyTools {
-    overflow: auto;
-    flex-wrap: nowrap !important;
   }
   .study-mode #topbar {
     height: 56px;

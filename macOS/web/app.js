@@ -127,6 +127,7 @@ let notes = [],
   overviewSelect = false,
   overviewPicker = false,
   fullPage = 0;
+let slideCopyTarget = null;
 const aiOperations = new Set(),
   summaryErrors = new Map();
 let summaryBatch = false,
@@ -268,19 +269,18 @@ function nav() {
       button(t, () => go(id), page === id ? "active" : ""),
     ),
   );
-  const home = $("#myClassHome");
-  home.onclick = () => go(lastClassPage, null, false);
-  $("#identity").replaceChildren(
-    ...(account
-      ? [
-          el("span", { text: account.name, class: "account-name" }),
-          home,
-          button("隐私", privacy),
-          button("退出登录", logout),
-        ]
-      : [home, button("隐私", privacy)]),
-  );
+  native.call("toolbar", {
+    name: account?.name || "",
+    loggedIn: !!account,
+  }).catch(() => {});
 }
+native.on("toolbarAction", (action) => {
+  if (action === "privacy") privacy();
+  else if (action === "home" && account)
+    go(lastClassPage, null, false).catch((error) => toast(error.message));
+  else if (action === "logout" && account)
+    logout().catch((error) => toast(error.message));
+});
 function privacy() {
   openModal("隐私与数据");
   $("#modalBody").append(
@@ -345,9 +345,10 @@ async function refreshAccount() {
   try {
     const result = await api.account();
     account = result;
-    await native.call("identity", { text: JSON.stringify(result) });
     await native.call("account", { id: result.id });
     await loadData();
+    await native.call("identity", { text: JSON.stringify(result) })
+      .catch((error) => toast(error.message));
     await native.call("loginDone");
     page = lastClassPage;
     viewStack = [];
@@ -425,12 +426,14 @@ async function boot() {
     }
     try {
       const real = await api.account();
-      if (!account || account.id !== real.id) {
-        account = real;
-        await native.call("identity", { text: JSON.stringify(real) });
+      const changed = !account || account.id !== real.id || account.tenantId !== real.tenantId;
+      account = real;
+      if (changed) {
         await native.call("account", { id: real.id });
         await loadData();
       }
+      await native.call("identity", { text: JSON.stringify(real) })
+        .catch((error) => toast(error.message));
       nav();
       await refreshCourses();
     } catch {
@@ -1569,6 +1572,8 @@ function showStudy() {
 function renderTools() {
   const tools = $("#studyTools");
   if (!tools) return;
+  const scrollLeft = tools.scrollLeft;
+  tools.setAttribute("aria-label", "学习功能，可横向滚动");
   const order = prefs.commonOrder || [
     "transcript",
     "crop",
@@ -1609,6 +1614,18 @@ function renderTools() {
         },
       ),
     );
+  tools.scrollLeft = scrollLeft;
+  tools.onwheel = (event) => {
+    if (event.ctrlKey || event.metaKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY) || tools.scrollWidth <= tools.clientWidth) return;
+    const before = tools.scrollLeft;
+    const distance = event.deltaY * (event.deltaMode === 1 ? 28 : event.deltaMode === 2 ? tools.clientWidth : 1);
+    tools.scrollLeft += distance;
+    if (tools.scrollLeft !== before) event.preventDefault();
+  };
+  tools.onfocusin = (event) => {
+    if (typeof event.target?.scrollIntoView === "function")
+      event.target.scrollIntoView({ block: "nearest", inline: "nearest" });
+  };
   requestAnimationFrame(() => {
     if (tools.isConnected)
       $("#content").style.setProperty(
@@ -2119,82 +2136,29 @@ async function imageData(s) {
   };
 }
 function renderSlides() {
-  const body = $("#slidesBody");
-  if (!body) return;
+  const body = $('#slidesBody'); if (!body) return;
   body.onwheel = null;
-  const count = capacity(),
-    start = Math.floor(index / count) * count;
-  const grid = el("div", {
-    class: "slide-grid",
-    style: (() => {
-      const shape = slideGridShape(
-        count,
-        body.clientWidth || 500,
-        body.clientHeight || 400,
-        16 / 9,
-      );
-      return "--count:" + shape.columns + ";--rows:" + shape.rows;
-    })(),
-  });
-  for (const { group: g, position: i } of displayedPageGroups()) {
-    const img = el("img", {
-      class: "slide-image",
-      src: g.slide.local || resource(g.slide.url),
-      alt: "第 " + (i + 1) + " 页课件",
-      draggable: "true",
-    });
-    processedImage(g.slide).then((src) => {
-      if (img.isConnected) img.src = src;
-    });
-    let down = null;
-    img.onpointerdown = (e) => (down = { x: e.clientX, y: e.clientY });
-    img.onclick = (e) => {
-      if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 8)
-        return;
-      if (prefs.panes.includes("notes")) {
-        const parent = img.parentElement;
-        parent.querySelector(".insert-action")?.remove();
-        const b = button(
-          "插入到当前笔记",
-          () =>
-            insertNote(
-              "slide",
-              "第 " + (i + 1) + " 页课件",
-              g.slide.t,
-              img.src,
-            ),
-          "insert-action",
-        );
-        parent.append(b);
-        setTimeout(() => b.remove(), 5000);
-      }
-    };
-    img.ondblclick = (e) => {
-      e.preventDefault();
-      fullImage(i);
-    };
-    const card = el("div", { class: "slide-card" }, [
-      el(
-        "div",
-        {
-          class: "slide-meta",
-          onclick: () => {
-            focused = "slides";
-          },
-        },
-        ["第 " + (i + 1) + " 页", stamp(g.slide.t)],
-      ),
-      img,
-    ]);
-    card.onclick = (e) => {
-      if (e.target === card) seek(g.slide.t, "slides");
-    };
+  const count = capacity(), displayed = displayedPageGroups();
+  const mini = panes.slides?.querySelector('.pane-header .mini');
+  if (mini) {
+    let metadata = mini.querySelector('.slide-header-meta');
+    if (!metadata) { metadata = el('span', { class: 'slide-header-meta' }); mini.prepend(metadata); }
+    metadata.replaceChildren(...displayed.map(({ group: g, position: i }) => el('span', {
+      class: 'slide-page-meta', tabindex: '0', 'data-slide-id': g.slide.id,
+      onclick: () => { focused = 'slides'; slideCopyTarget = { lesson: courseKey(lesson), id: g.slide.id }; },
+    }, [el('span', { text: '第 ' + (i + 1) + ' 页' }), ' ', el('span', { text: stamp(g.slide.t) })])));
+  }
+  const shape = slideGridShape(count, body.clientWidth || 500, body.clientHeight || 400, 16 / 9, 12, 0);
+  const grid = el('div', { class: 'slide-grid', style: '--count:' + shape.columns + ';--rows:' + shape.rows });
+  for (const { group: g, position: i } of displayed) {
+    const image = el('img', { class: 'slide-image', src: g.slide.local || resource(g.slide.url), alt: '第 ' + (i + 1) + ' 页课件', 'data-slide-id': g.slide.id, 'data-page': i, draggable: 'true' });
+    bindSlideImage(image, g, i);
+    image.ondblclick = event => { event.preventDefault(); fullImage(i); };
+    const card = el('div', { class: 'slide-card' }, [image]);
+    card.onclick = event => { if (event.target === card) seek(g.slide.t, 'slides'); };
     grid.append(card);
   }
-  if (!groups.length)
-    grid.append(
-      el("div", { class: "empty", text: liveStatus || "平台暂未提供课件" }),
-    );
+  if (!groups.length) grid.append(el('div', { class: 'empty', text: liveStatus || '平台暂未提供课件' }));
   body.replaceChildren(grid);
 }
 let horizontal = 0,
@@ -2607,44 +2571,38 @@ function timeJump() {
     ]),
   );
 }
+function slidePreviewOpen() { return !$('#modal').hidden && $('.modal-shell').classList.contains('full-image'); }
 function fullImage(i) {
   if (!groups[i]) return;
-  fullPage = i;
-  openModal("课件");
-  $(".modal-shell").classList.add("full-image");
-  $("#modalBody").classList.add("full-image");
+  openModal('课件'); fullPage = i; focused = 'slides';
+  const shell = $('.modal-shell'), body = $('#modalBody'), toolbar = $('#modalToolbar'), close = $('#modalClose');
+  const previousFocus = document.activeElement;
+  shell.classList.add('full-image'); body.classList.add('full-image'); toolbar.classList.add('slide-preview-controls');
+  const originalParent = toolbar.parentNode, originalNext = toolbar.nextSibling;
+  shell.querySelector('header').insertBefore(toolbar, close); close.textContent = '返回';
+  body.tabIndex = -1; body.focus({ preventScroll: true });
+  let currentId = groups[i].slide.id;
   const show = () => {
-    const g = groups[fullPage];
-    if (!g) return;
-    $("#modalTitle").textContent =
-      "第 " + (fullPage + 1) + " 页 · " + stamp(g.slide.t);
-    const image = el("img", {
-      src: g.slide.local || resource(g.slide.url),
-      onclick: closeModal,
-    });
-    processedImage(g.slide).then((src) => {
-      if (image.isConnected) image.src = src;
-    });
-    $("#modalBody").replaceChildren(image);
+    const g = groups[fullPage]; if (!g) return;
+    currentId = g.slide.id; slideCopyTarget = { lesson: courseKey(lesson), id: g.slide.id };
+    $('#modalTitle').textContent = '第 ' + (fullPage + 1) + ' 页  ' + stamp(g.slide.t);
+    const image = el('img', { class: 'slide-full-image', src: g.slide.local || resource(g.slide.url), alt: '第 ' + (fullPage + 1) + ' 页课件', 'data-slide-id': g.slide.id, 'data-page': fullPage, draggable: 'true' });
+    bindSlideImage(image, g, fullPage, true); body.replaceChildren(image);
   };
   const move = (direction, count = 1) => {
-    fullPage = Math.max(
-      0,
-      Math.min(groups.length - 1, fullPage + direction * count),
-    );
-    show();
+    const current = groups.findIndex(group => group.slide.id === currentId);
+    fullPage = Math.max(0, Math.min(groups.length - 1, (current >= 0 ? current : fullPage) + direction * count)); show();
   };
-  $("#modalToolbar").append(
-    button("‹ 上一页", () => move(-1)),
-    button("下一页 ›", () => move(1)),
-  );
-  const dispose = attachPageGestures($("#modalBody"), { onPage: move });
-  const previousClose = $("#modalClose").onclick;
-  $("#modalClose").onclick = () => {
-    dispose();
-    previousClose();
+  fullImage.move = move;
+  toolbar.append(button('上一页', () => move(-1)), button('下一页', () => move(1)), button('回到最新', () => { fullPage = Math.max(0, groups.length - 1); show(); }));
+  const gestures = attachPageGestures(body, { onPage: move });
+  let disposed = false;
+  fullImage.dispose = () => {
+    if (disposed) return; disposed = true; gestures(); fullImage.move = null;
+    toolbar.classList.remove('slide-preview-controls'); close.textContent = '完成';
+    originalParent.insertBefore(toolbar, originalNext?.parentNode === originalParent ? originalNext : $('#modalBody'));
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
   };
-  fullImage.dispose = dispose;
   show();
 }
 function overview(picker) {
@@ -5075,11 +5033,24 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (
+    slidePreviewOpen() &&
+    ["ArrowLeft", "ArrowRight"].includes(e.key)
+  ) {
+    e.preventDefault();
+    fullImage.move?.(e.key === "ArrowRight" ? 1 : -1);
+    return;
+  }
+  const command = e.metaKey || e.ctrlKey;
+  if (command && e.key.toLowerCase() === "c" && shouldCopySlides(e)) {
+    e.preventDefault();
+    copySlides().catch(error => toast(error.message));
+    return;
+  }
+  if (
     page !== "study" ||
     e.target.closest("input,textarea,[contenteditable=true]")
   )
     return;
-  const command = e.metaKey || e.ctrlKey;
   if (
     e.ctrlKey &&
     !e.metaKey &&
@@ -5124,16 +5095,6 @@ document.addEventListener("keydown", (e) => {
     selectionPane = focused;
     return;
   }
-  if (
-    command &&
-    e.key.toLowerCase() === "c" &&
-    focused === "slides" &&
-    selectCount
-  ) {
-    e.preventDefault();
-    copySlides();
-    return;
-  }
   if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && $("#modal").hidden) {
     if (
       focused === "video" &&
@@ -5164,6 +5125,12 @@ document.addEventListener("keydown", (e) => {
   }
 });
 document.addEventListener("copy", (e) => {
+  if (shouldCopySlides(e)) {
+    e.preventDefault();
+    e.clipboardData?.setData("text/plain", "");
+    copySlides().catch(error => toast(error.message));
+    return;
+  }
   if (focused === "transcript" && window.getSelection()?.rangeCount) {
     const temp = el("div");
     temp.append(window.getSelection().getRangeAt(0).cloneContents());
@@ -5892,31 +5859,111 @@ document.addEventListener(
   },
   true,
 );
-async function copySlides() {
-  const images = $$("#slidesBody .slide-image"),
-    container = el("div");
-  let first = "";
-  for (const image of images) {
-    let src = image.src;
-    if (!src.startsWith("data:")) {
-      const response = await fetch(src);
-      if (!response.ok) continue;
-      const blob = await response.blob();
-      src = await new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.readAsDataURL(blob);
-      });
-    }
-    if (!first) first = src;
-    container.append(el("img", { src, alt: image.alt }));
-  }
-  await native.call("copy", {
-    text: images.map((n) => n.alt).join(" "),
-    html: container.innerHTML,
-    image: first,
-  });
+const slideClipboardAssets = new Map();
+let slideImageBytes = new WeakMap(), slideCopyGeneration = 0, slideImageGeneration = 0;
+native.on('imageDragCacheCleared', () => { slideClipboardAssets.clear(); slideImageBytes = new WeakMap(); slideCopyGeneration++; slideImageGeneration++; });
+function slideDataMime(data) {
+  const match = /^data:([^;]*);base64,(.+)$/s.exec(data || ''); if (!match) throw new Error('课件图片无法读取');
+  if (/^image\/(png|jpeg|webp|gif|avif)$/.test(match[1])) return match[1];
+  const head = window.atob(match[2].slice(0, 32));
+  return head.startsWith('\x89PNG') ? 'image/png' : head.startsWith('\xff\xd8') ? 'image/jpeg' : head.startsWith('GIF8') ? 'image/gif' : head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP' ? 'image/webp' : head.slice(4, 8) === 'ftyp' && /avif|avis/.test(head) ? 'image/avif' : (() => { throw new Error('课件图片无法读取'); })();
 }
+async function slideBitmapData(blob) {
+  let data = await noteBlobDataURL(blob);
+  try { return data.replace(/^data:[^;]*;/, 'data:' + slideDataMime(data) + ';'); } catch (error) {
+    if (!/^image\/svg\+xml(?:;|$)/i.test(blob.type)) throw error;
+    const url = URL.createObjectURL(blob), bitmap = new Image();
+    try {
+      await new Promise((resolve, reject) => { bitmap.onload = resolve; bitmap.onerror = () => reject(new Error('课件图片无法读取')); bitmap.src = url; });
+      const canvas = document.createElement('canvas'); canvas.width = bitmap.naturalWidth; canvas.height = bitmap.naturalHeight;
+      if (!canvas.width || !canvas.height || canvas.width * canvas.height > 32 * 1024 * 1024) throw new Error('课件图片尺寸过大');
+      canvas.getContext('2d').drawImage(bitmap, 0, 0); return canvas.toDataURL('image/png');
+    } finally { URL.revokeObjectURL(url); }
+  }
+}
+async function prepareSlideImage(image) {
+  const source = image.src, existing = slideImageBytes.get(image); if (existing?.source === source) return existing.promise;
+  const owner = String(account?.id || ''), generation = slideImageGeneration, key = owner + '|' + source;
+  let task = slideClipboardAssets.get(key);
+  if (!task) {
+    task = { value: '', dragToken: '', dragError: '' };
+    if (source.startsWith('data:image/')) { task.value = source; task.promise = Promise.resolve(source); }
+    else task.promise = (async () => {
+      const response = await fetch(source); if (!response.ok) throw new Error('课件图片无法复制，请重试');
+      task.value = await slideBitmapData(await response.blob()); return task.value;
+    })().catch(error => { if (slideClipboardAssets.get(key) === task) slideClipboardAssets.delete(key); throw error; });
+    slideClipboardAssets.set(key, task);
+    task.dragReady = task.promise.then(async data => {
+      if (generation !== slideImageGeneration || owner !== String(account?.id || '')) return '';
+      const result = await native.call('prepareImageDrag', { image: data, name: (image.alt || '课件') + '.png' });
+      if (generation !== slideImageGeneration || owner !== String(account?.id || '')) return '';
+      task.dragToken = typeof result?.token === 'string' ? result.token : '';
+      return task.dragToken;
+    }).catch(error => { task.dragError = error.message || '课件图片无法拖出，请重试'; return ''; });
+    // Keep a handful of actual image bytes, never an unbounded course image library.
+    task.promise.then(() => {
+      let size = [...slideClipboardAssets.values()].reduce((sum, item) => sum + item.value.length, 0);
+      while (slideClipboardAssets.size > 6 || size > 16 * 1024 * 1024) { const first = slideClipboardAssets.keys().next().value; size -= slideClipboardAssets.get(first).value.length; slideClipboardAssets.delete(first); }
+    }).catch(() => {});
+  }
+  slideImageBytes.set(image, { source, task, promise: task.promise }); return task.promise;
+}
+function bindSlideImage(image, group, position, preview = false) {
+  let down = null, dragged = false, pointerKind = 'mouse';
+  const activate = () => { focused = 'slides'; slideCopyTarget = { lesson: courseKey(lesson), id: group.slide.id }; };
+  image.onload = () => prepareSlideImage(image).catch(() => {});
+  image.addEventListener('pointerdown', event => { down = { x: event.clientX, y: event.clientY }; dragged = false; pointerKind = event.pointerType || 'mouse'; activate(); });
+  image.onclick = event => {
+    if (dragged || down && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 8) return;
+    activate(); if (preview) { closeModal(); return; }
+    if (!prefs.panes.includes('notes')) return;
+    const card = image.parentElement; card.querySelector('.insert-action')?.remove();
+    const insert = button('插入到当前笔记', () => insertNote('slide', '第 ' + (position + 1) + ' 页课件', group.slide.t, image.src), 'insert-action'); card.append(insert); setTimeout(() => insert.remove(), 5000);
+  };
+  image.ondragstart = event => {
+    event.preventDefault(); if (pointerKind === 'touch') return;
+    dragged = true; activate();
+    const ready = slideImageBytes.get(image), data = ready?.source === image.src ? ready.task.value : '';
+    if (!data || !ready?.task.dragToken) { prepareSlideImage(image).catch(error => toast(error.message)); toast(ready?.task.dragError || '图片正在准备，请稍后拖动'); return; }
+    const mime = slideDataMime(data), encoded = data.slice(data.indexOf(',') + 1), raw = window.atob(encoded), bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    const ext = mime === 'image/jpeg' ? 'jpg' : mime.slice(6), label = '第 ' + (position + 1) + ' 页课件';
+    if (event.dataTransfer) {
+      event.dataTransfer.clearData(); event.dataTransfer.effectAllowed = 'copy';
+      const file = new image.ownerDocument.defaultView.File([bytes], label + '.' + ext, { type: mime });
+      event.dataTransfer.items?.add(file);
+      const html = el('div', {}, [el('img', { src: data, alt: label })]); event.dataTransfer.setData('text/html', html.innerHTML); event.dataTransfer.setData('text/plain', '');
+    }
+    native.call('dragImage', { token: ready.task.dragToken, name: label + '.png', x: event.clientX, y: event.clientY }).catch(error => {
+      ready.task.dragToken = '';
+      ready.task.dragReady = native.call('prepareImageDrag', { image: data, name: label + '.png' }).then(result => ready.task.dragToken = result?.token || '').catch(() => '');
+      toast(error.message);
+    });
+  };
+  processedImage(group.slide).then(source => { if (!image.isConnected) return; image.src = source; if (source.startsWith('data:image/')) prepareSlideImage(image).catch(() => {}); });
+}
+function shouldCopySlides(event) {
+  const target = event?.target?.nodeType === 1 ? event.target : document.activeElement;
+  if (page !== 'study' || target?.closest?.('input,textarea,[contenteditable=true]')) return false;
+  if (slidePreviewOpen()) return !!$('#modalBody .slide-full-image');
+  return $('#modal').hidden && (focused === 'slides' || !!event?.target?.closest?.('[data-pane="slides"]')) && !!$('#slidesBody .slide-image');
+}
+async function copySlides() {
+  const preview = slidePreviewOpen(), visible = preview ? $$('#modalBody .slide-full-image') : $$('#slidesBody .slide-image');
+  const all = !preview && $('#slidesBody')?.classList.contains('selected-text') && selectionPane === 'slides' && selectCount;
+  const currentId = slideCopyTarget?.lesson === courseKey(lesson) ? slideCopyTarget.id : '';
+  const chosen = preview || all ? visible : [visible.find(image => image.dataset.slideId === currentId) || visible.find(image => Number(image.dataset.page) === index) || visible[0]].filter(Boolean);
+  if (!chosen.length) throw new Error('暂无可复制的课件');
+  const owner = account?.id, generation = ++slideCopyGeneration, container = el('div'); let first = '';
+  for (const image of chosen) { const data = await prepareSlideImage(image); if (owner !== account?.id || generation !== slideCopyGeneration) return false; if (!first) first = data; container.append(el('img', { src: data, alt: image.alt })); }
+  if (owner !== account?.id || generation !== slideCopyGeneration) return false;
+  return native.call('copy', { text: '', html: container.innerHTML, image: first });
+}
+window.zhiyunCopyImage = async () => {
+  if (!shouldCopySlides({ target: document.activeElement })) return false;
+  try { await copySlides(); } catch (error) { toast(error.message); }
+  return true;
+};
 
 function syncNoteSelector() {
   const select = panes.notes?.querySelector("select");

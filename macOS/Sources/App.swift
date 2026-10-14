@@ -13,15 +13,82 @@ func trusted(_ u: URL) -> Bool {
     guard u.scheme == "https", u.user == nil, u.password == nil, u.port == nil || u.port == 443, let h = u.host?.lowercased() else { return false }
     return ["zju.edu.cn", "chinamcloud.com", "chinamcloud.cn", "chinamcache.com"].contains { h == $0 || h.hasSuffix("." + $0) }
 }
-func keychain(_ name: String, _ data: Data? = nil, remove: Bool = false) -> Data? {
-    let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "cn.suike.slides.mac", kSecAttrAccount as String: name]
-    if remove { SecItemDelete(query as CFDictionary); return nil }
-    if let data = data {
-        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound { var add = query; add[kSecValueData as String] = data; add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly; SecItemAdd(add as CFDictionary, nil) }; return data
+func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,onError:((OSStatus)->Void)?=nil)->Data?{
+    let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:"cn.suike.slides.mac",kSecAttrAccount as String:name]
+    if remove{let status=SecItemDelete(query as CFDictionary);if status != errSecSuccess && status != errSecItemNotFound{onError?(status)};return nil}
+    if let data=data{
+        var status=SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary)
+        if status==errSecItemNotFound{var add=query;add[kSecValueData as String]=data;add[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;status=SecItemAdd(add as CFDictionary,nil)}
+        guard status==errSecSuccess else{onError?(status);return nil};return data
     }
-    var q = query; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
-    var output: CFTypeRef?; return SecItemCopyMatching(q as CFDictionary, &output) == errSecSuccess ? output as? Data : nil
+    var lookup=query;lookup[kSecReturnData as String]=true;lookup[kSecMatchLimit as String]=kSecMatchLimitOne
+    var output:CFTypeRef?;let status=SecItemCopyMatching(lookup as CFDictionary,&output)
+    guard status==errSecSuccess else{if status != errSecItemNotFound{onError?(status)};return nil};return output as? Data
+}
+// Cookie rows are deliberately explicit: JSON cannot encode HTTPCookie's Date/URL
+// properties directly. Session cookies remain session cookies when restored; keeping
+// their encrypted snapshot never treats the account identity as proof of access.
+func logoutMarker(in root:URL)->URL{root.appendingPathComponent("session-logged-out")}
+func writeLogoutMarker(in root:URL)throws{
+    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true);try Data("1".utf8).write(to:logoutMarker(in:root),options:.atomic)
+}
+func removeLogoutMarker(in root:URL)throws{
+    let path=logoutMarker(in:root);if FileManager.default.fileExists(atPath:path.path){try FileManager.default.removeItem(at:path)}
+}
+func trustedCookieDomain(_ domain:String)->Bool {
+    guard !domain.isEmpty,domain.range(of:"^[A-Za-z0-9.-]+$",options:.regularExpression) != nil else{return false}
+    return URL(string:"https://"+domain.trimmingCharacters(in:CharacterSet(charactersIn:"."))).map(trusted) ?? false
+}
+func cookieDomainMatches(_ cookie:HTTPCookie,_ host:String)->Bool {
+    let domain=cookie.domain.lowercased(),bare=domain.trimmingCharacters(in:CharacterSet(charactersIn:".")),host=host.lowercased()
+    return host==bare || (domain.hasPrefix(".") && host.hasSuffix("."+bare))
+}
+func cookieApplies(_ cookie:HTTPCookie,to url:URL,now:Date=Date())->Bool {
+    guard let host=url.host,cookieDomainMatches(cookie,host),!cookie.isSecure || url.scheme=="https",cookie.expiresDate==nil || cookie.expiresDate!>now else{return false}
+    return url.path==cookie.path || url.path.hasPrefix(cookie.path.hasSuffix("/") ? cookie.path:cookie.path+"/")
+}
+func encodedCookies(_ cookies:[HTTPCookie],now:Date=Date())throws->Data {
+    let rows=cookies.filter{trustedCookieDomain($0.domain) && ($0.expiresDate==nil || $0.expiresDate!>now)}.prefix(2048).map{cookie -> [String:Any] in
+        var row:[String:Any]=["name":cookie.name,"value":cookie.value,"domain":cookie.domain,"path":cookie.path,"secure":cookie.isSecure,"httpOnly":cookie.isHTTPOnly,"sessionOnly":cookie.isSessionOnly,"version":cookie.version]
+        if let date=cookie.expiresDate{row["expires"]=date.timeIntervalSince1970}
+        if let sameSite=cookie.properties?[HTTPCookiePropertyKey(rawValue:"SameSite")] as? String{row["sameSite"]=sameSite}
+        if let ports=cookie.portList{row["ports"]=ports.map{String(describing:$0)}.joined(separator:",")}
+        return row
+    }
+    let data=try JSONSerialization.data(withJSONObject:rows);guard data.count<=2*1024*1024 else{throw appError("登录会话数据过大")};return data
+}
+func decodedCookies(_ data:Data,now:Date=Date())->[HTTPCookie] {
+    guard data.count<=2*1024*1024,let rows=try? JSONSerialization.jsonObject(with:data) as? [[String:Any]],rows.count<=2048 else{return []}
+    return rows.compactMap{row in
+        guard let domain=(row["domain"] ?? row["Domain"]) as? String,trustedCookieDomain(domain),let name=(row["name"] ?? row["Name"]) as? String,!name.isEmpty,name.count<=256,!name.contains(where:{"\r\n;=".contains($0)}),let value=(row["value"] ?? row["Value"]) as? String,value.utf8.count<=16384,!value.contains(where:{"\r\n".contains($0)}) else{return nil}
+        let path=(row["path"] ?? row["Path"]) as? String ?? "/";guard path.hasPrefix("/"),!path.contains(where:{"\r\n".contains($0)}) else{return nil}
+        var properties:[HTTPCookiePropertyKey:Any]=[.name:name,.value:value,.domain:domain,.path:path,.version:row["version"] as? Int ?? 0]
+        if row["secure"] as? Bool ?? true{properties[.secure]="TRUE"}
+        if row["httpOnly"] as? Bool == true{properties[HTTPCookiePropertyKey(rawValue:"HttpOnly")]="TRUE"}
+        if let sameSite=row["sameSite"] as? String,["lax","strict","none"].contains(sameSite.lowercased()){properties[HTTPCookiePropertyKey(rawValue:"SameSite")]=sameSite}
+        if let expires=row["expires"] as? Double{guard expires>now.timeIntervalSince1970 else{return nil};properties[.expires]=Date(timeIntervalSince1970:expires)}
+        // Foundation treats any Discard property (even "FALSE") as session-only.
+        if row["sessionOnly"] as? Bool == true{properties[.discard]="TRUE"}
+        if let ports=row["ports"] as? String,ports.range(of:"^[0-9,]+$",options:.regularExpression) != nil{properties[.port]=ports}
+        return HTTPCookie(properties:properties)
+    }
+}
+func campusBearer(_ cookies:[HTTPCookie])->String? {
+    let target=URL(string:"https://classroom.zju.edu.cn/")!,allowed=cookies.filter{cookieApplies($0,to:target) && $0.name=="_token"}.sorted{$0.path.count>$1.path.count}
+    for cookie in allowed {
+        let value=cookie.value.removingPercentEncoding ?? cookie.value
+        guard let regex=try? NSRegularExpression(pattern:"s:\\d+:\"_token\";(?:i:\\d+;)?s:\\d+:\"([^\"\\r\\n]+)\""),let match=regex.firstMatch(in:value,range:NSRange(value.startIndex...,in:value)),let range=Range(match.range(at:1),in:value) else{continue}
+        return String(value[range])
+    }
+    return nil
+}
+func authenticationExpired(_ response:HTTPURLResponse,_ data:Data)->Bool {
+    guard response.statusCode != 403 else{return false}
+    if response.statusCode==401{return true}
+    guard (200..<400).contains(response.statusCode) else{return false}
+    if let row=try? JSONSerialization.jsonObject(with:data) as? [String:Any],(row["code"] as? Int == 401 || row["code"] as? String == "401"){return true}
+    let type=response.mimeType?.lowercased() ?? "",host=response.url?.host?.lowercased() ?? "",path=response.url?.path.lowercased() ?? ""
+    return type.contains("text/html") && (host != "classroom.zju.edu.cn" || path.contains("login") || data.starts(with:Array("<!DOCTYPE".utf8)) || data.starts(with:Array("<!doctype".utf8)))
 }
 func requestedByteRange(_ value:String?,size:Int)throws->(start:Int,end:Int,partial:Bool){
     guard size>=0 else{throw appError("文件大小无效")};guard let value=value else{return (0,max(0,size-1),false)}
@@ -64,6 +131,52 @@ func storeNoteImage(_ value:String,in dataFolder:URL)throws->String{
 func noteAssetURL(_ relative:String,in dataFolder:URL)throws->URL{
     guard let safe=noteAssetRelativePath(relative) else{throw appError("笔记图片地址无效")};return dataFolder.appendingPathComponent(safe)
 }
+struct PreparedImageDrag {
+    let png:Data,image:NSImage,fileName:String
+    var tiff:Data?{
+        guard let source=CGImageSourceCreateWithData(png as CFData,nil),let cg=CGImageSourceCreateImageAtIndex(source,0,nil),let raster=rasterizedDragImage(cg) else{return nil}
+        return NSBitmapImageRep(cgImage:raster).tiffRepresentation
+    }
+}
+func rasterizedDragImage(_ image:CGImage)->CGImage?{
+    guard let context=CGContext(data:nil,width:image.width,height:image.height,bitsPerComponent:8,bytesPerRow:0,space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue) else{return nil}
+    context.draw(image,in:CGRect(x:0,y:0,width:image.width,height:image.height));return context.makeImage()
+}
+func dragImageFileName(_ name:String)->String{
+    let cleaned=String(name.filter{!"/\\:\r\n".contains($0)}.prefix(128)),stem=(cleaned as NSString).deletingPathExtension.trimmingCharacters(in:.whitespacesAndNewlines)
+    return (stem.isEmpty ? "课件":stem)+".png"
+}
+func preparedImageDrag(_ value:String,name:String)throws->PreparedImageDrag {
+    let decoded=try decodedNoteImage(value)
+    guard let source=CGImageSourceCreateWithData(decoded.data as CFData,nil),let image=CGImageSourceCreateImageAtIndex(source,0,nil) else{throw appError("无法读取拖动图片")}
+    let png:Data
+    if decoded.extension=="png"{png=decoded.data}else{
+        guard let raster=rasterizedDragImage(image),let data=NSBitmapImageRep(cgImage:raster).representation(using:.png,properties:[:]),data.count<=64*1024*1024 else{throw appError("拖动图片过大")};png=data
+    }
+    return PreparedImageDrag(png:png,image:NSImage(cgImage:image,size:NSSize(width:image.width,height:image.height)),fileName:dragImageFileName(name))
+}
+final class ImagePromiseWriter:NSFilePromiseProvider {
+    var imageData:PreparedImageDrag?
+    override init(){super.init()}
+    convenience init(_ image:PreparedImageDrag,delegate:NSFilePromiseProviderDelegate){self.init();imageData=image;fileType=UTType.png.identifier;self.delegate=delegate}
+    override func writableTypes(for pasteboard:NSPasteboard)->[NSPasteboard.PasteboardType]{super.writableTypes(for:pasteboard)+[.png,.tiff]}
+    override func pasteboardPropertyList(forType type:NSPasteboard.PasteboardType)->Any?{if type == .png{return imageData?.png};if type == .tiff{return imageData?.tiff};return super.pasteboardPropertyList(forType:type)}
+}
+final class ImageDragSource:NSObject,NSDraggingSource,NSFilePromiseProviderDelegate {
+    let image:PreparedImageDrag,id=UUID(),finished:(UUID)->Void
+    let promiseQueue:OperationQueue = {let queue=OperationQueue();queue.qualityOfService = .utility;queue.maxConcurrentOperationCount=1;return queue}()
+    init(_ image:PreparedImageDrag,finished:@escaping(UUID)->Void){self.image=image;self.finished=finished}
+    func draggingSession(_ session:NSDraggingSession,sourceOperationMaskFor context:NSDraggingContext)->NSDragOperation{.copy}
+    func ignoreModifierKeys(for session:NSDraggingSession)->Bool{true}
+    func draggingSession(_ session:NSDraggingSession,endedAt screenPoint:NSPoint,operation:NSDragOperation){
+        // A receiver may request a promised file after the drag has ended. Keep the
+        // delegate alive briefly; copying to an editor instead uses PNG/TIFF directly.
+        DispatchQueue.main.asyncAfter(deadline:.now()+15){self.finished(self.id)}
+    }
+    func filePromiseProvider(_ provider:NSFilePromiseProvider,fileNameForType fileType:String)->String{image.fileName}
+    func filePromiseProvider(_ provider:NSFilePromiseProvider,writePromiseTo url:URL,completionHandler:@escaping(Error?)->Void){do{try image.png.write(to:url,options:.atomic);completionHandler(nil)}catch{completionHandler(error)}}
+    func operationQueue(for provider:NSFilePromiseProvider)->OperationQueue{promiseQueue}
+}
 final class Download: NSObject, URLSessionDownloadDelegate {
     let destination: URL, event: (Int64,Int64)->Void, finish: (Result<String,Error>)->Void
     private let lock=NSLock()
@@ -99,12 +212,17 @@ final class Download: NSObject, URLSessionDownloadDelegate {
         completionHandler(next)
     }
 }
-final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate, URLSessionTaskDelegate, WKUIDelegate {
+final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate, URLSessionTaskDelegate, WKUIDelegate, NSToolbarDelegate, NSMenuItemValidation {
     var window: NSWindow!, web: WKWebView!, login: NSWindow?, loginWeb: WKWebView?
     var listener: NWListener!, origin="", token=UUID().uuidString, account="guest", downloads=[String:Download](), requests=[String:URLSessionDataTask](), cancelledRequests=Set<String>(),pendingRequests=Set<String>()
     let fm=FileManager.default, store=WKWebsiteDataStore.nonPersistent()
     let storageQueue=DispatchQueue(label:"cn.suike.mac.storage",qos:.utility)
     var loggingOut=false, lastWebRecovery=Date.distantPast
+    var sessionNeedsResume=false
+    private var sessionWeb:WKWebView?,sessionCallbacks=[(Bool)->Void](),sessionDeadline:DispatchWorkItem?,sessionLastAttempt=Date.distantPast,sessionGeneration=UUID()
+    private var toolbarName="",toolbarLoggedIn=false
+    var mainToolbar:NSToolbar?
+    private var mouseDragMonitor:Any?,lastMouseDrag:NSEvent?,imageDrags=[UUID:ImageDragSource](),preparedDrags=[String:PreparedImageDrag](),preparedDragOrder=[String](),imagePreparationGeneration=UUID()
     var pendingDownloads=[String:URL](),cancelledDownloads=Set<String>()
     var remoteTransfers=[UUID:RemoteTransfer]()
     private var flushPending=false,flushCallbacks=[()->Void](),closingMainWindow=false,mainWindowFlushed=false,terminationPending=false
@@ -114,6 +232,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     // a sheet, accessing accounts, or taking over the user's foreground window.
     var testDialogResponder:((String,String,String?)->String?)?
     var testSkipCookiePersistence=false
+    var testSessionBootstrap:((@escaping(Bool)->Void)->Void)?
+    var testSessionKeychain:((String,Data?,Bool)->Data?)?
     #endif
     lazy var root: URL = { let path=fm.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("智云助手 Mac"); try? fm.createDirectory(at:path,withIntermediateDirectories:true); return path }()
     var queue=DispatchQueue(label:"cn.suike.mac.http",qos:.userInitiated)
@@ -123,15 +243,79 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         let config=WKWebViewConfiguration(); config.websiteDataStore=store; config.userContentController.add(self,name:"native"); config.preferences.javaScriptCanOpenWindowsAutomatically=false
         web=WKWebView(frame:.zero,configuration:config); web.navigationDelegate=self;web.uiDelegate=self
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1320,height:850),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
-        window.isReleasedWhenClosed=false; window.title="智云助手"; window.minSize=NSSize(width:640,height:480); window.contentView=web; window.delegate=self;window.setFrameAutosaveName("StudyMainWindow");if !window.setFrameUsingName("StudyMainWindow"){window.center()};window.orderFront(nil)
+        window.isReleasedWhenClosed=false; window.title="智云助手"; window.minSize=NSSize(width:640,height:480); window.contentView=web; window.delegate=self;window.setFrameAutosaveName("StudyMainWindow");if !window.setFrameUsingName("StudyMainWindow"){window.center()};installToolbar();installMouseDragMonitor();window.orderFront(nil)
         restoreCookies { self.startServer() }
     }
+    func installMouseDragMonitor(){
+        guard mouseDragMonitor==nil else{return}
+        mouseDragMonitor=NSEvent.addLocalMonitorForEvents(matching:[.leftMouseDown,.leftMouseDragged,.leftMouseUp]){[weak self] event in
+            guard let self=self,event.window === self.window else{return event}
+            if event.type == .leftMouseDragged{self.lastMouseDrag=event}else{self.lastMouseDrag=nil};return event
+        }
+    }
+    func dragImage(_ params:[String:Any])throws{
+        guard let view=web,let event=lastMouseDrag,event.window === window,ProcessInfo.processInfo.systemUptime-event.timestamp<0.75,NSEvent.pressedMouseButtons & 1 != 0 else{throw appError("请按住课件图片并拖动")}
+        guard let token=params["token"] as? String,let prepared=preparedDrags[token] else{throw appError("图片正在准备，请稍后再拖动")}
+        let image=PreparedImageDrag(png:prepared.png,image:prepared.image,fileName:dragImageFileName(params["name"] as? String ?? prepared.fileName))
+        let source=ImageDragSource(image){[weak self] id in self?.imageDrags.removeValue(forKey:id)},provider=ImagePromiseWriter(image,delegate:source),item=NSDraggingItem(pasteboardWriter:provider)
+        let point=view.convert(event.locationInWindow,from:nil),ratio=min(160/image.image.size.width,120/image.image.size.height,1),size=NSSize(width:image.image.size.width*ratio,height:image.image.size.height*ratio)
+        item.setDraggingFrame(NSRect(x:point.x-size.width/2,y:point.y-size.height/2,width:size.width,height:size.height),contents:image.image)
+        imageDrags[source.id]=source;let session=view.beginDraggingSession(with:[item],event:event,source:source);session.animatesToStartingPositionsOnCancelOrFail=true
+    }
+    func installToolbar(){
+        guard let window=window else{return};let toolbar=NSToolbar(identifier:"StudyToolbar")
+        toolbar.delegate=self;toolbar.allowsUserCustomization=false;toolbar.autosavesConfiguration=false;toolbar.displayMode = .iconOnly;toolbar.sizeMode = .small
+        mainToolbar=toolbar;window.toolbarStyle = .unifiedCompact;window.titleVisibility = .hidden;window.toolbar=toolbar
+    }
+    func toolbarIdentifiers()->[NSToolbarItem.Identifier]{
+        var values=[NSToolbarItem.Identifier("brand"),.flexibleSpace]
+        if toolbarLoggedIn{if !toolbarName.isEmpty{values.append(NSToolbarItem.Identifier("name"))};values.append(NSToolbarItem.Identifier("home"))}
+        values.append(NSToolbarItem.Identifier("privacy"));if toolbarLoggedIn{values.append(NSToolbarItem.Identifier("logout"))};return values
+    }
+    func toolbarAllowedItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier]{toolbarIdentifiers()}
+    func toolbarDefaultItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier]{toolbarIdentifiers()}
+    func toolbar(_ toolbar:NSToolbar,itemForItemIdentifier identifier:NSToolbarItem.Identifier,willBeInsertedIntoToolbar flag:Bool)->NSToolbarItem?{
+        let key=identifier.rawValue,item=NSToolbarItem(itemIdentifier:identifier)
+        if key=="brand" || key=="name" {
+            let text=key=="brand" ? "智云助手":toolbarName,label=NSTextField(labelWithString:text)
+            label.font=NSFont.systemFont(ofSize:key=="brand" ? 14:12,weight:key=="brand" ? .semibold:.regular);label.textColor=key=="brand" ? .labelColor:.secondaryLabelColor
+            label.lineBreakMode = .byTruncatingTail;label.setAccessibilityLabel(key=="brand" ? "智云助手":text);label.sizeToFit();if key=="name"{label.frame.size.width=min(160,label.frame.width)}
+            item.view=label;item.label=text;return item
+        }
+        guard ["home","privacy","logout"].contains(key) else{return nil}
+        let title=key=="home" ? "我的课堂":key=="privacy" ? "隐私":"退出登录",button=NSButton(title:title,target:self,action:#selector(toolbarClicked(_:)))
+        button.bezelStyle = .rounded;button.isBordered=false;button.controlSize = .small;button.font = .systemFont(ofSize:12);button.identifier=NSUserInterfaceItemIdentifier(key);button.setAccessibilityLabel(title);button.sizeToFit()
+        item.view=button;item.label=title;item.toolTip=title;return item
+    }
+    func updateToolbar(name:String,loggedIn:Bool){
+        let name=String(name.prefix(128));guard toolbarName != name || toolbarLoggedIn != loggedIn || mainToolbar==nil else{return}
+        toolbarName=name;toolbarLoggedIn=loggedIn;if mainToolbar==nil{installToolbar()}
+        guard let toolbar=mainToolbar else{return};while !toolbar.items.isEmpty{toolbar.removeItem(at:0)}
+        for (index,key) in toolbarIdentifiers().enumerated(){toolbar.insertItem(withItemIdentifier:key,at:index)}
+    }
+    @objc func toolbarClicked(_ sender:NSButton){guard let action=sender.identifier?.rawValue,["home","privacy","logout"].contains(action) else{return};event("toolbarAction",action)}
     func setupMenu() {
         let menu=NSMenu(); let appItem=NSMenuItem(); menu.addItem(appItem); let am=NSMenu(); appItem.submenu=am
         am.addItem(withTitle:"关于智云助手",action:#selector(about),keyEquivalent:""); am.addItem(.separator()); am.addItem(withTitle:"退出智云助手",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q")
         let editItem=NSMenuItem(); menu.addItem(editItem); let edit=NSMenu(title:"编辑"); editItem.submenu=edit
-        for (title,selector,key) in [("撤销","undo:","z"),("重做","redo:","Z"),("剪切","cut:","x"),("复制","copy:","c"),("粘贴","paste:","v"),("全选","selectAll:","a")] { edit.addItem(withTitle:title,action:Selector(selector),keyEquivalent:key) }
+        for (title,selector,key) in [("撤销","undo:","z"),("重做","redo:","Z"),("剪切","cut:","x"),("复制","copyContent:","c"),("粘贴","paste:","v"),("全选","selectAll:","a")] { let item=edit.addItem(withTitle:title,action:Selector(selector),keyEquivalent:key);if selector=="copyContent:"{item.target=self} }
         let viewItem=NSMenuItem(); menu.addItem(viewItem); let view=NSMenu(title:"窗口"); viewItem.submenu=view; view.addItem(withTitle:"全屏",action:#selector(NSWindow.toggleFullScreen(_:)),keyEquivalent:"f").keyEquivalentModifierMask=[.command,.control]; NSApp.mainMenu=menu
+    }
+    func isMainWebResponder(_ owner:NSWindow?,_ responder:NSResponder?)->Bool{
+        guard owner === window,let view=responder as? NSView,let web=web else{return false};return view === web || view.isDescendant(of:web)
+    }
+    @objc func copyContent(_ sender:Any?){
+        guard let owner=NSApp.keyWindow,let responder=owner.firstResponder else{return}
+        let fallback={if NSApp.keyWindow === owner,owner.firstResponder === responder{_=responder.tryToPerform(#selector(NSText.copy(_:)),with:sender)}}
+        guard isMainWebResponder(owner,responder) else{fallback();return}
+        web.callAsyncJavaScript("return typeof window.zhiyunCopyImage === 'function' ? !!(await window.zhiyunCopyImage()) : false;",arguments:[:],in:nil,in:.page){result in
+            if case .success(let value)=result,value as? Bool==true{return};fallback()
+        }
+    }
+    func validateMenuItem(_ menuItem:NSMenuItem)->Bool{
+        guard menuItem.action==#selector(copyContent(_:)) else{return true}
+        guard let owner=NSApp.keyWindow,let responder=owner.firstResponder else{return false}
+        return isMainWebResponder(owner,responder) || responder.responds(to:#selector(NSText.copy(_:)))
     }
     @objc func about() { NSApp.orderFrontStandardAboutPanel(options:[.applicationName:"智云助手",.applicationVersion:(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"),.credits:NSAttributedString(string:"独立课程学习工具。在线资源以校园账号权限为准。")]) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender:NSApplication)->Bool{true}
@@ -161,7 +345,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard let view=web else{DispatchQueue.main.async(execute:scriptDone);return}
         view.callAsyncJavaScript("if (typeof window.zhiyunFlush === 'function') { await window.zhiyunFlush(); } return true;",arguments:[:],in:nil,in:.page){_ in scriptDone()}
     }
-    func applicationWillTerminate(_ notification: Notification) { downloads.values.forEach { $0.cancel() }; requests.values.forEach{$0.cancel()}; streams.values.forEach { $0.session.invalidateAndCancel() };remoteTransfers.values.forEach{$0.cancel()}; listener?.cancel() }
+    func applicationWillTerminate(_ notification: Notification) { if let monitor=mouseDragMonitor{NSEvent.removeMonitor(monitor)};sessionWeb?.stopLoading();sessionDeadline?.cancel(); downloads.values.forEach { $0.cancel() }; requests.values.forEach{$0.cancel()}; streams.values.forEach { $0.session.invalidateAndCancel() };remoteTransfers.values.forEach{$0.cancel()}; listener?.cancel() }
     func windowWillClose(_ notification: Notification) { if notification.object as? NSWindow === login { persistCookies(); login=nil; loginWeb=nil } }
     func webView(_ view: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy)->Void) {
         guard let u=navigationAction.request.url else { decisionHandler(.cancel); return }
@@ -169,18 +353,30 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         else { decisionHandler(trusted(u) || u.scheme == "about" ? .allow : .cancel) }
     }
     func webView(_ view: WKWebView, didFinish navigation: WKNavigation!) {
+        if view === sessionWeb {
+            let generation=sessionGeneration
+            guard let url=view.url else{finishSession(false,generation:generation);return}
+            if url.host=="classroom.zju.edu.cn",!url.path.lowercased().contains("login") {
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.2){guard self.sessionWeb === view,self.sessionGeneration==generation else{return};self.store.httpCookieStore.getAllCookies{cookies in self.finishSession(campusBearer(cookies) != nil,generation:generation)}}
+            }else{
+                view.evaluateJavaScript("!!document.querySelector('input[type=password]')"){value,_ in if value as? Bool == true,self.sessionWeb === view,self.sessionGeneration==generation{self.finishSession(false,generation:generation)}}
+            }
+            return
+        }
         if view === loginWeb && !loggingOut { persistCookies(); if view.url?.host == "classroom.zju.edu.cn", !((view.url?.path ?? "").contains("login")) { DispatchQueue.main.asyncAfter(deadline:.now()+0.3) { self.event("login",["ready":true]) } } }
     }
+    func webView(_ view:WKWebView,didFail navigation:WKNavigation!,withError error:Error){if view === sessionWeb{finishSession(false,generation:sessionGeneration)}}
+    func webView(_ view:WKWebView,didFailProvisionalNavigation navigation:WKNavigation!,withError error:Error){if view === sessionWeb{finishSession(false,generation:sessionGeneration)}}
     func webViewWebContentProcessDidTerminate(_ view:WKWebView){
         if view === web {
             guard Date().timeIntervalSince(lastWebRecovery)>15 else{event("webRecovery",["ready":false]);return}
             lastWebRecovery=Date();diagnostic("Web content process restarted");view.reload()
-        }else if view === loginWeb {view.reload()}
+        }else if view === loginWeb {view.reload()}else if view === sessionWeb{finishSession(false,generation:sessionGeneration)}
     }
     func webView(_ view:WKWebView,createWebViewWith configuration:WKWebViewConfiguration,for action:WKNavigationAction,windowFeatures:WKWindowFeatures)->WKWebView?{
         // Official authentication occasionally uses target=_blank; keep it inside its
         // existing login window and do not create or activate another application.
-        if view === loginWeb,action.targetFrame == nil,let url=action.request.url,trusted(url){view.load(action.request)}
+        if (view === loginWeb || view === sessionWeb),action.targetFrame == nil,let url=action.request.url,trusted(url){view.load(action.request)}
         return nil
     }
     private func dialogWindow(_ view:WKWebView,_ frame:WKFrameInfo)->NSWindow?{
@@ -212,41 +408,119 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         let input:NSTextField=(prompt.contains("密码") || prompt.contains("密钥")) ? NSSecureTextField(frame:NSRect(x:0,y:0,width:360,height:26)) : NSTextField(frame:NSRect(x:0,y:0,width:360,height:26));input.stringValue=defaultText ?? "";alert.accessoryView=input;alert.window.initialFirstResponder=input
         alert.beginSheetModal(for:owner){response in completionHandler(response == .alertFirstButtonReturn ? input.stringValue:nil)}
     }
-    func absorbCookies(_ response:HTTPURLResponse){
-        guard !loggingOut,let url=response.url,trusted(url) else{return}
-        var headers=[String:String]();for(key,value) in response.allHeaderFields{if let name=key as? String{headers[name]=String(describing:value)}}
-        let cookies=HTTPCookie.cookies(withResponseHeaderFields:headers,for:url)
-        guard !cookies.isEmpty else{return};DispatchQueue.main.async{guard !self.loggingOut else{return};let group=DispatchGroup();for cookie in cookies{group.enter();self.store.httpCookieStore.setCookie(cookie){group.leave()}};group.notify(queue:.main){self.persistCookies()}}
-    }
-    func restoreCookies(_ done:@escaping()->Void) {
-        guard let data=keychain("cookies"), let rows=try? JSONSerialization.jsonObject(with:data) as? [[String:Any]] else { done(); return }
-        let group=DispatchGroup()
-        for row in rows { guard let host=(row["domain"] ?? row["Domain"]) as? String,let url=URL(string:"https://"+host.trimmingCharacters(in:CharacterSet(charactersIn:"."))),trusted(url) else {continue}; var p:[HTTPCookiePropertyKey:Any]=[.name:row["name"] ?? row["Name"] ?? "",.value:row["value"] ?? row["Value"] ?? "",.domain:host,.path:row["path"] ?? row["Path"] ?? "/",.secure:"TRUE"]
-            if let expires=row["expires"] as? Double { if expires<Date().timeIntervalSince1970 {continue};p[.expires]=Date(timeIntervalSince1970:expires) }
-            if let c=HTTPCookie(properties:p) { group.enter();store.httpCookieStore.setCookie(c){group.leave()} }
-        }; group.notify(queue:.main,execute:done)
-    }
-    func persistCookies(_ done:(()->Void)?=nil){
-        guard !loggingOut else{done?();return}
-        store.httpCookieStore.getAllCookies{cookies in
-            guard !self.loggingOut else{done?();return}
-            let rows=cookies.filter{$0.domain=="zju.edu.cn" || $0.domain.hasSuffix(".zju.edu.cn")}.map{cookie -> [String:Any] in var row:[String:Any]=["name":cookie.name,"value":cookie.value,"domain":cookie.domain,"path":cookie.path];if let expires=cookie.expiresDate{row["expires"]=expires.timeIntervalSince1970};return row}
-            guard let data=try? JSONSerialization.data(withJSONObject:rows) else{done?();return}
-            self.storageQueue.async{if !self.loggingOut{_=keychain("cookies",data)};DispatchQueue.main.async{done?()}}
+    func absorbCookies(_ response:HTTPURLResponse,done:@escaping()->Void = {}){
+        DispatchQueue.main.async{
+            guard !self.loggingOut,let url=response.url,trusted(url) else{done();return}
+            var headers=[String:String]();for (key,value) in response.allHeaderFields{if let name=key as? String{headers[name]=String(describing:value)}}
+            let cookies=HTTPCookie.cookies(withResponseHeaderFields:headers,for:url).filter{trustedCookieDomain($0.domain) && cookieDomainMatches($0,url.host ?? "")}
+            self.installCookies(cookies){self.persistCookies();done()}
         }
     }
-    func cookieRequest(_ url:URL, body:String="", range:String?=nil, done:@escaping(URLRequest)->Void) {
-        store.httpCookieStore.getAllCookies { cookies in
-            var req=URLRequest(url:url); req.setValue("https://classroom.zju.edu.cn/",forHTTPHeaderField:"Referer"); req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",forHTTPHeaderField:"User-Agent")
-            let allowed=cookies.filter { c in let d=c.domain.trimmingCharacters(in:CharacterSet(charactersIn:".")); return (url.host == d || url.host?.hasSuffix("."+d) == true) && (url.path == c.path || url.path.hasPrefix(c.path.hasSuffix("/") ? c.path:c.path+"/")) && (!c.isSecure || url.scheme == "https") && (c.expiresDate == nil || c.expiresDate! > Date()) }
-            if !allowed.isEmpty { req.setValue(allowed.sorted{$0.path.count>$1.path.count}.map { $0.name+"="+$0.value }.joined(separator:"; "),forHTTPHeaderField:"Cookie") }
-            if url.host == "classroom.zju.edu.cn", let value=allowed.first(where:{$0.name == "_token"})?.value.removingPercentEncoding, let regex=try? NSRegularExpression(pattern:"\\{i:\\d+;s:\\d+:\"_token\";i:\\d+;s:\\d+:\"(.+?)\";\\}"), let match=regex.firstMatch(in:value,range:NSRange(value.startIndex...,in:value)), let r=Range(match.range(at:1),in:value) { req.setValue("Bearer "+value[r],forHTTPHeaderField:"Authorization") }
-            if !body.isEmpty { req.httpMethod="POST"; req.httpBody=Data(body.utf8); req.setValue("application/json",forHTTPHeaderField:"Content-Type") }; if let range=range { req.setValue(range,forHTTPHeaderField:"Range") }; done(req)
+    func installCookies(_ cookies:[HTTPCookie],done:@escaping()->Void){
+        guard !loggingOut else{done();return};let group=DispatchGroup()
+        for cookie in cookies{group.enter();if let expires=cookie.expiresDate,expires<=Date(){store.httpCookieStore.delete(cookie){group.leave()}}else{store.httpCookieStore.setCookie(cookie){group.leave()}}}
+        group.notify(queue:.main,execute:done)
+    }
+    func sessionKeychain(_ name:String,_ data:Data?=nil,remove:Bool=false,onError:((OSStatus)->Void)?=nil)->Data?{
+        #if NATIVE_CONTRACT_TESTS
+        if let storage=testSessionKeychain{return storage(name,data,remove)}
+        #endif
+        return keychain(name,data,remove:remove,onError:onError)
+    }
+    func hasLogoutMarker()->Bool{fm.fileExists(atPath:logoutMarker(in:root).path)}
+    func storedIdentity()->String{
+        guard !hasLogoutMarker() else{return ""};return String(data:sessionKeychain("identity") ?? Data(),encoding:.utf8) ?? ""
+    }
+    func saveIdentity(_ text:String)throws{
+        guard text.utf8.count<=64*1024,sessionKeychain("identity",Data(text.utf8)) != nil else{throw appError("无法保存登录状态，请检查钥匙串访问授权")}
+        try removeLogoutMarker(in:root)
+    }
+    func clearPreparedImages(){imagePreparationGeneration=UUID();preparedDrags.removeAll();preparedDragOrder.removeAll();lastMouseDrag=nil;event("imageDragCacheCleared",true)}
+    func performLogout(_ id:String){
+        loggingOut=true;finishSession(false,generation:sessionGeneration);sessionNeedsResume=false;clearPreparedImages();updateToolbar(name:"",loggedIn:false)
+        for operation in pendingRequests{cancelledRequests.insert(operation)};for operation in pendingDownloads.keys{cancelledDownloads.insert(operation)}
+        requests.values.forEach{$0.cancel()};requests.removeAll();downloads.values.forEach{$0.cancel()};streams.values.forEach{$0.session.invalidateAndCancel()};login?.close()
+        store.httpCookieStore.getAllCookies{cookies in
+            let group=DispatchGroup();for cookie in cookies{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}}
+            group.notify(queue:.main){self.storageQueue.async{
+                let error={(status:OSStatus) in self.diagnostic("Session keychain removal failed: "+String(status))}
+                _=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error)
+                DispatchQueue.main.async{self.account="guest";self.reply(id,true)}
+            }}
+        }
+    }
+    func restoreCookies(_ done:@escaping()->Void){
+        storageQueue.async{let data=self.hasLogoutMarker() ? Data():(self.sessionKeychain("cookies") ?? Data());DispatchQueue.main.async{self.restoreCookies(from:data,done:done)}}
+    }
+    func restoreCookies(from data:Data,done:@escaping()->Void){
+        let cookies=hasLogoutMarker() ? []:decodedCookies(data);sessionNeedsResume = !cookies.isEmpty;installCookies(cookies,done:done)
+    }
+    func persistCookies(_ done:(()->Void)?=nil){
+        guard !loggingOut,!hasLogoutMarker() else{done?();return}
+        #if NATIVE_CONTRACT_TESTS
+        if testSkipCookiePersistence{done?();return}
+        #endif
+        store.httpCookieStore.getAllCookies{cookies in
+            guard !self.loggingOut,let data=try? encodedCookies(cookies) else{done?();return}
+            self.storageQueue.async{if !self.loggingOut{_=self.sessionKeychain("cookies",data,onError:{status in self.diagnostic("Cookie keychain save failed: "+String(status))})};DispatchQueue.main.async{done?()}}
+        }
+    }
+    func cookieRequest(_ url:URL,body:String="",range:String?=nil,done:@escaping(URLRequest)->Void){
+        store.httpCookieStore.getAllCookies{cookies in
+            var request=URLRequest(url:url);request.setValue("https://classroom.zju.edu.cn/",forHTTPHeaderField:"Referer");request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15",forHTTPHeaderField:"User-Agent")
+            let api=["classroom.zju.edu.cn","interactivemeta.cmc.zju.edu.cn"].contains(url.host ?? "")
+            if api{request.setValue("application/json",forHTTPHeaderField:"Accept");if let bearer=campusBearer(cookies){request.setValue("Bearer "+bearer,forHTTPHeaderField:"Authorization")}}
+            let allowed=cookies.filter{cookieApplies($0,to:url)}.sorted{$0.path.count>$1.path.count}
+            if !allowed.isEmpty{request.setValue(allowed.map{$0.name+"="+$0.value}.joined(separator:"; "),forHTTPHeaderField:"Cookie")}
+            if !body.isEmpty{request.httpMethod="POST";request.httpBody=Data(body.utf8);request.setValue("application/json",forHTTPHeaderField:"Content-Type")};if let range=range{request.setValue(range,forHTTPHeaderField:"Range")};done(request)
+        }
+    }
+    // Reuse the university's existing SSO session in an unattached WebKit view.
+    // A login form is never filled here; denial and unavailable networks keep the
+    // local identity/offline files intact. All callers share one bounded handshake.
+    func resumeOfficialSession(force:Bool=false,done:@escaping(Bool)->Void){
+        guard !loggingOut else{done(false);return}
+        if !sessionCallbacks.isEmpty{sessionCallbacks.append(done);return}
+        if !force && !sessionNeedsResume{done(true);return}
+        if force && Date().timeIntervalSince(sessionLastAttempt)<15{done(false);return}
+        sessionCallbacks.append(done);sessionNeedsResume=false;sessionLastAttempt=Date();let generation=UUID();sessionGeneration=generation
+        let timeout=DispatchWorkItem{self.finishSession(false,generation:generation)};sessionDeadline=timeout;DispatchQueue.main.asyncAfter(deadline:.now()+10,execute:timeout)
+        #if NATIVE_CONTRACT_TESTS
+        if let bootstrap=testSessionBootstrap{bootstrap{ready in self.finishSession(ready,generation:generation)};return}
+        #endif
+        let config=WKWebViewConfiguration();config.websiteDataStore=store;config.preferences.javaScriptCanOpenWindowsAutomatically=false
+        let view=WKWebView(frame:NSRect(x:0,y:0,width:800,height:600),configuration:config);view.navigationDelegate=self;view.uiDelegate=self;sessionWeb=view
+        view.load(URLRequest(url:URL(string:"https://classroom.zju.edu.cn/")!,cachePolicy:.reloadIgnoringLocalCacheData,timeoutInterval:8))
+    }
+    private func finishSession(_ ready:Bool,generation:UUID){
+        guard sessionGeneration==generation,!sessionCallbacks.isEmpty else{return};sessionDeadline?.cancel();sessionDeadline=nil;sessionWeb?.stopLoading();sessionWeb?.navigationDelegate=nil;sessionWeb?.uiDelegate=nil;sessionWeb=nil
+        let callbacks=sessionCallbacks;sessionCallbacks.removeAll();if ready{persistCookies()};callbacks.forEach{$0(ready && !loggingOut)}
+    }
+    func performCourseRequest(_ id:String,url:URL,body:String,retried:Bool=false){
+        pendingRequests.insert(id);cookieRequest(url,body:body){request in
+            self.pendingRequests.remove(id);guard !self.loggingOut,self.cancelledRequests.remove(id)==nil else{self.reply(id,nil,"请求已取消");return}
+            let task=self.network.dataTask(with:request){data,response,error in DispatchQueue.main.async{
+                self.requests.removeValue(forKey:id);if self.cancelledRequests.remove(id) != nil || self.loggingOut{self.reply(id,nil,"请求已取消");return}
+                if let error=error{self.diagnostic("API error: "+error.localizedDescription);self.reply(id,nil,error.localizedDescription);return}
+                guard let data=data,data.count<16*1024*1024,let response=response as? HTTPURLResponse else{self.reply(id,nil,"课程响应异常");return}
+                self.pendingRequests.insert(id)
+                self.absorbCookies(response){
+                    self.pendingRequests.remove(id);guard self.cancelledRequests.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
+                    let expired=authenticationExpired(response,data)
+                    if expired && body.isEmpty && !retried {
+                        self.pendingRequests.insert(id);self.resumeOfficialSession(force:true){ready in
+                            self.pendingRequests.remove(id);guard self.cancelledRequests.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
+                            if ready{self.performCourseRequest(id,url:url,body:body,retried:true)}else{self.reply(id,["status":401,"text":"{\"code\":401,\"message\":\"在线会话需要重新登录；离线课程仍可查看\"}"])}
+                        };return
+                    }
+                    self.diagnostic("API "+url.path+" status "+String(response.statusCode));self.reply(id,["status":expired ? 401:response.statusCode,"text":String(data:data,encoding:.utf8) ?? ""])
+                }
+            }};self.requests[id]=task;task.resume()
         }
     }
     func urlSession(_ session:URLSession,task:URLSessionTask,willPerformHTTPRedirection response:HTTPURLResponse,newRequest request:URLRequest,completionHandler:@escaping(URLRequest?)->Void){
-        guard let url=request.url,trusted(url) else{completionHandler(nil);return};absorbCookies(response)
-        DispatchQueue.main.async{self.cookieRequest(url,range:request.value(forHTTPHeaderField:"Range")){base in var next=base;next.httpMethod=request.httpMethod;next.httpBody=request.httpBody;if let value=request.value(forHTTPHeaderField:"Content-Type"){next.setValue(value,forHTTPHeaderField:"Content-Type")};completionHandler(next)}}
+        guard let url=request.url,trusted(url) else{completionHandler(nil);return}
+        absorbCookies(response){self.cookieRequest(url,range:request.value(forHTTPHeaderField:"Range")){base in var next=base;next.httpMethod=request.httpMethod;next.httpBody=request.httpBody;if let value=request.value(forHTTPHeaderField:"Content-Type"){next.setValue(value,forHTTPHeaderField:"Content-Type")};completionHandler(next)}}
     }
     func scoped(_ category:String)->URL { root.appendingPathComponent(account).appendingPathComponent(category) }
     func cacheCategory(_ key:String)->String {if key.hasPrefix("vision-"){return "vision"};if key.hasPrefix("summary-"){return "summary"};if key.hasPrefix("chats-"){return "question"};if key.hasPrefix("skip-"){return "skip"};if key.hasPrefix("lesson-"){return "timeline"};return "schedule"}
@@ -260,13 +534,27 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.absoluteString.hasPrefix(origin+"/"+token+"/") == true, let args=message.body as? [String:Any], let id=args["id"] as? String, let action=args["action"] as? String else { return }
         let p=args["params"] as? [String:Any] ?? [:]
         switch action {
+        case "prepareImageDrag":
+            guard let value=p["image"] as? String,value.utf8.count<=45*1024*1024 else{reply(id,nil,"拖动图片无效或过大");return}
+            let name=p["name"] as? String ?? "课件.png",owner=account,generation=imagePreparationGeneration
+            DispatchQueue.global(qos:.utility).async{do{
+                let image=try preparedImageDrag(value,name:name),key=digest(value)
+                DispatchQueue.main.async{
+                    guard self.account==owner,self.imagePreparationGeneration==generation,!self.loggingOut else{self.reply(id,nil,"图片准备已取消");return}
+                    self.preparedDrags[key]=image;self.preparedDragOrder.removeAll{$0==key};self.preparedDragOrder.append(key)
+                    func bytes()->Int{self.preparedDrags.values.reduce(0){$0+$1.png.count+Int($1.image.size.width*$1.image.size.height)*4}}
+                    while self.preparedDragOrder.count>1 && (self.preparedDragOrder.count>8 || bytes()>64*1024*1024){self.preparedDrags.removeValue(forKey:self.preparedDragOrder.removeFirst())}
+                    self.reply(id,["token":key])
+                }
+            }catch{self.reply(id,nil,error.localizedDescription)}}
+        case "dragImage": do{try dragImage(p);reply(id,true)}catch{reply(id,nil,error.localizedDescription)}
+        case "toolbar": updateToolbar(name:p["name"] as? String ?? "",loggedIn:p["loggedIn"] as? Bool == true);reply(id,true)
+        case "resumeSession": resumeOfficialSession{ready in self.reply(id,["ready":ready])}
         case "request":
-            guard let url=URL(string:p["url"] as? String ?? ""), trusted(url), ["classroom.zju.edu.cn","interactivemeta.cmc.zju.edu.cn"].contains(url.host ?? "") else { reply(id,nil,"不受支持的课程地址"); return }
-            pendingRequests.insert(id);cookieRequest(url,body:p["body"] as? String ?? ""){req in
-                self.pendingRequests.remove(id);guard self.cancelledRequests.remove(id) == nil else{self.reply(id,nil,"请求已取消");return}
-                let task=self.network.dataTask(with:req){data,response,error in
-                    DispatchQueue.main.async{self.requests.removeValue(forKey:id);if self.cancelledRequests.remove(id) != nil{self.reply(id,nil,"请求已取消");return};if let error=error{self.diagnostic("API error: "+error.localizedDescription);self.reply(id,nil,error.localizedDescription);return};guard let data=data,data.count<16*1024*1024,let response=response as? HTTPURLResponse else{self.reply(id,nil,"课程响应异常");return};self.absorbCookies(response);self.diagnostic("API "+url.path+" status "+String(response.statusCode));self.reply(id,["status":response.statusCode,"text":String(data:data,encoding:.utf8) ?? ""])}
-                };self.requests[id]=task;task.resume()
+            guard let url=URL(string:p["url"] as? String ?? ""),trusted(url),["classroom.zju.edu.cn","interactivemeta.cmc.zju.edu.cn"].contains(url.host ?? "") else{reply(id,nil,"不受支持的课程地址");return}
+            pendingRequests.insert(id);resumeOfficialSession{_ in
+                self.pendingRequests.remove(id);guard self.cancelledRequests.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
+                self.performCourseRequest(id,url:url,body:p["body"] as? String ?? "")
             }
         case "cancelRequest":
             if let target=p["id"] as? String,pendingRequests.contains(target) || requests[target] != nil{cancelledRequests.insert(target);requests[target]?.cancel()};reply(id,true)
@@ -277,13 +565,14 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let view=WKWebView(frame:.zero,configuration:config); view.navigationDelegate=self;view.uiDelegate=self; loginWeb=view
             let w=NSWindow(contentRect:NSRect(x:0,y:0,width:980,height:730),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false); w.isReleasedWhenClosed=false; w.title="登录智云课堂 · 浙江大学官方认证"; w.contentView=view; w.delegate=self; w.center(); w.makeKeyAndOrderFront(nil); login=w
             view.load(URLRequest(url:URL(string:"https://classroom.zju.edu.cn/")!)); reply(id,true)
-        case "loginDone": persistCookies(); login?.close(); reply(id,true)
+        case "loginDone": sessionNeedsResume=false;sessionLastAttempt = .distantPast;persistCookies();login?.close();reply(id,true)
         case "logout":
-            loggingOut=true;for operation in pendingRequests{cancelledRequests.insert(operation)};for operation in pendingDownloads.keys{cancelledDownloads.insert(operation)};requests.values.forEach{$0.cancel()};requests.removeAll();downloads.values.forEach{$0.cancel()};streams.values.forEach{$0.session.invalidateAndCancel()};login?.close()
-            store.httpCookieStore.getAllCookies{cookies in let group=DispatchGroup();for cookie in cookies{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}};group.notify(queue:.main){self.storageQueue.async{_=keychain("cookies",remove:true);_=keychain("identity",remove:true);DispatchQueue.main.async{self.account="guest";self.reply(id,true)}}}}
+            // Persist the explicit intent first. Even a refused Keychain deletion must
+            // not resurrect the prior account or cookies on the next launch.
+            storageQueue.async{do{try writeLogoutMarker(in:self.root);DispatchQueue.main.async{self.performLogout(id)}}catch{self.reply(id,nil,"无法保存退出状态，请重试")}}
         case "identity":
-            if let text=p["text"] as? String { _=keychain("identity",Data(text.utf8)); reply(id,true) } else { reply(id,String(data:keychain("identity") ?? Data(),encoding:.utf8) ?? "") }
-        case "account": account=digest(p["id"] as? String ?? "guest"); reply(id,true)
+            storageQueue.async{if let text=p["text"] as? String{do{try self.saveIdentity(text);self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}}else{self.reply(id,self.storedIdentity())}}
+        case "account": let next=digest(p["id"] as? String ?? "guest");if next != account{clearPreparedImages()};account=next;reply(id,true)
         case "read":
             guard let key=p["key"] as? String,safeKey(key) else{reply(id,nil,"文件名无效");return}
             let cached=p["cache"] as? Bool == true,enabled=cacheSettings()[cacheCategory(key)] != false,path=scoped(cached ? "cache":"data").appendingPathComponent(key)
@@ -295,7 +584,10 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             if cached && !enabled{reply(id,true);return}
             storageQueue.async{do{try self.fm.createDirectory(at:path.deletingLastPathComponent(),withIntermediateDirectories:true);try text.write(to:path,atomically:true,encoding:.utf8);self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}}
         case "secret":
-            let name=account+"-deepseek";if p["remove"] as? Bool == true{_=keychain(name,remove:true);reply(id,true)}else if let text=p["text"] as? String{_=keychain(name,Data(text.utf8));reply(id,true)}else{reply(id,String(data:keychain(name) ?? Data(),encoding:.utf8) ?? "")}
+            let name=account+"-deepseek"
+            if p["remove"] as? Bool == true{var failure:OSStatus?;_=keychain(name,remove:true,onError:{failure=$0});if failure != nil{reply(id,nil,"无法移除密钥，请检查钥匙串访问授权")}else{reply(id,true)}}
+            else if let text=p["text"] as? String{guard keychain(name,Data(text.utf8)) != nil else{reply(id,nil,"无法保存密钥，请检查钥匙串访问授权");return};reply(id,true)}
+            else{reply(id,String(data:keychain(name) ?? Data(),encoding:.utf8) ?? "")}
         case "cache":
             let cache=scoped("cache"),images=scoped("images"),settingsFile=scoped("data").appendingPathComponent("cache-settings.json"),known=["schedule","timeline","vision","summary","question","skip","images"]
             var settings=cacheSettings()
@@ -306,6 +598,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             if p["clear"] as? Bool == true {
                 let category=p["category"] as? String,keys=p["keys"] as? [String]
                 if let category=category,!known.contains(category){reply(id,nil,"缓存分类无效");return}
+                if category==nil || category=="images"{clearPreparedImages()}
                 storageQueue.async{
                     do{
                         if let category=category,let keys=keys {
@@ -510,7 +803,7 @@ final class RemoteTransfer:NSObject,URLSessionDataDelegate {
     private func abort(_ status:Int){app.send(connection,status:status);task.cancel();buffer.removeAll();finish()}
     func urlSession(_ session:URLSession,dataTask:URLSessionDataTask,didReceive response:URLResponse,completionHandler:@escaping(URLSession.ResponseDisposition)->Void){
         guard let response=response as? HTTPURLResponse else{abort(502);completionHandler(.cancel);return}
-        self.response=response;app.absorbCookies(response)
+        self.response=response
         let mime=response.mimeType?.lowercased() ?? "application/octet-stream",ext=response.url?.pathExtension.lowercased() ?? ""
         playlist=ext=="m3u8" || mime.contains("mpegurl");image=mime.hasPrefix("image/") || ["png","jpg","jpeg","webp","gif"].contains(ext);buffering = !head && (playlist || image)
         if buffering,response.expectedContentLength>(playlist ? 8*1024*1024:24*1024*1024){abort(413);completionHandler(.cancel);return}
@@ -518,7 +811,7 @@ final class RemoteTransfer:NSObject,URLSessionDataDelegate {
             var headers=[String:String]();for name in ["Content-Range","Accept-Ranges"]{if let value=response.value(forHTTPHeaderField:name){headers[name]=value}}
             sentHeaders=true;connection.send(content:app.responseHeader(status:response.statusCode,type:mime,length:response.expectedContentLength>=0 ? response.expectedContentLength:nil,headers:headers),completion:.contentProcessed{error in if error != nil{self.cancel()}})
         }
-        completionHandler(.allow)
+        app.absorbCookies(response){completionHandler(.allow)}
     }
     func urlSession(_ session:URLSession,dataTask:URLSessionDataTask,didReceive data:Data){
         if buffering {guard buffer.count+data.count<=(playlist ? 8*1024*1024:24*1024*1024) else{abort(413);return};buffer.append(data);return}
@@ -535,7 +828,7 @@ final class RemoteTransfer:NSObject,URLSessionDataDelegate {
         buffer.removeAll();session.finishTasksAndInvalidate();finish()
     }
     func urlSession(_ session:URLSession,task:URLSessionTask,willPerformHTTPRedirection response:HTTPURLResponse,newRequest request:URLRequest,completionHandler:@escaping(URLRequest?)->Void){
-        guard let url=request.url,trusted(url) else{completionHandler(nil);return};app.absorbCookies(response);DispatchQueue.main.async{self.app.cookieRequest(url,range:request.value(forHTTPHeaderField:"Range")){base in var next=base;next.httpMethod=request.httpMethod;completionHandler(next)}}
+        guard let url=request.url,trusted(url) else{completionHandler(nil);return};app.absorbCookies(response){self.app.cookieRequest(url,range:request.value(forHTTPHeaderField:"Range")){base in var next=base;next.httpMethod=request.httpMethod;completionHandler(next)}}
     }
 }
 final class AIStream:NSObject,URLSessionDataDelegate {

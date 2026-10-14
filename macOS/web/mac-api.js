@@ -82,6 +82,18 @@ export function reconcileVerifiedCourses(
 
 /** Mac adapter; shared endpoint, permission and parsing implementations stay intact. */
 export class MacZhiyun extends Zhiyun {
+  async request(path, body = "", origin = undefined) {
+    const text = await super.request(path, body, origin);
+    if (path.startsWith("/courseapi/v2/schedule/get-week-schedules")) {
+      const data = JSON.parse(text),
+        list = data.result?.list ?? data.result?.data?.list;
+      // An authenticated identity does not prove the course-service session is
+      // usable. Never make an error envelope authoritative for cache removal.
+      if ((data.code != null && ![0, 200].includes(Number(data.code))) || !Array.isArray(list))
+        throw new Error(Number(data.code) === 401 ? "课程会话未恢复，请重试同步或重新登录" : "课表同步失败，请稍后重试");
+    }
+    return text;
+  }
   constructor({
     maxSnapshots = 256,
     maxRecords = 12000,

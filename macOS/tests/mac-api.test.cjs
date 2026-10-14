@@ -54,3 +54,40 @@ test('a late response from the previous account cannot repopulate current snapsh
 test('oversized truncated snapshots never falsely claim cached pages vanished', async () => {
   const f = await fixture({ maxRecords: 1 }); f.rows([lesson('first'), lesson('second')]); await f.api.schedules(account('A'), '2020-01-01', '2020-01-07'); const state = await f.api.attendanceHistory(account('A'), () => {}, { courses: [lesson('unknown')], complete: true }); assert.ok(state.courses.some(c => c.subId === 'unknown')); assert.equal(f.api.verifiedSchedules[0].authoritative, false);
 });
+
+async function nativeFixture(t, envelope) {
+  const { MacZhiyun } = await loaded, calls = [], previous = global.window;
+  global.window = { native: { call(action, params) { calls.push([action, params]); return Promise.resolve({ status: 200, text: JSON.stringify(envelope) }); } } };
+  t.after(() => { if (previous === undefined) delete global.window; else global.window = previous; });
+  return { api: new MacZhiyun(), calls };
+}
+
+test('a login error envelope with a result object cannot erase cached attendance', async t => {
+  const f = await nativeFixture(t, { code: 401, result: {} });
+  f.api.schoolTerms = async () => [{ start: '2020-01-01', end: '2020-01-07', label: 'Fixture term' }];
+  const state = await f.api.attendanceHistory(account('A'), () => {}, { courses: [lesson('retain')], cursor: '2020-01-07', complete: false });
+  assert.equal(state.failed, true);
+  assert.deepEqual(state.courses.map(c => c.subId), ['retain']);
+  assert.equal(f.api.verifiedSchedules[0].ok, false);
+  assert.equal(f.api.verifiedSchedules[0].authoritative, false);
+});
+
+test('an incomplete success envelope remains unverified instead of an empty authoritative week', async t => {
+  const f = await nativeFixture(t, { code: 0, result: {} });
+  await assert.rejects(f.api.schedules(account('A'), '2020-01-01', '2020-01-07'), /课表同步失败/);
+  assert.equal(f.api.verifiedSchedules[0].ok, false);
+});
+
+test('a confirmed empty official week is still authoritative', async t => {
+  const f = await nativeFixture(t, { code: 0, result: { list: [] } });
+  assert.deepEqual(await f.api.schedules(account('A'), '2020-01-01', '2020-01-07'), []);
+  assert.equal(f.api.verifiedSchedules[0].ok, true);
+  assert.equal(f.api.verifiedSchedules[0].authoritative, true);
+});
+
+test('Mac session validation preserves the interactive transcript origin and request body', async t => {
+  const f = await nativeFixture(t, { code: 0, list: [] });
+  await f.api.request('/v1/search-trans-result', '{"fixture":true}', 'https://interactivemeta.cmc.zju.edu.cn');
+  assert.equal(f.calls[0][1].url, 'https://interactivemeta.cmc.zju.edu.cn/v1/search-trans-result');
+  assert.equal(f.calls[0][1].body, '{"fixture":true}');
+});

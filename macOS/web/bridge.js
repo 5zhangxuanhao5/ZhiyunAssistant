@@ -1,10 +1,13 @@
 (() => {
   const pending = new Map(),
     listeners = new Map();
+  // A WebKit process reload can overlap old native I/O. Replies from the old
+  // document must never resolve a new document's same-numbered promise.
+  const epoch = window.crypto.randomUUID();
   let sequence = 0;
   window.native = {
     call(action, params = {}) {
-      const id = "n" + ++sequence;
+      const id = epoch + "-n" + ++sequence;
       const p = new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
         window.webkit.messageHandlers.native.postMessage({

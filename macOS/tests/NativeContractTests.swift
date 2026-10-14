@@ -27,6 +27,8 @@ final class SyntheticCourseProtocol:URLProtocol {
         while !condition(),Date()<deadline{RunLoop.current.run(until:Date().addingTimeInterval(0.01))}
         guard condition() else{throw appError("WebKit delegate smoke test timed out")}
     }
+    static func secureCookieFixture()->HTTPCookie{HTTPCookie(properties:[.name:"canonical-secure",.value:"fixture",.domain:".zju.edu.cn",.path:"/",.secure:"TRUE"])!}
+    static func plainCookieFixture()->HTTPCookie{HTTPCookie(properties:[.name:"canonical-plain",.value:"fixture",.domain:"classroom.zju.edu.cn",.path:"/"])!}
     static func main()throws{
         let full=try requestedByteRange(nil,size:100);check(full.start==0 && full.end==99 && !full.partial,"full file")
         let empty=try requestedByteRange(nil,size:0);check(empty.start==0 && !empty.partial,"empty file")
@@ -57,10 +59,42 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(resolvedDeepSeekModel("deepseek-pro",hasImages:false)=="deepseek-v4-pro","legacy Pro preference migrates")
         check(resolvedDeepSeekModel("deepseek-v4-pro",hasImages:true)=="deepseek-flash","image requests use vision-capable Flash")
         check(resolvedDeepSeekModel("unknown",hasImages:false)==nil,"unknown models rejected")
+        var interactionAllowed=true,changes=[Bool]()
+        let policyValue=try withKeychainInteractionPolicy(allowUI:false,get:{interactionAllowed},set:{interactionAllowed=$0;changes.append($0)},operation:{check(!interactionAllowed,"background keychain operation suppresses interaction");return 42})
+        check(policyValue==42 && interactionAllowed && changes==[false,true],"successful keychain operation restores interaction policy")
+        changes.removeAll();do{_ = try withKeychainInteractionPolicy(allowUI:false,get:{interactionAllowed},set:{interactionAllowed=$0;changes.append($0)},operation:{()throws->Int in throw appError("synthetic failure")});fatalError("throwing keychain fixture did not throw")}catch{check(interactionAllowed && changes==[false,true],"throwing keychain operation restores interaction policy")}
+        interactionAllowed=false;changes.removeAll();_ = try withKeychainInteractionPolicy(allowUI:false,get:{interactionAllowed},set:{interactionAllowed=$0;changes.append($0)},operation:{true});check(!interactionAllowed && changes.isEmpty,"background access preserves a pre-existing disabled policy")
+        interactionAllowed=true;changes.removeAll();_ = try withKeychainInteractionPolicy(allowUI:true,get:{interactionAllowed},set:{interactionAllowed=$0;changes.append($0)},operation:{check(interactionAllowed,"explicit authorization allows normal system interaction");return true});check(changes.isEmpty,"explicit authorization does not alter keychain policy")
+        var unsafeOperationRan=false
+        do{_ = try withKeychainInteractionPolicy(allowUI:false,get:{throw appError("failed get")},set:{_ in},operation:{unsafeOperationRan=true;return true});fatalError("failed policy get accepted")}catch{check(!unsafeOperationRan,"failed interaction-policy lookup fails closed before keychain access")}
+        interactionAllowed=true
+        do{_ = try withKeychainInteractionPolicy(allowUI:false,get:{interactionAllowed},set:{value in interactionAllowed=value;if !value{throw appError("failed set")}},operation:{unsafeOperationRan=true;return true});fatalError("failed policy set accepted")}catch{check(!unsafeOperationRan && interactionAllowed,"failed policy update skips keychain access and restores previous policy")}
+        var memory=["cookies":Data("saved-cookies".utf8),"identity":Data("saved-identity".utf8),"account-deepseek":Data("synthetic-api-key".utf8)],readCounts=[String:Int](),writeCounts=[String:Int](),allOnStorageQueue=true
+        let cacheQueue=DispatchQueue(label:"cn.suike.native-contract.keychain-cache"),queueIdentity=DispatchSpecificKey<Bool>();cacheQueue.setSpecific(key:queueIdentity,value:true)
+        let memoryCache=KeychainMemoryCache{ name,data,remove,allowUI,onError in
+            allOnStorageQueue = allOnStorageQueue && DispatchQueue.getSpecific(key:queueIdentity)==true
+            if remove{memory.removeValue(forKey:name);return nil};if let data=data{writeCounts[name,default:0]+=1;memory[name]=data;return data};readCounts[name,default:0]+=1;return memory[name]
+        }
+        cacheQueue.sync{
+            for _ in 0..<10{_ = memoryCache.access("cookies");_ = memoryCache.access("identity");_ = memoryCache.access("account-deepseek")}
+            for _ in 0..<10{_ = memoryCache.access("cookies",Data("saved-cookies".utf8));_ = memoryCache.access("identity",Data("saved-identity".utf8))}
+        }
+        check(readCounts==["cookies":1,"identity":1,"account-deepseek":1],"boot and repeated AI reads reuse one in-memory read per credential")
+        check(writeCounts.isEmpty && allOnStorageQueue,"unchanged credentials avoid keychain writes and all operations remain serial")
+        cacheQueue.sync{for _ in 0..<10{_ = memoryCache.access("cookies",Data("changed-cookies".utf8))}};check(writeCounts["cookies"]==1,"changed cookie snapshot is written once, then reused")
+        var deniedReads=0,deniedWrites=0,authorizedReads=0
+        let deniedCache=KeychainMemoryCache{name,data,remove,allowUI,onError in
+            if data != nil{deniedWrites+=1}else if allowUI{authorizedReads+=1}else{deniedReads+=1}
+            if !allowUI{onError(errSecInteractionNotAllowed);return nil};return Data("authorized-synthetic-data".utf8)
+        }
+        for _ in 0..<10{_ = deniedCache.access("blocked");_ = deniedCache.access("blocked",Data("new-bytes".utf8))}
+        check(deniedReads==1 && deniedWrites==0 && deniedCache.requiresAuthorization(["blocked"]),"denied background read is negatively cached without prompting or repeated writes")
+        _ = deniedCache.access("blocked",allowUI:true);for _ in 0..<10{_ = deniedCache.access("blocked")};check(authorizedReads==1 && deniedReads==1 && !deniedCache.requiresAuthorization(["blocked"]),"one explicit recovery unlocks future reads without repeated authorization")
+        check(try encodedCookies([secureCookieFixture(),plainCookieFixture()])==encodedCookies([plainCookieFixture(),secureCookieFixture()]),"canonical cookie bytes do not change when WK cookie order changes")
         // Real WKWebView, real App WKUIDelegate methods, isolated nonpersistent data
         // store and hidden window. No account/keychain reads or external requests.
         let application=NSApplication.shared;application.setActivationPolicy(.prohibited)
-        let app=App();app.testSkipCookiePersistence=true;let isolated=FileManager.default.temporaryDirectory.appendingPathComponent("zhiyun-native-profile-"+UUID().uuidString);app.root=isolated;defer{try? FileManager.default.removeItem(at:isolated)};app.origin="http://127.0.0.1:9876";app.token="fixture"
+        let app=App();app.testSkipCookiePersistence=true;app.testSessionKeychain={_,_,_ in nil};let isolated=FileManager.default.temporaryDirectory.appendingPathComponent("zhiyun-native-profile-"+UUID().uuidString);app.root=isolated;defer{try? FileManager.default.removeItem(at:isolated)};app.origin="http://127.0.0.1:9876";app.token="fixture"
         let config=WKWebViewConfiguration();config.websiteDataStore=app.store;config.userContentController.add(app,name:"native")
         let view=WKWebView(frame:NSRect(x:0,y:0,width:600,height:400),configuration:config);view.uiDelegate=app;view.navigationDelegate=app
         let window=NSWindow(contentRect:view.frame,styleMask:[.titled],backing:.buffered,defer:false);window.contentView=view;window.isReleasedWhenClosed=false;app.window=window;app.web=view
@@ -159,6 +193,47 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(postResult["status"] as? Int==401 && SyntheticCourseProtocol.hits["/contract-post"]==1 && retryHandshakes==1,"POST authentication failures never replay mutations")
         let serverResult=try bridgeCall("request",["url":"https://classroom.zju.edu.cn/contract-502"]) as! [String:Any]
         check(serverResult["status"] as? Int==502 && SyntheticCourseProtocol.hits["/contract-502"]==1 && retryHandshakes==1,"upstream outage preserves status and does not trigger SSO")
+        var bridgeSecretReads=0,bridgeCookieWrites=0,bridgeKeychainOnBackground=true
+        app.testKeychainOperation={name,data,remove,allowUI,onError in
+            bridgeKeychainOnBackground = bridgeKeychainOnBackground && !Thread.isMainThread
+            if data != nil{if name=="cookies"{bridgeCookieWrites+=1};return data};if name.hasSuffix("-deepseek"){bridgeSecretReads+=1;return Data("synthetic-test-key".utf8)};return nil
+        }
+        for _ in 0..<5{check(try bridgeCall("secret") as? String=="synthetic-test-key","actual native secret bridge returns cached key")}
+        for _ in 0..<3{do{_ = try bridgeCall("ai",["model":"deliberately-invalid-model","messages":[]]);fatalError("invalid AI model accepted")}catch{check(app.streams.isEmpty,"invalid-model AI cache test never starts external network")}}
+        check(bridgeSecretReads==1 && bridgeKeychainOnBackground,"secret and AI native routes share one background keychain read")
+        app.testSkipCookiePersistence=false
+        let noCookieResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/ordinary-api")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"application/json"])!
+        for _ in 0..<3{var completed=false;app.absorbCookies(noCookieResponse){completed=true};try waitUntil({completed})};app.storageQueue.sync{}
+        check(bridgeCookieWrites==0,"ordinary responses without Set-Cookie never trigger credential persistence")
+        let unchangedCookieResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/ordinary-api")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"application/json","Set-Cookie":"stable-snapshot=ready; Path=/; Secure; HttpOnly"])!
+        for _ in 0..<3{var completed=false;app.absorbCookies(unchangedCookieResponse){completed=true};try waitUntil({completed})};app.storageQueue.sync{}
+        check(bridgeCookieWrites==1,"identical repeated Set-Cookie responses persist only one canonical snapshot")
+        app.testSkipCookiePersistence=true
+        app.storageQueue.sync{app.credentialCache.invalidate()};var silentDenied=0,interactiveAttempts=0,declineAuthorization=true,unexpectedCredentialReads=0
+        app.testKeychainOperation={name,data,remove,allowUI,onError in
+            guard name.hasSuffix("-deepseek") else{unexpectedCredentialReads+=1;onError(errSecInteractionNotAllowed);return nil}
+            if !allowUI{silentDenied+=1;onError(errSecInteractionNotAllowed);return nil}
+            interactiveAttempts+=1;if declineAuthorization{onError(errSecUserCanceled);return nil};return Data("restored-synthetic-key".utf8)
+        }
+        for _ in 0..<3{check(try bridgeCall("secret") as? String=="","silently blocked API secret stays unavailable without UI")}
+        let blockedStatus=try bridgeCall("keychainStatus") as! [String:Any];check(blockedStatus["apiAuthorizationRequired"] as? Bool==true && silentDenied==1,"native status reports blocked saved API key after one silent attempt")
+        let cancelledRecovery=try bridgeCall("authorizeCredentials",["purpose":"api"]) as! [String:Any]
+        check(cancelledRecovery["ready"] as? Bool==false && cancelledRecovery["authorizationRequired"] as? Bool==true && interactiveAttempts==1,"cancelled explicit API recovery remains blocked")
+        _ = try bridgeCall("secret");check(silentDenied==1 && interactiveAttempts==1,"cancelled authorization is not immediately retried by passive reads")
+        declineAuthorization=false;let acceptedRecovery=try bridgeCall("authorizeCredentials",["purpose":"api"]) as! [String:Any]
+        check(acceptedRecovery["ready"] as? Bool==true && acceptedRecovery["authorizationRequired"] as? Bool==false && unexpectedCredentialReads==0,"explicit API recovery reads only current API key, never restores course cookies")
+        check(try bridgeCall("secret") as? String=="restored-synthetic-key" && silentDenied==1 && interactiveAttempts==2,"restored API key remains reusable in RAM without new prompts")
+        var guardedCookieReads=0
+        app.storageQueue.sync{app.credentialCache.invalidate()};app.testKeychainOperation={name,data,remove,allowUI,onError in if name=="cookies"{guardedCookieReads+=1;onError(errSecInteractionNotAllowed)};return nil}
+        app.storageQueue.sync{_ = app.sessionKeychain("cookies")}
+        var jarCleared=false;app.store.httpCookieStore.getAllCookies{cookies in let group=DispatchGroup();for cookie in cookies{group.enter();app.store.httpCookieStore.delete(cookie){group.leave()}};group.notify(queue:.main){jarCleared=true}};try waitUntil({jarCleared})
+        SyntheticCourseProtocol.responses["/contract-protected"]=[(200,"{\"code\":200}",["Content-Type":"application/json"])]
+        let protectedResult=try bridgeCall("request",["url":"https://classroom.zju.edu.cn/contract-protected"]) as! [String:Any]
+        check(protectedResult["status"] as? Int==401 && SyntheticCourseProtocol.hits["/contract-protected"]==nil && guardedCookieReads==1,"protected startup cookies with empty Jar block guest requests without SSO or repeated reads")
+        let newLoginCookie=HTTPCookie(properties:[.name:"_token",.value:"{i:0;s:6:\"_token\";i:1;s:13:\"new-login-jwt\";}",.domain:"classroom.zju.edu.cn",.path:"/",.secure:"TRUE",httpOnly:"TRUE"])!
+        var newJar=false;app.installCookies([newLoginCookie]){newJar=true};try waitUntil({newJar})
+        let newLoginResult=try bridgeCall("request",["url":"https://classroom.zju.edu.cn/contract-protected"]) as! [String:Any]
+        check(newLoginResult["status"] as? Int==200 && SyntheticCourseProtocol.hits["/contract-protected"]==1 && guardedCookieReads==1 && SyntheticCourseProtocol.observed.last?.value(forHTTPHeaderField:"Authorization")=="Bearer new-login-jwt","fresh official login Jar is usable despite blocked persistent cookie storage")
         app.setupMenu();let editMenu=NSApp.mainMenu!.items[1].submenu!,copyItem=editMenu.items.first{$0.keyEquivalent=="c"}!
         check(copyItem.target === app && copyItem.action==#selector(App.copyContent(_:)),"Cmd-C menu targets real native image-aware copy dispatcher")
         check(app.isMainWebResponder(window,view),"native copy dispatcher recognizes main WebKit responder")
@@ -201,12 +276,26 @@ final class SyntheticCourseProtocol:URLProtocol {
             credentialReads+=1;return name=="identity" ? syntheticIdentity:snapshot
         }
         try writeLogoutMarker(in:markerProfile);check(markerApp.hasLogoutMarker(),"explicit logout is persisted before clearing credentials")
-        check(markerApp.storedIdentity().isEmpty && credentialReads==0,"logout marker blocks stale identity without accessing keychain")
+        check(markerApp.storageQueue.sync{markerApp.storedIdentity()}.isEmpty && credentialReads==0,"logout marker blocks stale identity without accessing keychain")
         var markerRestore=false;markerApp.restoreCookies{markerRestore=true};try waitUntil({markerRestore});var blockedCookies=[HTTPCookie]();readCookies=false;markerApp.store.httpCookieStore.getAllCookies{blockedCookies=$0;readCookies=true};try waitUntil({readCookies});check(blockedCookies.isEmpty && credentialReads==0,"logout marker prevents restoring stale cookie snapshot")
-        do{try markerApp.saveIdentity("{\"id\":\"new-fixture\"}");fatalError("failed keychain write accepted")}catch{check(markerApp.hasLogoutMarker(),"failed identity save cannot clear explicit logout")}
-        allowIdentityWrite=true;try markerApp.saveIdentity("{\"id\":\"new-fixture\"}");check(!markerApp.hasLogoutMarker() && markerApp.storedIdentity().contains("new-fixture"),"successful fresh identity save clears explicit logout marker")
+        do{try markerApp.storageQueue.sync{try markerApp.saveIdentity("{\"id\":\"new-fixture\"}")};fatalError("failed keychain write accepted")}catch{check(markerApp.hasLogoutMarker(),"failed identity save cannot clear explicit logout")}
+        allowIdentityWrite=true;try markerApp.storageQueue.sync{try markerApp.saveIdentity("{\"id\":\"new-fixture\"}",allowUI:true)};check(!markerApp.hasLogoutMarker() && markerApp.storageQueue.sync{markerApp.storedIdentity()}.contains("new-fixture"),"successful fresh identity save clears explicit logout marker")
         let impossible=isolated.appendingPathComponent("not-a-directory");try Data("blocked".utf8).write(to:impossible)
         do{try writeLogoutMarker(in:impossible);fatalError("marker write accepted invalid directory")}catch{checks+=1}
+        // Actual loopback service and hidden WK page render while a synthetic
+        // credential read is deliberately blocked. No real keychain is touched.
+        let bundleResources=Bundle.main.resourceURL!;guard bundleResources.path.contains("zhiyun-native-contract.") else{throw appError("Native test bundle is not an isolated directory")}
+        let fixtureWeb=bundleResources.appendingPathComponent("web");try FileManager.default.createDirectory(at:fixtureWeb,withIntermediateDirectories:true);try Data("<!doctype html><meta charset=utf-8><body>Preparing classroom</body>".utf8).write(to:fixtureWeb.appendingPathComponent("index.html"))
+        let bootApp=App();bootApp.root=isolated.appendingPathComponent("visible-before-credentials");bootApp.testSkipCookiePersistence=true
+        let bootConfig=WKWebViewConfiguration();bootConfig.websiteDataStore=bootApp.store;bootApp.web=WKWebView(frame:NSRect(x:0,y:0,width:500,height:300),configuration:bootConfig);bootApp.web.navigationDelegate=bootApp
+        let credentialLatch=DispatchSemaphore(value:0);var bootReadStarted=false,bootReads=0,bootRestored=0
+        bootApp.testKeychainOperation={name,data,remove,allowUI,onError in bootReads+=1;bootReadStarted=true;_ = credentialLatch.wait(timeout:.now()+10);return nil}
+        bootApp.startServer();bootApp.restoreCookies{bootRestored+=1};bootApp.restoreCookies{bootRestored+=1}
+        try waitUntil({bootReadStarted && !bootApp.web.isLoading && bootApp.web.url != nil})
+        var renderedText:String?,rendered=false;bootApp.web.evaluateJavaScript("document.body.textContent"){value,_ in renderedText=value as? String;rendered=true};try waitUntil({rendered})
+        check(renderedText=="Preparing classroom" && bootRestored==0,"startup WebKit interface loads before credential approval finishes")
+        credentialLatch.signal();try waitUntil({bootRestored==2});check(bootReads==1,"startup cookie restoration is singleflight for concurrent callers")
+        bootApp.listener.cancel();bootApp.web.navigationDelegate=nil;bootApp.web.stopLoading()
         window.contentView=nil;view.uiDelegate=nil;view.navigationDelegate=nil;window.close()
         print("Native bridge contract checks passed: \(checks)")
     }

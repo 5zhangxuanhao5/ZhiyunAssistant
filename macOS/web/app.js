@@ -248,10 +248,140 @@ function replaceContent(node) {
   $("#content").classList.remove("study");
   $("#content").replaceChildren(node);
 }
+let sessionRecoveryRequired = false, sessionRecoveryBusy = false,
+  sessionRecoveryOperation = 0, sessionRequestGuardInstalled = false;
+function sessionAuthenticationError(error) {
+  return /登录失效|请先登录|统一身份认证|课程会话未恢复|智云返回了登录页面/.test(String(error?.message || error || ""));
+}
+function updateSessionRecovery(required) {
+  sessionRecoveryRequired = !!required;
+  if (!sessionRequestGuardInstalled) {
+    const request = api.request;
+    api.request = async function (...args) {
+      if (sessionRecoveryRequired)
+        throw new Error("请点击“恢复登录”后同步在线课程；本机资料仍可查看");
+      const owner = account?.id, tenant = account?.tenantId;
+      try {
+        return await request.apply(this, args);
+      } catch (error) {
+        if (account && account.id === owner && account.tenantId === tenant && sessionAuthenticationError(error))
+          updateSessionRecovery(true);
+        throw error;
+      }
+    };
+    sessionRequestGuardInstalled = true;
+  }
+  renderSessionRecovery();
+}
+function renderSessionRecovery() {
+  const actions = $("#topActions");
+  if (!actions) return;
+  actions.querySelectorAll("[data-session-recovery]").forEach((node) => node.remove());
+  if (!account || (!sessionRecoveryRequired && !sessionRecoveryBusy)) return;
+  const restore = button(sessionRecoveryBusy ? "恢复中…" : "恢复登录", restoreSignedInSession);
+  restore.dataset.sessionRecovery = "true";
+  restore.disabled = sessionRecoveryBusy;
+  actions.append(restore);
+}
+async function restoreSignedInSession() {
+  if (sessionRecoveryBusy || !account) return;
+  const owner = account.id, tenant = account.tenantId,
+    operation = ++sessionRecoveryOperation;
+  let currentOwner = owner, currentTenant = tenant;
+  const current = () => operation === sessionRecoveryOperation && account?.id === currentOwner && account?.tenantId === currentTenant;
+  sessionRecoveryBusy = true;
+  renderSessionRecovery();
+  try {
+    const status = await native.call("keychainStatus");
+    if (!current()) return;
+    const protectedSession = status?.sessionAuthorizationRequired ?? status?.authorizationRequired;
+    if (protectedSession === false) {
+      await native.call("login");
+      return;
+    }
+    const result = await native.call("authorizeCredentials", { purpose: "session" });
+    if (!current()) return;
+    if (!result?.ready || result.authorizationRequired) {
+      toast("登录尚未恢复，本机资料仍可查看，可以再次尝试");
+      return;
+    }
+    sessionRecoveryRequired = false;
+    const real = await api.account();
+    if (!current()) return;
+    const changed = real.id !== owner || real.tenantId !== tenant;
+    if (changed) {
+      if (page === "study") {
+        await saveNote();
+        if (!current()) return;
+        leaveStudy();
+      }
+      api.reset();
+      offlineDownloads?.api.cancel();
+      await offlineDownloads?.dispose();
+      if (!current()) return;
+      offlineDownloads = null;
+      courses = [];
+      library = [];
+      jobs = [];
+      states = {};
+      allHistory = null;
+      noteIndex = [];
+      searchHits = [];
+      plazaRows = [];
+      currentGroup = null;
+      visionCache.clear();
+      visionPending.clear();
+      imageJobs.clear();
+      collections.bind(undefined);
+      viewStack = [];
+      notes = [];
+      noteId = "";
+      chat = [];
+      chats = {};
+      summaries = {};
+      groups = [];
+      slides = [];
+      lines = [];
+      lesson = null;
+      account = real;
+      currentOwner = real.id;
+      currentTenant = real.tenantId;
+      page = lastClassPage;
+      nav();
+      title("我的课堂");
+      replaceContent(el("div", { class: "empty", role: "status", text: "正在读取当前账号的课程…" }));
+      await native.call("account", { id: real.id });
+      if (!current()) return;
+      await loadData();
+      if (!current()) return;
+      page = lastClassPage;
+      nav();
+      showCourses();
+    } else {
+      account = real;
+      nav();
+    }
+    await native.call("identity", { text: JSON.stringify(real) })
+      .catch((error) => toast(error.message));
+    if (!current()) return;
+    await refreshCourses();
+  } catch (error) {
+    if (current()) {
+      sessionRecoveryRequired = true;
+      toast(error.message);
+    }
+  } finally {
+    if (operation === sessionRecoveryOperation) {
+      sessionRecoveryBusy = false;
+      renderSessionRecovery();
+    }
+  }
+}
 function title(text, sub = "", actions = []) {
   $("#pageTitle").textContent = text;
   $("#pageSubtitle").textContent = sub;
   $("#topActions").replaceChildren(...actions);
+  renderSessionRecovery();
 }
 function nav() {
   document.body.classList.toggle("study-mode", page === "study");
@@ -330,31 +460,117 @@ async function logout() {
   nav();
   welcome();
 }
-function welcome() {
+function welcome(options = {}) {
   title("登录智云课堂");
-  replaceContent(
-    el("div", { class: "welcome" }, [
-      el("img", { src: "icon.png", alt: "智云助手" }),
-      button("登录智云课堂", () => native.call("login"), "primary"),
-    ]),
-  );
+  const box = el("div", { class: "welcome" }, [
+    el("img", { src: "icon.png", alt: "智云助手" }),
+  ]);
+  replaceContent(box);
+  if (options.restoring) {
+    box.append(el("p", { class: "hint", role: "status", text: "正在恢复登录…" }));
+    return;
+  }
+  const actions = el("div", { class: "api-form" });
+  box.append(actions);
+  const showActions = (required) => {
+    if (!box.isConnected || account) return;
+    updateSessionRecovery(required);
+    actions.replaceChildren();
+    if (required) {
+      const restore = button("恢复登录", async () => {
+        if (restore.disabled) return;
+        restore.disabled = true;
+        restore.textContent = "恢复中…";
+        try {
+          const result = await native.call("authorizeCredentials", { purpose: "session" });
+          if (!box.isConnected || account) return;
+          if (!result?.ready || result.authorizationRequired) {
+            toast("登录尚未恢复，可以再次尝试或使用官方登录");
+            return;
+          }
+          await boot();
+        } finally {
+          if (restore.isConnected) {
+            restore.disabled = false;
+            restore.textContent = "恢复登录";
+          }
+        }
+      }, "primary");
+      actions.append(restore, el("p", { class: "hint", text: "已保存的登录信息需要你允许访问钥匙串。" }));
+    }
+    actions.append(button("登录智云课堂", () => native.call("login"), required ? "" : "primary"));
+  };
+  showActions(!!options.authorizationRequired);
+  if (options.authorizationRequired === undefined)
+    native.call("keychainStatus").then((status) => {
+      showActions(!!(status?.sessionAuthorizationRequired ?? status?.authorizationRequired));
+    }).catch(() => {});
 }
 async function refreshAccount() {
   if (authRefreshing) return;
   authRefreshing = true;
+  const wasRequired = sessionRecoveryRequired;
+  let authenticated = false;
+  updateSessionRecovery(false);
   try {
     const result = await api.account();
-    account = result;
-    await native.call("account", { id: result.id });
-    await loadData();
+    authenticated = true;
+    const changed = !account || account.id !== result.id || account.tenantId !== result.tenantId;
+    const preserveStudy = !changed && page === "study";
+    if (!preserveStudy) {
+      if (page === "study") {
+        await saveNote();
+        leaveStudy();
+      }
+      if (changed && account) {
+        api.reset();
+        offlineDownloads?.api.cancel();
+        await offlineDownloads?.dispose();
+        offlineDownloads = null;
+        courses = [];
+        library = [];
+        jobs = [];
+        states = {};
+        allHistory = null;
+        noteIndex = [];
+        searchHits = [];
+        plazaRows = [];
+        currentGroup = null;
+        collections.bind(undefined);
+        viewStack = [];
+        notes = [];
+        noteId = "";
+        chat = [];
+        chats = {};
+        summaries = {};
+        groups = [];
+        slides = [];
+        lines = [];
+        lesson = null;
+        visionCache.clear();
+        visionPending.clear();
+        imageJobs.clear();
+        page = lastClassPage;
+        title("我的课堂");
+        replaceContent(el("div", { class: "empty", role: "status", text: "正在读取当前账号的课程…" }));
+      }
+      account = result;
+      await native.call("account", { id: result.id });
+      await loadData();
+    } else account = result;
     await native.call("identity", { text: JSON.stringify(result) })
       .catch((error) => toast(error.message));
     await native.call("loginDone");
-    page = lastClassPage;
-    viewStack = [];
+    if (!preserveStudy) {
+      page = lastClassPage;
+      viewStack = [];
+    }
     nav();
-    showCourses();
+    if (!preserveStudy) showCourses();
     await refreshCourses();
+  } catch (error) {
+    if (wasRequired && !authenticated) updateSessionRecovery(true);
+    throw error;
   } finally {
     authRefreshing = false;
   }
@@ -411,18 +627,25 @@ async function loadData() {
   apiReady = !!(await native.call("secret"));
 }
 async function boot() {
+  if (!account && page !== "study") welcome({ restoring: true });
   try {
     const savedIdentity = await native.call("identity");
     if (savedIdentity) {
       account = JSON.parse(savedIdentity);
       await native.call("account", { id: account.id });
+      const status = await native.call("keychainStatus").catch(() => null);
+      updateSessionRecovery(!!(status?.sessionAuthorizationRequired ?? status?.authorizationRequired));
       await loadData();
       page = lastClassPage;
       nav();
       showCourses();
+      if (sessionRecoveryRequired) return;
     } else {
+      const status = await native.call("keychainStatus").catch(() => null);
       nav();
-      welcome();
+      const required = !!(status?.sessionAuthorizationRequired ?? status?.authorizationRequired);
+      welcome({ authorizationRequired: required });
+      if (required) return;
     }
     try {
       const real = await api.account();
@@ -436,12 +659,13 @@ async function boot() {
         .catch((error) => toast(error.message));
       nav();
       await refreshCourses();
-    } catch {
+    } catch (error) {
+      if (account && sessionAuthenticationError(error)) updateSessionRecovery(true);
       if (account) toast("暂未连接智云，已保留登录状态与本机资料");
     }
   } catch (e) {
     nav();
-    welcome();
+    if (!account && page !== "study") welcome();
     toast(e.message);
   }
 }
@@ -3823,22 +4047,41 @@ async function jumpReference(node, source) {
   seek(Number(node.dataset.timeSeconds), source);
 }
 function apiSetup(key) {
-  if (panes[key]) panes[key].dataset.apiEditing = "true";
-  panes[key]?.querySelectorAll(".mini button").forEach((n) => {
+  const pane = panes[key], body = $("#" + key + "Body");
+  if (!pane || !body) return;
+  pane.dataset.apiEditing = "true";
+  pane.querySelectorAll(".mini button").forEach((n) => {
     if (n.textContent === "API设置") n.hidden = true;
   });
-  const body = $("#" + key + "Body");
-  if (!body) return;
-  const input = el("input", {
-    type: "password",
-    placeholder: "DeepSeek API 密钥",
-    autocomplete: "off",
-  });
-  panes[key]
-    ?.querySelectorAll(".summary-options,.question-options")
+  const owner = account?.id, generation = lessonToken, token = {};
+  apiSetup.views ||= new WeakMap();
+  apiSetup.views.set(body, token);
+  const active = () => body.isConnected && panes[key] === pane &&
+    account?.id === owner && lessonToken === generation && apiSetup.views.get(body) === token;
+  const resumeAPI = () => {
+    apiReady = true;
+    for (const id of ["question", "summary"]) {
+      const target = panes[id];
+      if (target?.dataset.apiRecovery === "true" || target === pane) {
+        delete target.dataset.apiEditing;
+        delete target.dataset.apiRecovery;
+        apiSetup.views.delete($("#" + id + "Body"));
+      }
+    }
+    syncAIOptions();
+    renderStudyContent();
+  };
+  pane.querySelectorAll(".summary-options,.question-options")
     .forEach((n) => (n.hidden = true));
-  body.replaceChildren(
-    el("div", { class: "api-form" }, [
+  const renderForm = () => {
+    if (!active()) return;
+    delete pane.dataset.apiRecovery;
+    const input = el("input", {
+      type: "password",
+      placeholder: "DeepSeek API 密钥",
+      autocomplete: "off",
+    });
+    body.replaceChildren(el("div", { class: "api-form" }, [
       el("h3", { text: apiReady ? "API设置" : "连接 AI 助手" }),
       el("p", {
         class: "hint",
@@ -3859,12 +4102,14 @@ function apiSetup(key) {
       button(
         apiReady ? "保存新密钥" : "保存密钥",
         async () => {
+          if (!active()) return;
           if (!input.value.trim()) return toast("请输入 API 密钥");
           if (!/^sk-[A-Za-z0-9_-]{16,200}$/.test(input.value.trim()))
             return toast("请输入有效的 DeepSeek API 密钥");
           await native.call("secret", { text: input.value.trim() });
+          if (!active()) return;
           apiReady = true;
-          delete panes[key].dataset.apiEditing;
+          delete pane.dataset.apiEditing;
           syncAIOptions();
           toast("已保存");
           key === "summary" ? renderSummary() : renderChat();
@@ -3881,6 +4126,7 @@ function apiSetup(key) {
               async () => {
                 if (confirm("删除本机保存的 API 密钥？")) {
                   await native.call("secret", { remove: true });
+                  if (!active()) return;
                   apiReady = false;
                   apiSetup(key);
                 }
@@ -3889,8 +4135,51 @@ function apiSetup(key) {
             ),
           ]
         : []),
-    ]),
-  );
+    ]));
+  };
+  if (apiReady) return renderForm();
+  pane.dataset.apiRecovery = "true";
+  body.replaceChildren(el("div", { class: "api-form" }, [
+    el("h3", { text: "连接 AI 助手" }),
+    el("p", { class: "hint", role: "status", text: "正在读取密钥状态…" }),
+  ]));
+  return native.call("keychainStatus").then(async (status) => {
+    if (!active()) return;
+    if (!status?.apiAuthorizationRequired) {
+      const secret = await native.call("secret");
+      if (!active()) return;
+      return secret ? resumeAPI() : renderForm();
+    }
+    const restore = button("恢复已保存的密钥", async () => {
+      if (restore.disabled || !active()) return;
+      restore.disabled = true;
+      restore.textContent = "恢复中…";
+      try {
+        const result = await native.call("authorizeCredentials", { purpose: "api" });
+        if (!active()) return;
+        if (!result?.ready) return toast("密钥尚未恢复，可以再次尝试");
+        const secret = await native.call("secret");
+        if (!active()) return;
+        if (!secret) return toast("未能读取已保存的密钥，请重试");
+        resumeAPI();
+      } finally {
+        if (restore.isConnected) {
+          restore.disabled = false;
+          restore.textContent = "恢复已保存的密钥";
+        }
+      }
+    }, "primary");
+    body.replaceChildren(el("div", { class: "api-form" }, [
+      el("h3", { text: "恢复 AI 助手" }),
+      el("p", { class: "hint", text: "本机已保存 API 密钥，需要你允许访问钥匙串。" }),
+      restore,
+      button("使用新密钥", renderForm),
+    ]));
+  }).catch((error) => {
+    if (!active()) return;
+    renderForm();
+    toast(error.message);
+  });
 }
 function renderChat() {
   const body = $("#questionBody");

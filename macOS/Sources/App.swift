@@ -13,17 +13,54 @@ func trusted(_ u: URL) -> Bool {
     guard u.scheme == "https", u.user == nil, u.password == nil, u.port == nil || u.port == 443, let h = u.host?.lowercased() else { return false }
     return ["zju.edu.cn", "chinamcloud.com", "chinamcloud.cn", "chinamcache.com"].contains { h == $0 || h.hasSuffix("." + $0) }
 }
-func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,onError:((OSStatus)->Void)?=nil)->Data?{
-    let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:"cn.suike.slides.mac",kSecAttrAccount as String:name]
-    if remove{let status=SecItemDelete(query as CFDictionary);if status != errSecSuccess && status != errSecItemNotFound{onError?(status)};return nil}
-    if let data=data{
-        var status=SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary)
-        if status==errSecItemNotFound{var add=query;add[kSecValueData as String]=data;add[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;status=SecItemAdd(add as CFDictionary,nil)}
-        guard status==errSecSuccess else{onError?(status);return nil};return data
+// Serial callers suppress UI only for one background operation and restore the
+// process policy afterwards. This does not change an item's ACL or signing rule.
+func withKeychainInteractionPolicy<T>(allowUI:Bool,get:()throws->Bool,set:(Bool)throws->Void,operation:()throws->T)throws->T{
+    if allowUI{return try operation()}
+    let prior=try get();defer{if prior{try? set(prior)}};if prior{try set(false)};return try operation()
+}
+func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=false,onError:((OSStatus)->Void)?=nil)->Data?{
+    do{return try withKeychainInteractionPolicy(allowUI:allowUI,get:{
+        var allowed=DarwinBoolean(false);let status=SecKeychainGetUserInteractionAllowed(&allowed);guard status==errSecSuccess else{throw appError("钥匙串策略不可读",code:Int(status))};return allowed.boolValue
+    },set:{allowed in
+        let status=SecKeychainSetUserInteractionAllowed(allowed);guard status==errSecSuccess else{throw appError("钥匙串交互策略不可设置",code:Int(status))}
+    },operation:{
+        let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:"cn.suike.slides.mac",kSecAttrAccount as String:name]
+        if remove{let status=SecItemDelete(query as CFDictionary);if status != errSecSuccess && status != errSecItemNotFound{onError?(status)};return nil}
+        if let data=data{
+            var status=SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary)
+            if status==errSecItemNotFound{
+                var add=query;add[kSecValueData as String]=data;add[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+                add[kSecAttrLabel as String]=name=="cookies" ? "智云助手 · 智云课堂会话":name=="identity" ? "智云助手 · 账号信息":"智云助手 · DeepSeek API密钥"
+                add[kSecAttrDescription as String]=name=="cookies" ? "恢复课堂登录会话，不保存校园密码":name=="identity" ? "恢复账号和本机学习入口":"用于课程问答和本页速览"
+                status=SecItemAdd(add as CFDictionary,nil)
+            }
+            guard status==errSecSuccess else{onError?(status);return nil};return data
+        }
+        var lookup=query;lookup[kSecReturnData as String]=true;lookup[kSecMatchLimit as String]=kSecMatchLimitOne
+        var output:CFTypeRef?;let status=SecItemCopyMatching(lookup as CFDictionary,&output)
+        guard status==errSecSuccess else{if status != errSecItemNotFound{onError?(status)};return nil};return output as? Data
+    })}catch{onError?(OSStatus((error as NSError).code));return nil}
+}
+final class KeychainMemoryCache {
+    typealias Backend=(String,Data?,Bool,Bool,@escaping(OSStatus)->Void)->Data?
+    private let backend:Backend
+    private var values=[String:Data](),loaded=Set<String>(),blocked=[String:OSStatus](),failedWrites=[String:Data]()
+    init(backend:@escaping Backend){self.backend=backend}
+    func requiresAuthorization(_ names:[String])->Bool{names.contains{blocked[$0] != nil}}
+    func invalidate(){values.removeAll();loaded.removeAll();blocked.removeAll();failedWrites.removeAll()}
+    func access(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=false,onError:((OSStatus)->Void)?=nil)->Data?{
+        if !remove,let data=data,loaded.contains(name),values[name]==data,blocked[name]==nil{return data}
+        if !remove,data==nil,loaded.contains(name),(!allowUI || blocked[name]==nil){if let error=blocked[name]{onError?(error)};return values[name]}
+        if !allowUI,let error=blocked[name]{onError?(error);return nil}
+        if !remove,!allowUI,let data=data,failedWrites[name]==data{onError?(errSecInteractionNotAllowed);return nil}
+        var failure:OSStatus?;let result=backend(name,data,remove,allowUI){failure=$0}
+        if let status=failure{if status==errSecInteractionNotAllowed || status==errSecAuthFailed || status==errSecUserCanceled{blocked[name]=status};onError?(status)}
+        if remove{values.removeValue(forKey:name);loaded.insert(name);if failure==nil{blocked.removeValue(forKey:name)};failedWrites.removeValue(forKey:name);return nil}
+        if data==nil{loaded.insert(name);values[name]=result;if failure==nil{blocked.removeValue(forKey:name);failedWrites.removeValue(forKey:name)};return result}
+        guard let result=result else{failedWrites[name]=data;return nil}
+        loaded.insert(name);values[name]=result;blocked.removeValue(forKey:name);failedWrites.removeValue(forKey:name);return result
     }
-    var lookup=query;lookup[kSecReturnData as String]=true;lookup[kSecMatchLimit as String]=kSecMatchLimitOne
-    var output:CFTypeRef?;let status=SecItemCopyMatching(lookup as CFDictionary,&output)
-    guard status==errSecSuccess else{if status != errSecItemNotFound{onError?(status)};return nil};return output as? Data
 }
 // Cookie rows are deliberately explicit: JSON cannot encode HTTPCookie's Date/URL
 // properties directly. Session cookies remain session cookies when restored; keeping
@@ -48,14 +85,14 @@ func cookieApplies(_ cookie:HTTPCookie,to url:URL,now:Date=Date())->Bool {
     return url.path==cookie.path || url.path.hasPrefix(cookie.path.hasSuffix("/") ? cookie.path:cookie.path+"/")
 }
 func encodedCookies(_ cookies:[HTTPCookie],now:Date=Date())throws->Data {
-    let rows=cookies.filter{trustedCookieDomain($0.domain) && ($0.expiresDate==nil || $0.expiresDate!>now)}.prefix(2048).map{cookie -> [String:Any] in
+    let rows=cookies.filter{trustedCookieDomain($0.domain) && ($0.expiresDate==nil || $0.expiresDate!>now)}.sorted{($0.domain,$0.path,$0.name)<($1.domain,$1.path,$1.name)}.prefix(2048).map{cookie -> [String:Any] in
         var row:[String:Any]=["name":cookie.name,"value":cookie.value,"domain":cookie.domain,"path":cookie.path,"secure":cookie.isSecure,"httpOnly":cookie.isHTTPOnly,"sessionOnly":cookie.isSessionOnly,"version":cookie.version]
         if let date=cookie.expiresDate{row["expires"]=date.timeIntervalSince1970}
         if let sameSite=cookie.properties?[HTTPCookiePropertyKey(rawValue:"SameSite")] as? String{row["sameSite"]=sameSite}
         if let ports=cookie.portList{row["ports"]=ports.map{String(describing:$0)}.joined(separator:",")}
         return row
     }
-    let data=try JSONSerialization.data(withJSONObject:rows);guard data.count<=2*1024*1024 else{throw appError("登录会话数据过大")};return data
+    let data=try JSONSerialization.data(withJSONObject:rows,options:.sortedKeys);guard data.count<=2*1024*1024 else{throw appError("登录会话数据过大")};return data
 }
 func decodedCookies(_ data:Data,now:Date=Date())->[HTTPCookie] {
     guard data.count<=2*1024*1024,let rows=try? JSONSerialization.jsonObject(with:data) as? [[String:Any]],rows.count<=2048 else{return []}
@@ -219,6 +256,17 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     let storageQueue=DispatchQueue(label:"cn.suike.mac.storage",qos:.utility)
     var loggingOut=false, lastWebRecovery=Date.distantPast
     var sessionNeedsResume=false
+    private var latestCookieSnapshot:Data?
+    private var cookieRestoreStarted=false,cookieRestoreComplete=false,cookieRestoreCallbacks=[()->Void](),credentialUIAllowed=false
+    private var accountGeneration=UUID()
+    private var pendingAI=Set<String>(),cancelledAI=Set<String>()
+    lazy var credentialCache=KeychainMemoryCache{[unowned self] name,data,remove,allowUI,onError in
+        #if NATIVE_CONTRACT_TESTS
+        if let operation=self.testKeychainOperation{return operation(name,data,remove,allowUI,onError)}
+        if let storage=self.testSessionKeychain{return storage(name,data,remove)}
+        #endif
+        return keychain(name,data,remove:remove,allowUI:allowUI,onError:onError)
+    }
     private var sessionWeb:WKWebView?,sessionCallbacks=[(Bool)->Void](),sessionDeadline:DispatchWorkItem?,sessionLastAttempt=Date.distantPast,sessionGeneration=UUID()
     private var toolbarName="",toolbarLoggedIn=false
     var mainToolbar:NSToolbar?
@@ -234,6 +282,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     var testSkipCookiePersistence=false
     var testSessionBootstrap:((@escaping(Bool)->Void)->Void)?
     var testSessionKeychain:((String,Data?,Bool)->Data?)?
+    var testKeychainOperation:KeychainMemoryCache.Backend?
     #endif
     lazy var root: URL = { let path=fm.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("智云助手 Mac"); try? fm.createDirectory(at:path,withIntermediateDirectories:true); return path }()
     var queue=DispatchQueue(label:"cn.suike.mac.http",qos:.userInitiated)
@@ -244,7 +293,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         web=WKWebView(frame:.zero,configuration:config); web.navigationDelegate=self;web.uiDelegate=self
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1320,height:850),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
         window.isReleasedWhenClosed=false; window.title="智云助手"; window.minSize=NSSize(width:640,height:480); window.contentView=web; window.delegate=self;window.setFrameAutosaveName("StudyMainWindow");if !window.setFrameUsingName("StudyMainWindow"){window.center()};installToolbar();installMouseDragMonitor();window.orderFront(nil)
-        restoreCookies { self.startServer() }
+        startServer();restoreCookies {}
     }
     func installMouseDragMonitor(){
         guard mouseDragMonitor==nil else{return}
@@ -346,7 +395,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         view.callAsyncJavaScript("if (typeof window.zhiyunFlush === 'function') { await window.zhiyunFlush(); } return true;",arguments:[:],in:nil,in:.page){_ in scriptDone()}
     }
     func applicationWillTerminate(_ notification: Notification) { if let monitor=mouseDragMonitor{NSEvent.removeMonitor(monitor)};sessionWeb?.stopLoading();sessionDeadline?.cancel(); downloads.values.forEach { $0.cancel() }; requests.values.forEach{$0.cancel()}; streams.values.forEach { $0.session.invalidateAndCancel() };remoteTransfers.values.forEach{$0.cancel()}; listener?.cancel() }
-    func windowWillClose(_ notification: Notification) { if notification.object as? NSWindow === login { persistCookies(); login=nil; loginWeb=nil } }
+    func windowWillClose(_ notification: Notification) { if notification.object as? NSWindow === login { credentialUIAllowed=false;persistCookies();login=nil;loginWeb=nil } }
     func webView(_ view: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy)->Void) {
         guard let u=navigationAction.request.url else { decisionHandler(.cancel); return }
         if view === web { decisionHandler(u.absoluteString.hasPrefix(origin + "/" + token + "/") || u.scheme == "about" ? .allow : .cancel) }
@@ -413,7 +462,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             guard !self.loggingOut,let url=response.url,trusted(url) else{done();return}
             var headers=[String:String]();for (key,value) in response.allHeaderFields{if let name=key as? String{headers[name]=String(describing:value)}}
             let cookies=HTTPCookie.cookies(withResponseHeaderFields:headers,for:url).filter{trustedCookieDomain($0.domain) && cookieDomainMatches($0,url.host ?? "")}
-            self.installCookies(cookies){self.persistCookies();done()}
+            guard !cookies.isEmpty else{done();return};self.installCookies(cookies){self.persistCookies();done()}
         }
     }
     func installCookies(_ cookies:[HTTPCookie],done:@escaping()->Void){
@@ -421,48 +470,50 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         for cookie in cookies{group.enter();if let expires=cookie.expiresDate,expires<=Date(){store.httpCookieStore.delete(cookie){group.leave()}}else{store.httpCookieStore.setCookie(cookie){group.leave()}}}
         group.notify(queue:.main,execute:done)
     }
-    func sessionKeychain(_ name:String,_ data:Data?=nil,remove:Bool=false,onError:((OSStatus)->Void)?=nil)->Data?{
-        #if NATIVE_CONTRACT_TESTS
-        if let storage=testSessionKeychain{return storage(name,data,remove)}
-        #endif
-        return keychain(name,data,remove:remove,onError:onError)
+    func sessionKeychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=false,onError:((OSStatus)->Void)?=nil)->Data?{
+        dispatchPrecondition(condition:.onQueue(storageQueue))
+        return credentialCache.access(name,data,remove:remove,allowUI:allowUI,onError:onError)
     }
     func hasLogoutMarker()->Bool{fm.fileExists(atPath:logoutMarker(in:root).path)}
     func storedIdentity()->String{
         guard !hasLogoutMarker() else{return ""};return String(data:sessionKeychain("identity") ?? Data(),encoding:.utf8) ?? ""
     }
-    func saveIdentity(_ text:String)throws{
-        guard text.utf8.count<=64*1024,sessionKeychain("identity",Data(text.utf8)) != nil else{throw appError("无法保存登录状态，请检查钥匙串访问授权")}
+    func saveIdentity(_ text:String,allowUI:Bool=false)throws{
+        guard text.utf8.count<=64*1024,sessionKeychain("identity",Data(text.utf8),allowUI:allowUI) != nil else{throw appError("无法保存登录状态，请检查钥匙串访问授权")}
         try removeLogoutMarker(in:root)
     }
     func clearPreparedImages(){imagePreparationGeneration=UUID();preparedDrags.removeAll();preparedDragOrder.removeAll();lastMouseDrag=nil;event("imageDragCacheCleared",true)}
     func performLogout(_ id:String){
-        loggingOut=true;finishSession(false,generation:sessionGeneration);sessionNeedsResume=false;clearPreparedImages();updateToolbar(name:"",loggedIn:false)
+        loggingOut=true;accountGeneration=UUID();credentialUIAllowed=false;cancelledAI.formUnion(pendingAI);finishSession(false,generation:sessionGeneration);sessionNeedsResume=false;clearPreparedImages();updateToolbar(name:"",loggedIn:false)
         for operation in pendingRequests{cancelledRequests.insert(operation)};for operation in pendingDownloads.keys{cancelledDownloads.insert(operation)}
         requests.values.forEach{$0.cancel()};requests.removeAll();downloads.values.forEach{$0.cancel()};streams.values.forEach{$0.session.invalidateAndCancel()};login?.close()
         store.httpCookieStore.getAllCookies{cookies in
             let group=DispatchGroup();for cookie in cookies{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}}
             group.notify(queue:.main){self.storageQueue.async{
                 let error={(status:OSStatus) in self.diagnostic("Session keychain removal failed: "+String(status))}
-                _=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error)
+                _=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error);self.credentialCache.invalidate();self.latestCookieSnapshot=nil
                 DispatchQueue.main.async{self.account="guest";self.reply(id,true)}
             }}
         }
     }
     func restoreCookies(_ done:@escaping()->Void){
-        storageQueue.async{let data=self.hasLogoutMarker() ? Data():(self.sessionKeychain("cookies") ?? Data());DispatchQueue.main.async{self.restoreCookies(from:data,done:done)}}
+        if cookieRestoreComplete{done();return};cookieRestoreCallbacks.append(done);guard !cookieRestoreStarted else{return};cookieRestoreStarted=true
+        storageQueue.async{let data=self.hasLogoutMarker() ? Data():(self.sessionKeychain("cookies") ?? Data());self.latestCookieSnapshot=data.isEmpty ? nil:data;DispatchQueue.main.async{self.restoreCookies(from:data){
+            self.cookieRestoreComplete=true;let callbacks=self.cookieRestoreCallbacks;self.cookieRestoreCallbacks.removeAll();callbacks.forEach{$0()}
+        }}}
     }
     func restoreCookies(from data:Data,done:@escaping()->Void){
-        let cookies=hasLogoutMarker() ? []:decodedCookies(data);sessionNeedsResume = !cookies.isEmpty;installCookies(cookies,done:done)
+        let cookies=hasLogoutMarker() ? []:decodedCookies(data);sessionNeedsResume = !cookies.isEmpty;installCookies(cookies){self.cookieRestoreComplete=true;done()}
     }
     func persistCookies(_ done:(()->Void)?=nil){
         guard !loggingOut,!hasLogoutMarker() else{done?();return}
         #if NATIVE_CONTRACT_TESTS
         if testSkipCookiePersistence{done?();return}
         #endif
+        let allowUI=credentialUIAllowed
         store.httpCookieStore.getAllCookies{cookies in
             guard !self.loggingOut,let data=try? encodedCookies(cookies) else{done?();return}
-            self.storageQueue.async{if !self.loggingOut{_=self.sessionKeychain("cookies",data,onError:{status in self.diagnostic("Cookie keychain save failed: "+String(status))})};DispatchQueue.main.async{done?()}}
+            self.storageQueue.async{if !self.loggingOut{self.latestCookieSnapshot=data;_=self.sessionKeychain("cookies",data,allowUI:allowUI,onError:{status in self.diagnostic("Cookie keychain save failed: "+String(status))})};DispatchQueue.main.async{done?()}}
         }
     }
     func cookieRequest(_ url:URL,body:String="",range:String?=nil,done:@escaping(URLRequest)->Void){
@@ -480,6 +531,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     // local identity/offline files intact. All callers share one bounded handshake.
     func resumeOfficialSession(force:Bool=false,done:@escaping(Bool)->Void){
         guard !loggingOut else{done(false);return}
+        guard cookieRestoreComplete else{restoreCookies{self.resumeOfficialSession(force:force,done:done)};return}
         if !sessionCallbacks.isEmpty{sessionCallbacks.append(done);return}
         if !force && !sessionNeedsResume{done(true);return}
         if force && Date().timeIntervalSince(sessionLastAttempt)<15{done(false);return}
@@ -495,6 +547,16 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     private func finishSession(_ ready:Bool,generation:UUID){
         guard sessionGeneration==generation,!sessionCallbacks.isEmpty else{return};sessionDeadline?.cancel();sessionDeadline=nil;sessionWeb?.stopLoading();sessionWeb?.navigationDelegate=nil;sessionWeb?.uiDelegate=nil;sessionWeb=nil
         let callbacks=sessionCallbacks;sessionCallbacks.removeAll();if ready{persistCookies()};callbacks.forEach{$0(ready && !loggingOut)}
+    }
+    func requiresSessionRecovery(_ done:@escaping(Bool)->Void){
+        storageQueue.async{let protected=self.credentialCache.requiresAuthorization(["cookies"])
+            DispatchQueue.main.async{
+                guard protected else{done(false);return}
+                // Persistent storage permission is not online course permission. A
+                // newly authenticated official WebKit session must remain usable.
+                self.store.httpCookieStore.getAllCookies{done(campusBearer($0)==nil)}
+            }
+        }
     }
     func performCourseRequest(_ id:String,url:URL,body:String,retried:Bool=false){
         pendingRequests.insert(id);cookieRequest(url,body:body){request in
@@ -552,27 +614,34 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         case "resumeSession": resumeOfficialSession{ready in self.reply(id,["ready":ready])}
         case "request":
             guard let url=URL(string:p["url"] as? String ?? ""),trusted(url),["classroom.zju.edu.cn","interactivemeta.cmc.zju.edu.cn"].contains(url.host ?? "") else{reply(id,nil,"不受支持的课程地址");return}
-            pendingRequests.insert(id);resumeOfficialSession{_ in
-                self.pendingRequests.remove(id);guard self.cancelledRequests.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
-                self.performCourseRequest(id,url:url,body:p["body"] as? String ?? "")
+            pendingRequests.insert(id);restoreCookies{
+                self.requiresSessionRecovery{blocked in
+                    guard self.cancelledRequests.remove(id)==nil,!self.loggingOut else{self.pendingRequests.remove(id);self.reply(id,nil,"请求已取消");return}
+                    if blocked{self.pendingRequests.remove(id);self.reply(id,["status":401,"text":"{\"code\":401,\"message\":\"请恢复保存的登录；本机学习资料仍可使用\"}"]);return}
+                    self.resumeOfficialSession{_ in
+                        self.pendingRequests.remove(id);guard self.cancelledRequests.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
+                        self.performCourseRequest(id,url:url,body:p["body"] as? String ?? "")
+                    }
+                }
             }
         case "cancelRequest":
             if let target=p["id"] as? String,pendingRequests.contains(target) || requests[target] != nil{cancelledRequests.insert(target);requests[target]?.cancel()};reply(id,true)
         case "login":
-            loggingOut=false
+            loggingOut=false;credentialUIAllowed=true
             if let login=login { login.makeKeyAndOrderFront(nil); reply(id,true); return }
             let config=WKWebViewConfiguration(); config.websiteDataStore=store
             let view=WKWebView(frame:.zero,configuration:config); view.navigationDelegate=self;view.uiDelegate=self; loginWeb=view
             let w=NSWindow(contentRect:NSRect(x:0,y:0,width:980,height:730),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false); w.isReleasedWhenClosed=false; w.title="登录智云课堂 · 浙江大学官方认证"; w.contentView=view; w.delegate=self; w.center(); w.makeKeyAndOrderFront(nil); login=w
             view.load(URLRequest(url:URL(string:"https://classroom.zju.edu.cn/")!)); reply(id,true)
-        case "loginDone": sessionNeedsResume=false;sessionLastAttempt = .distantPast;persistCookies();login?.close();reply(id,true)
+        case "loginDone": sessionNeedsResume=false;sessionLastAttempt = .distantPast;persistCookies{self.credentialUIAllowed=false;self.login?.close();self.reply(id,true)}
         case "logout":
             // Persist the explicit intent first. Even a refused Keychain deletion must
             // not resurrect the prior account or cookies on the next launch.
             storageQueue.async{do{try writeLogoutMarker(in:self.root);DispatchQueue.main.async{self.performLogout(id)}}catch{self.reply(id,nil,"无法保存退出状态，请重试")}}
         case "identity":
-            storageQueue.async{if let text=p["text"] as? String{do{try self.saveIdentity(text);self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}}else{self.reply(id,self.storedIdentity())}}
-        case "account": let next=digest(p["id"] as? String ?? "guest");if next != account{clearPreparedImages()};account=next;reply(id,true)
+            let allowUI=credentialUIAllowed
+            storageQueue.async{if let text=p["text"] as? String{do{try self.saveIdentity(text,allowUI:allowUI);self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}}else{self.reply(id,self.storedIdentity())}}
+        case "account": let next=digest(p["id"] as? String ?? "guest");if next != account{accountGeneration=UUID();clearPreparedImages()};account=next;reply(id,true)
         case "read":
             guard let key=p["key"] as? String,safeKey(key) else{reply(id,nil,"文件名无效");return}
             let cached=p["cache"] as? Bool == true,enabled=cacheSettings()[cacheCategory(key)] != false,path=scoped(cached ? "cache":"data").appendingPathComponent(key)
@@ -583,11 +652,19 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let cached=p["cache"] as? Bool == true,enabled=cacheSettings()[cacheCategory(key)] != false,path=scoped(cached ? "cache":"data").appendingPathComponent(key)
             if cached && !enabled{reply(id,true);return}
             storageQueue.async{do{try self.fm.createDirectory(at:path.deletingLastPathComponent(),withIntermediateDirectories:true);try text.write(to:path,atomically:true,encoding:.utf8);self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}}
+        case "keychainStatus":
+            let name=account+"-deepseek";storageQueue.async{
+                let session=self.credentialCache.requiresAuthorization(["cookies","identity"]),api=self.credentialCache.requiresAuthorization([name])
+                self.reply(id,["authorizationRequired":session || api,"sessionAuthorizationRequired":session,"apiAuthorizationRequired":api])
+            }
+        case "authorizeCredentials": authorizeCredentials(id,purpose:p["purpose"] as? String ?? ((p["scope"] as? String)=="secret" ? "api":"session"))
         case "secret":
-            let name=account+"-deepseek"
-            if p["remove"] as? Bool == true{var failure:OSStatus?;_=keychain(name,remove:true,onError:{failure=$0});if failure != nil{reply(id,nil,"无法移除密钥，请检查钥匙串访问授权")}else{reply(id,true)}}
-            else if let text=p["text"] as? String{guard keychain(name,Data(text.utf8)) != nil else{reply(id,nil,"无法保存密钥，请检查钥匙串访问授权");return};reply(id,true)}
-            else{reply(id,String(data:keychain(name) ?? Data(),encoding:.utf8) ?? "")}
+            let name=account+"-deepseek",owner=account,generation=accountGeneration
+            storageQueue.async{
+                if p["remove"] as? Bool == true{var failure:OSStatus?;_=self.sessionKeychain(name,remove:true,allowUI:true,onError:{failure=$0});if failure != nil{self.reply(id,nil,"无法移除密钥，请检查钥匙串访问授权")}else{self.reply(id,true)}}
+                else if let text=p["text"] as? String{guard self.sessionKeychain(name,Data(text.utf8),allowUI:true) != nil else{self.reply(id,nil,"无法保存密钥，请检查钥匙串访问授权");return};self.reply(id,true)}
+                else{let text=String(data:self.sessionKeychain(name) ?? Data(),encoding:.utf8) ?? "";DispatchQueue.main.async{guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return};self.reply(id,text)}}
+            }
         case "cache":
             let cache=scoped("cache"),images=scoped("images"),settingsFile=scoped("data").appendingPathComponent("cache-settings.json"),known=["schedule","timeline","vision","summary","question","skip","images"]
             var settings=cacheSettings()
@@ -689,12 +766,40 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 }
             }
         case "ai": startAI(id,p)
-        case "cancelAI": if let key=p["id"] as? String { streams[key]?.session.invalidateAndCancel() }; reply(id,true)
+        case "cancelAI": if let key=p["id"] as? String { if pendingAI.contains(key){cancelledAI.insert(key)};streams[key]?.session.invalidateAndCancel() };reply(id,true)
         default: reply(id,nil,"未知操作")
         }
     }
-    func startAI(_ id:String,_ params:[String:Any]) {
-        guard let key=String(data:keychain(account+"-deepseek") ?? Data(),encoding:.utf8),!key.isEmpty, let messages=params["messages"] as? [[String:Any]],messages.count<100 else { reply(id,nil,"请先设置 DeepSeek API 密钥"); return }
+    func authorizeCredentials(_ id:String,purpose:String){
+        guard ["session","api"].contains(purpose) else{reply(id,nil,"恢复目标无效");return};let owner=account,generation=accountGeneration
+        storageQueue.async{
+            if purpose=="api"{
+                let name=owner+"-deepseek",data=self.sessionKeychain(name,allowUI:true),required=self.credentialCache.requiresAuthorization([name])
+                DispatchQueue.main.async{guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return};self.reply(id,["ready":data?.isEmpty==false,"authorizationRequired":required])};return
+            }
+            guard !self.hasLogoutMarker() else{self.reply(id,["ready":false,"authorizationRequired":false]);return}
+            var failure:OSStatus?;let identity=self.sessionKeychain("identity",allowUI:true,onError:{failure=$0})
+            if failure != nil{self.reply(id,["ready":false,"authorizationRequired":true]);return}
+            let persisted=self.sessionKeychain("cookies",allowUI:true),cookies=self.latestCookieSnapshot ?? persisted,required=self.credentialCache.requiresAuthorization(["identity","cookies"])
+            if let cookies=cookies,!required{_=self.sessionKeychain("cookies",cookies,allowUI:true)}
+            DispatchQueue.main.async{
+                guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
+                self.restoreCookies(from:cookies ?? Data()){self.reply(id,["ready":identity?.isEmpty==false,"authorizationRequired":required])}
+            }
+        }
+    }
+    func startAI(_ id:String,_ params:[String:Any]){
+        guard let messages=params["messages"] as? [[String:Any]],messages.count<100 else{reply(id,nil,"问答内容无效");return}
+        let owner=account,generation=accountGeneration;pendingAI.insert(id)
+        storageQueue.async{let key=String(data:self.sessionKeychain(owner+"-deepseek") ?? Data(),encoding:.utf8) ?? "",required=self.credentialCache.requiresAuthorization([owner+"-deepseek"])
+            DispatchQueue.main.async{
+                self.pendingAI.remove(id);guard !self.loggingOut,owner==self.account,generation==self.accountGeneration,self.cancelledAI.remove(id)==nil else{self.reply(id,nil,"请求已取消");return}
+                guard !key.isEmpty else{self.reply(id,nil,required ? "请在API设置中恢复已保存的密钥":"请先设置 DeepSeek API 密钥");return}
+                self.startAIWithKey(id,params:params,messages:messages,key:key)
+            }
+        }
+    }
+    private func startAIWithKey(_ id:String,params:[String:Any],messages:[[String:Any]],key:String){
         let hasImages=messages.contains{message in (message["content"] as? [[String:Any]])?.contains{part in part["type"] as? String=="image_url"} == true}
         guard let model=resolvedDeepSeekModel(params["model"] as? String ?? "deepseek-flash",hasImages:hasImages) else{reply(id,nil,"模型不支持");return}
         var req=URLRequest(url:URL(string:"https://api.deepseek.com/chat/completions")!); req.httpMethod="POST"; req.setValue("Bearer "+key,forHTTPHeaderField:"Authorization"); req.setValue("application/json",forHTTPHeaderField:"Content-Type"); var body:[String:Any]=["model":model,"messages":messages,"stream":true,"max_tokens":4096,"thinking":["type":"disabled"],"stream_options":["include_usage":true]];if let tools=params["tools"] as? [[String:Any]],tools.count<=4 {body["tools"]=tools};req.httpBody=try? JSONSerialization.data(withJSONObject:body)

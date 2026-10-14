@@ -58,12 +58,13 @@ final class SmokeServer {
     }
 }
 @main struct WebKitAppSmoke {
-    static func mockBridge(course:[String:Any])->String{
+    static func mockBridge(course:[String:Any],requireAuthorization:Bool=false)->String{
         let json=String(data:try! JSONSerialization.data(withJSONObject:course),encoding:.utf8)!
+        let requires=requireAuthorization ? "true":"false"
         return #"""
         (()=>{
-          const course=\#(json), listeners=new Map(), files=new Map(), operations=new Map();let sequence=0,secret='';
-          window.__smoke={errors:[],requests:[],calls:[],store:files,aiCalls:0,status:'loading',checks:[],clipboard:null,confirms:[]};const originalConfirm=window.confirm;window.confirm=(message)=>{const value=originalConfirm(message);window.__smoke.confirms.push({message,value});return value};const originalPrompt=window.prompt;window.prompt=(...args)=>{const value=originalPrompt(...args);window.__smoke.lastPrompt=value;return value};
+          const course=\#(json), listeners=new Map(), files=new Map(), operations=new Map(),authorizationScenario=\#(requires);let sequence=0,sessionAuthorizationRequired=authorizationScenario,apiAuthorizationRequired=authorizationScenario,secret=authorizationScenario?'sk-synthetic-saved-only-key-123456':'';
+          window.__smoke={errors:[],requests:[],calls:[],store:files,aiCalls:0,status:'loading',checks:[],clipboard:null,confirms:[],authorizationScenario,authorizations:[],secretWrites:0};const originalConfirm=window.confirm;window.confirm=(message)=>{const value=originalConfirm(message);window.__smoke.confirms.push({message,value});return value};const originalPrompt=window.prompt;window.prompt=(...args)=>{const value=originalPrompt(...args);window.__smoke.lastPrompt=value;return value};
           window.addEventListener('error',e=>{if(e.message)window.__smoke.errors.push(e.message)});
           window.addEventListener('unhandledrejection',e=>window.__smoke.errors.push(String(e.reason?.stack||e.reason)));
           const seed=(k,v)=>files.set(k,JSON.stringify(v));
@@ -90,12 +91,14 @@ final class SmokeServer {
           window.native={
             call(action,params={}){const id='fixture-'+(++sequence);window.__smoke.calls.push(action);const promise=new Promise((resolve,reject)=>queueMicrotask(()=>{try{let value=true;
               switch(action){
-                case'identity':value=params.text!==undefined?true:JSON.stringify({id:'synthetic-account',name:'本机测试',tenantId:112,username:'synthetic'});break;
+                case'identity':value=params.text!==undefined?true:sessionAuthorizationRequired?'':JSON.stringify({id:'synthetic-account',name:'本机测试',tenantId:112,username:'synthetic'});break;
+                case'keychainStatus':value={authorizationRequired:sessionAuthorizationRequired||apiAuthorizationRequired,sessionAuthorizationRequired,apiAuthorizationRequired};break;
+                case'authorizeCredentials':window.__smoke.authorizations.push(params.purpose);if(params.purpose==='api')apiAuthorizationRequired=false;else sessionAuthorizationRequired=false;value={ready:true,authorizationRequired:false};break;
                 case'account':case'loginDone':case'cancelRequest':case'cancelDownload':case'cancelAI':case'logout':break;
                 case'toolbar':window.fixtureToolbar={...params};break;
                 case'read':value=files.get(params.key)||'';break;
                 case'write':files.set(params.key,params.text);break;
-                case'secret':if(params.remove)secret='';else if(params.text!==undefined)secret=params.text;value=secret;break;
+                case'secret':if(params.remove)secret='';else if(params.text!==undefined){secret=params.text;apiAuthorizationRequired=false;window.__smoke.secretWrites++}value=apiAuthorizationRequired?'':secret;break;
                 case'request':value={status:200,text:JSON.stringify(response(params.url,params.body))};break;
                 case'ai':window.__smoke.aiCalls++;value={answer:'**Synthetic course explanation**\n\nThe concept at 00:21 follows the introduction.',calls:[],usage:{prompt_tokens:32,prompt_cache_hit_tokens:16,completion_tokens:12}};queueMicrotask(()=>window.native.event({name:'ai',value:{id,delta:value.answer}}));break;
                 case'saveNoteImage':if(!params.data?.startsWith('data:image/png;base64,'))throw new Error('Unmocked fixture image format');value='note-assets/'+'a'.repeat(64)+'.png';break;
@@ -124,6 +127,7 @@ final class SmokeServer {
       function assert(value,label){if(!value)throw new Error(label);window.__smoke.checks.push(label)}
       function click(text,root=document){const b=[...root.querySelectorAll('button')].find(n=>n.textContent.trim().replace(/^✓\s*/,'')===text);if(!b)throw new Error('Missing button: '+text);b.click();return b}
       const modal=()=>q('#modal');
+      if(window.__smoke.authorizationScenario){await until(()=>qa('.welcome button').some(button=>button.textContent==='恢复登录'),'explicit saved-session recovery');assert(window.__smoke.requests.length===0&&window.__smoke.authorizations.length===0,'protected login does not probe guest APIs or automatically request keychain authorization');click('恢复登录',q('.welcome'));await until(()=>window.fixtureToolbar?.loggedIn,'restored native toolbar');assert(window.__smoke.authorizations.length===1&&window.__smoke.authorizations[0]==='session','saved login restored by one explicit session authorization')}
       await until(()=>q('#pageTitle')?.textContent==='我的课堂','initial classroom');
       await until(()=>window.fixtureToolbar?.name==='本机测试'&&window.fixtureToolbar.loggedIn,'synthetic native toolbar identity');assert(window.fixtureToolbar.name==='本机测试'&&window.fixtureToolbar.loggedIn,'synthetic identity synchronized to native toolbar');assert(!q('#appHeader')&&!q('#identity')&&!q('#myClassHome'),'browser header does not reserve a duplicate native title bar');
       click('近两周');await until(()=>q('.course-card'),'recent course card');
@@ -167,8 +171,8 @@ final class SmokeServer {
       await until(()=>qa('.overview-item').length===3,'overview slide count');const before=q('.overview-grid').style.getPropertyValue('--cols');click('＋',q('#modalToolbar'));await until(()=>q('.overview-grid').style.getPropertyValue('--cols')!==before,'overview zoom');assert(q('.overview-grid').style.getPropertyValue('--cols')!==before,'overview zoom updates grid');q('#modalClose').click();
       click('跳转时间',q('#studyTools'));await until(()=>q('#modalTitle').textContent.includes('时间'),'time chooser');const wheels=qa('#modalBody .time-wheels input[type=number]');assert(wheels.length===3&&wheels.map(n=>n.getAttribute('aria-label')).join(',')==='时,分,秒','time chooser renders three labelled numeric wheels');const secondsBefore=Number(wheels[2].value);wheels[2].dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:-20}));assert(Number(wheels[2].value)===Math.min(59,secondsBefore+1),'mouse wheel increments time choice');wheels.forEach(n=>{n.value='9999';n.dispatchEvent(new Event('input',{bubbles:true}))});assert(q('#modalBody h3').textContent==='05:00'&&wheels.every(n=>Number(n.value)<=Number(n.max))&&Number(wheels[0].value)*3600+Number(wheels[1].value)*60+Number(wheels[2].value)===300,'time jump clamps selection to synthetic course duration');q('#modalClose').click();
       click('跳转页数',q('#studyTools'));await until(()=>q('#modalTitle').textContent.includes('页'),'page chooser');assert(qa('#modalBody button').length>0||qa('#modalBody input').length>0,'page chooser controls');q('#modalClose').click();
-      const question=q('[data-pane=question]');click('API设置',question);await until(()=>q('#questionBody input[type=password]'),'API settings');const key=q('#questionBody input');key.value='sk-synthetic-local-only-key-123456';click('保存密钥',question);await until(()=>q('#questionBody').textContent.includes('Enter'),'saved API opens conversation');
-      const input=q('#questionInput');input.focus();input.value='First line';const newline=new KeyboardEvent('keydown',{key:'Enter',code:'Enter',shiftKey:true,bubbles:true,cancelable:true});input.dispatchEvent(newline);assert(window.__smoke.aiCalls===0&&!newline.defaultPrevented,'Shift Enter preserves native newline without sending');
+      const question=q('[data-pane=question]');if(window.__smoke.authorizationScenario){await until(()=>qa('#questionBody button').some(button=>button.textContent==='恢复已保存的密钥'),'explicit saved API recovery');assert(!q('#questionBody input[type=password]'),'protected saved API is not mistaken for a missing key');const noteEditor=q('.notes-editor'),player=q('#videoBody video'),requestCount=window.__smoke.requests.length;click('恢复已保存的密钥',question);await until(()=>q('#questionBody').textContent.includes('Shift＋Enter')&&!q('.question-options').hidden,'recovered API conversation');assert(q('.notes-editor')===noteEditor&&q('#videoBody video')===player&&q('#stage'),'API authorization preserves the existing study panes and note editor');assert(window.__smoke.requests.length===requestCount&&window.__smoke.secretWrites===0,'API recovery does not reboot the course or overwrite the saved key');assert(window.__smoke.authorizations.filter(value=>value==='api').length===1,'saved API restored by one explicit API authorization')};click('API设置',question);await until(()=>q('#questionBody input[type=password]'),'API settings');const key=q('#questionBody input');key.value='sk-synthetic-local-only-key-123456';click(window.__smoke.authorizationScenario?'保存新密钥':'保存密钥',question);await until(()=>q('#questionBody').textContent.includes('Enter'),'saved API opens conversation');
+      const input=q('#questionInput');input.focus();input.value='First line';const callsBeforeNewline=window.__smoke.aiCalls,newline=new KeyboardEvent('keydown',{key:'Enter',code:'Enter',shiftKey:true,bubbles:true,cancelable:true});input.dispatchEvent(newline);assert(window.__smoke.aiCalls===callsBeforeNewline&&!newline.defaultPrevented&&input.value==='First line'&&!q('#questionBody .question'),'Shift Enter preserves native newline without sending');
       input.value='Synthetic course question';input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true,cancelable:true}));await until(()=>q('#questionBody .answer')?.textContent.includes('Synthetic course explanation'),'Enter sends question and streams answer');
       assert(q('#questionBody .question').textContent==='Synthetic course question','question retained with its answer');assert(qa('#questionBody .answer span').some(n=>Number(getComputedStyle(n).fontWeight)>=600),'AI Markdown bold formatted in actual WebKit');
       click('API设置',question);await until(()=>q('#questionBody input[type=password]'),'open configured API settings');click('返回对话',question);await until(()=>q('#questionBody .conversation'),'API settings return');assert(q('#questionBody .conversation'),'return from API settings keeps conversation');
@@ -190,7 +194,7 @@ final class SmokeServer {
         app.testDialogResponder={kind,message,_ in fputs("Native fixture dialog: "+kind+" "+message+"\n",stderr);return kind=="confirm" ? "true":kind=="prompt" ? "重命名测试":nil}
         let start=Int(Date().timeIntervalSince1970)-900
         let course:[String:Any]=["courseId":"synthetic-course","subId":"synthetic-lesson","title":"合成本机测试课","teacher":"合成教师","room":"测试教室","term":"2026—2027学年 · 秋季学期","start":start,"end":start+300,"status":"3"]
-        let server=SmokeServer(app:app,root:webRoot,video:video,bridge:mockBridge(course:course));var listening=false
+        let server=SmokeServer(app:app,root:webRoot,video:video,bridge:mockBridge(course:course,requireAuthorization:true));var listening=false
         try server.start{app.origin=server.origin;view.load(URLRequest(url:URL(string:server.origin+"/fixture/index.html")!));listening=true}
         try smokeWait({listening});try smokeWait({!view.isLoading});_ = try smokeEvaluate(view,runner)
         let deadline=Date().addingTimeInterval(75);var state="running"

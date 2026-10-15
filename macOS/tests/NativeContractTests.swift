@@ -120,12 +120,27 @@ final class SyntheticCourseProtocol:URLProtocol {
         // Actual native toolbar appears in the title bar, independently of HTML.
         var toolbarSynced=false;view.callAsyncJavaScript("return await window.callBridge('toolbar',{name:'测试姓名',loggedIn:true});",arguments:[:],in:nil,in:.page){_ in toolbarSynced=true};try waitUntil({toolbarSynced})
         let loggedItems=app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}
-        check(loggedItems==["brand","NSToolbarFlexibleSpaceItem","name","home","privacy","logout"],"signed-in native title bar contains identity and three actions")
+        check(loggedItems==["brand","NSToolbarFlexibleSpaceItem","name","home","theme","privacy","logout"],"signed-in native title bar contains identity, theme and account actions")
         check((app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue=="name"})?.view as? NSTextField)?.stringValue=="测试姓名","native title bar displays synced user name")
         for key in ["home","privacy","logout"]{(app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue==key})!.view as! NSButton).performClick(nil)}
         var toolbarValues:String?,readToolbar=false;view.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,80));return JSON.stringify(window.toolbarEvents.map(event=>event.value));",arguments:[:],in:nil,in:.page){result in if case .success(let value)=result{toolbarValues=value as? String};readToolbar=true};try waitUntil({readToolbar});check(toolbarValues=="[\"home\",\"privacy\",\"logout\"]","real native toolbar buttons emit string action contract")
-        app.updateToolbar(name:"",loggedIn:false);check(app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}==["brand","NSToolbarFlexibleSpaceItem","privacy"],"signed-out title bar only offers privacy")
+        app.updateToolbar(name:"",loggedIn:false);check(app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}==["brand","NSToolbarFlexibleSpaceItem","theme","privacy"],"signed-out title bar offers theme and privacy")
         check(!window.isVisible,"toolbar synchronization preserves hidden window")
+        let themeSuite="zhiyun-theme-test-"+UUID().uuidString
+        // Use a suite separate from the installed app; switching never touches user preferences.
+        let isolatedThemeDefaults=UserDefaults(suiteName:themeSuite)!
+        app.themeDefaults=isolatedThemeDefaults
+        check(app.selectedTheme=="collage","new theme defaults to bright collage")
+        app.applyTheme("playful")
+        check(app.selectedTheme=="playful","theme selection persisted in native preferences")
+        let restartedThemeApp=App();restartedThemeApp.themeDefaults=UserDefaults(suiteName:themeSuite)!
+        check(restartedThemeApp.selectedTheme=="playful","new app instance restores selected theme")
+        app.applyTheme("invalid-theme")
+        check(app.selectedTheme=="playful","unknown theme cannot alter selection")
+        app.applyTheme("collage")
+        check(app.selectedTheme=="collage","theme can switch back without reloading web view")
+        isolatedThemeDefaults.removePersistentDomain(forName:themeSuite)
+
         // Complete Cookie -> WK store -> encrypted snapshot rows -> new WK store
         // roundtrip, with no real profile, keychain, university or API call.
         let fixtureExpiry=Date().addingTimeInterval(3600),httpOnly=HTTPCookiePropertyKey(rawValue:"HttpOnly"),sameSite=HTTPCookiePropertyKey(rawValue:"SameSite")

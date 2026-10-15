@@ -1,10 +1,12 @@
-# 智云助手 Mac 版
+# 智云助手 Mac 版 1.4.0
 
 原生 macOS 窗口和系统 WebKit，复用鸿蒙版的智云接口、时间线、课件去重、黑边保护、权限、收藏与学习资料模型。1.1.1 修复重启后课程会话恢复，将账号操作移入系统标题栏，学习功能改为单行横向滚动，并补齐课件图片复制、跨应用拖出和全屏翻页。
 
+UI 预览版 1.4.0 重构「晴日拼贴」和「灵感游乐场」两套界面。拼贴版使用侧边导航、纸片概览与双列课程卡片；游乐场采用横向导航、非对称头图、多列课程卡片与底部学习工具托盘。两套应用图标使用透明外缘，去除原白色底圈。在标题栏「我的课堂」与「隐私」之间点击「主题」，选择会保存；运行时 Dock、标题栏与页面图标同步切换。Finder/启动台安装图标为默认拼贴图标。切换时保留编辑器、媒体和用户面板布局。旧编辑部偏好兼容映射到游乐场。此版为预览发布，验证范围见 VERIFICATION.md。
+
 ## 安装
 
-到 [GitHub Releases](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/mac-v1.1.1-preview) 下载 `ZhiyunAssistant-Mac-1.1.1.dmg`，将“智云助手”拖到 Applications。也提供应用 ZIP 和独立源码 ZIP。一个安装包同时包含 Apple Silicon 与 Intel，最低 macOS 13。
+到 [GitHub Releases](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/mac-v1.4.0-preview) 下载 `ZhiyunAssistant-Mac-1.4.0.dmg`，将“智云助手”拖到 Applications。也提供应用 ZIP 和独立源码 ZIP。一个安装包同时包含 Apple Silicon 与 Intel，最低 macOS 13。
 
 当前是预览版，使用 ad-hoc 签名，尚未完成 Apple Developer ID 签名及公证。如果 macOS 阻止打开，请先核对发布中的 SHA256，再通过系统“隐私与安全”确认是否允许此应用。不要关闭系统整体安全保护。
 

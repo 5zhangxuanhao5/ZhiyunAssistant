@@ -61,3 +61,15 @@ test('overview keeps the rail in place, brushes ranges, and disables zoom in sel
   body.dispatchEvent(new f.win.WheelEvent('wheel', { deltaY: 100, ctrlKey: true, cancelable: true })); assert.equal(columns, 4); choosing = false; control.selectionChanged(); assert.deepEqual(selected, []); assert.equal(f.doc.querySelector('.parity-overview-rail'), rail);
   f.advance(500); body.dispatchEvent(new f.win.WheelEvent('wheel', { deltaY: 100, ctrlKey: true, cancelable: true })); assert.equal(columns, 5);
 });
+
+test('theme reflow retains custom arrangement and live note nodes at a new stage size', async t => {
+  const f=await fixture(t),stage=f.doc.querySelector('#stage'),panes={};
+  for(const id of ['slides','notes']){const node=f.doc.createElement('section');node.className='pane';node.innerHTML='<div class="pane-content"><div contenteditable="true">未保存的内容</div></div>';stage.append(node);panes[id]=node;}
+  const control=new f.api.PaneLayoutController({stage,getIds:()=>['slides','notes'],getPanes:()=>panes});t.after(()=>control.dispose());
+  control.change({id:'notes',x:.58,y:.15,w:.4,h:.7,z:5});
+  const original=JSON.stringify(control.rects),editor=panes.notes.querySelector('[contenteditable]');
+  stage.fixtureWidth=900;control.refresh({preserve:true});
+  assert.equal(JSON.stringify(control.rects),original);
+  assert.equal(panes.notes.querySelector('[contenteditable]'),editor);assert.equal(editor.textContent,'未保存的内容');
+  assert.equal(control.key,'notes+slides@900x600');
+});

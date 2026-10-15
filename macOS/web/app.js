@@ -1,3 +1,4 @@
+import "./themes.js";
 import { MacZhiyun } from "./mac-api.js";
 import {
   reusableAttendanceBatch,
@@ -383,6 +384,43 @@ function title(text, sub = "", actions = []) {
   $("#topActions").replaceChildren(...actions);
   renderSessionRecovery();
 }
+const designPaths = {
+ home:'M3 11 12 3l9 8v10H3Z M9 21v-7h6v7',
+ favourite:'m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z',
+ later:'M12 7v5l3 2 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',
+ offline:'M12 3v12m-4-4 4 4 4-4 M4 16v5h16v-5',
+ noteManager:'M5 3h11l3 3v15H5Z M9 10h6m-6 4h6m-6 4h4',
+ cache:'M4 7h16v14H4Z M3 3h18v4H3Z M9 11h6',
+ plaza:'M3 3h7v7H3Z M14 3h7v7h-7Z M3 14h7v7H3Z M14 14h7v7h-7Z',
+ book:'M12 5C8 2 4 3 2 4v15c4-2 7-1 10 1 3-2 6-3 10-1V4c-2-1-6-2-10 1Zm0 0v15',
+};
+function designIcon(name){
+ const span=el("span",{class:"design-icon","aria-hidden":"true"});
+ span.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="'+(designPaths[name]||designPaths.book)+'"/></svg>';
+ return span;
+}
+function courseArtwork(c){
+ const key=String(c.title||'');let tone=0;for(const ch of key)tone=(tone+ch.charCodeAt(0))%4;
+ return el("div",{class:"course-art tone-"+tone,"aria-hidden":"true"},[designIcon('book'),el('span',{class:'art-line'}),el('span',{class:'art-dot'})]);
+}
+function classroomIntro(rows){
+ const stamp=new Intl.DateTimeFormat('zh-CN',{month:'long',day:'numeric',weekday:'long',timeZone:'Asia/Shanghai'}).format(new Date());
+ return el('section',{class:'classroom-intro','aria-label':'课堂概览'},[
+  el('div',{class:'intro-copy'},[
+   el('span',{class:'intro-eyebrow',text:stamp}),
+   el('h2',{class:'collage-copy',text:'把今天，翻成新的一页。'}),
+   el('h2',{class:'playful-copy',text:'让好奇心，带个路。'}),
+   el('p',{text:'听课、记录、追问。在这里，把知识变成自己的。'}),
+   el('div',{class:'intro-actions'},[button('打开我的笔记',()=>go('noteManager'),'intro-notes'),button('发现更多课程',()=>go('plaza'),'intro-explore')]),
+  ]),
+  el('div',{class:'intro-art','aria-hidden':'true'},[
+   el('span',{class:'paper-back'}),el('span',{class:'orbit orbit-one'}),el('span',{class:'orbit orbit-two'}),
+   el('img',{class:'theme-icon',src:'theme-'+(document.documentElement.dataset.theme||'collage')+'.png',alt:''}),
+   el('span',{class:'paper-label collage-copy',text:'A FRESH PAGE'}),el('span',{class:'paper-label playful-copy',text:'STAY CURIOUS'}),
+  ]),
+  el('div',{class:'intro-index'},[el('strong',{text:String(rows.length).padStart(2,'0')}),el('span',{text:page==='all'?'上课记录':'当前课表'})]),
+ ]);
+}
 function nav() {
   document.body.classList.toggle("study-mode", page === "study");
   document.body.classList.toggle("logged-in", !!account);
@@ -394,16 +432,24 @@ function nav() {
     ["cache", "缓存设置"],
     ["plaza", "课程广场"],
   ];
+  const home=button("我的课堂",()=>go(lastClassPage),["today","recent","all","chapters"].includes(page)?"active":"");home.prepend(designIcon('home'));home.title="我的课堂";
   $("#navigation").replaceChildren(
-    ...items.map(([id, t]) =>
-      button(t, () => go(id), page === id ? "active" : ""),
-    ),
+    el('div',{class:'nav-brand'},[el('img',{class:'theme-icon',src:'theme-'+(document.documentElement.dataset.theme||'collage')+'.png',alt:''}),el('strong',{text:'智云助手'})]),
+    el('span',{class:'nav-caption',text:'我的学习空间'}),home,
+    ...items.map(([id, t]) => {const b=button(t,()=>go(id),page===id?"active":"");b.prepend(designIcon(id));b.title=t;return b;}),
+    el('div',{class:'nav-footer'},[el('span',{class:'collage-copy',text:'一点一滴，拼成自己的知识。'}),el('span',{class:'playful-copy',text:'每一个问题，都是新的入口。'})]),
   );
   native.call("toolbar", {
     name: account?.name || "",
     loggedIn: !!account,
   }).catch(() => {});
 }
+native.on("appearanceTheme", () => {
+  const tools=$("#studyTools"), content=$("#content");
+  if (tools && content) content.style.setProperty("--tools-height",tools.offsetHeight+"px");
+  // Reflow immediately even when WebKit pauses animation frames in a background window.
+  layoutControl?.refresh({preserve:true});
+});
 native.on("toolbarAction", (action) => {
   if (action === "privacy") privacy();
   else if (action === "home" && account)
@@ -463,7 +509,8 @@ async function logout() {
 function welcome(options = {}) {
   title("登录智云课堂");
   const box = el("div", { class: "welcome" }, [
-    el("img", { src: "icon.png", alt: "智云助手" }),
+    el("div",{class:"welcome-art"},[el("img", {class:"theme-icon", src: "theme-"+(document.documentElement.dataset.theme||'collage')+".png", alt: "智云助手" })]),
+    el('div',{class:'welcome-copy'},[el('span',{class:'intro-eyebrow',text:'欢迎来到你的学习空间'}),el('h2',{class:'collage-copy',text:'每一天，都有新的一页。'}),el('h2',{class:'playful-copy',text:'好奇心，在这里集合。'}),el('p',{text:'课堂、笔记与灵感，放在一起。'})]),
   ]);
   replaceContent(box);
   if (options.restoring) {
@@ -866,8 +913,8 @@ function showCourses() {
       ...(page === "chapters" ? [button("返回", back)] : []),
     ],
   );
-  const wrap = el("div");
-  if (page !== "chapters") wrap.append(toolbarTabs());
+  const wrap = el("div",{class:"classroom-page"});
+  if (page !== "chapters") wrap.append(classroomIntro(rows),toolbarTabs());
   if (page === "all")
     wrap.append(
       el("div", { class: "toolbar" }, [
@@ -1036,6 +1083,7 @@ function courseCard(c) {
           : "确认权限中",
   });
   const row = el("article", { class: "course-card", onclick: () => enter(c) }, [
+    courseArtwork(c),
     el("div", { class: "course-copy" }, [
       el("h3", { text: c.title }),
       el("div", {
@@ -1070,6 +1118,7 @@ function courseCard(c) {
 function groupCard(list, fn) {
   const c = list[0];
   return el("article", { class: "course-card", onclick: fn }, [
+    courseArtwork(c),
     el("div", { class: "course-copy" }, [
       el("h3", { text: c.title }),
       el("div", {

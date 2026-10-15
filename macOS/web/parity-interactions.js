@@ -123,12 +123,13 @@ export class PaneLayoutController {
   panes() { return this.options.getPanes?.() || {}; }
   size() { return { width: Math.max(1, this.stage.clientWidth), height: Math.max(1, this.stage.clientHeight) }; }
   saved() { return this.options.getSavedLayouts?.() || this.options.saved || {}; }
-  refresh({ reset = false, preset = 'auto' } = {}) {
+  refresh({ reset = false, preset = 'auto', preserve = false } = {}) {
     const ids = this.ids(), { width, height } = this.size(), key = layoutKey(ids, width, height);
     if (reset || key !== this.key) {
       if (this.key && this.rects.length) { this.temporary.set(this.key, copyRects(this.rects)); if (this.temporary.size > 48) this.temporary.delete(this.temporary.keys().next().value); }
       const saved = !reset && matchingLayout(this.saved()[key], ids), temporary = !reset && matchingLayout(this.temporary.get(key), ids);
-      this.rects = saved?.length ? saved : temporary?.length ? temporary : defaultPanes(ids, width < 640, preset);
+      const retained = preserve && !reset && matchingLayout(this.rects, ids);
+      this.rects = retained?.length ? copyRects(retained) : saved?.length ? saved : temporary?.length ? temporary : defaultPanes(ids, width < 640, preset);
       this.key = key; this.selected = '';
     }
     for (const [id, binding] of this.bindings) if (!ids.includes(id) || this.panes()[id] !== binding.node) this.unregister(id);

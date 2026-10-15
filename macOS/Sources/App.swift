@@ -289,11 +289,11 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     lazy var network: URLSession = { let c=URLSessionConfiguration.ephemeral; c.timeoutIntervalForRequest=20; c.timeoutIntervalForResource=90; c.httpCookieStorage=nil; c.urlCache=nil; return URLSession(configuration:c,delegate:self,delegateQueue:nil) }()
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular); setupMenu()
-        let config=WKWebViewConfiguration(); config.websiteDataStore=store; config.userContentController.add(self,name:"native"); config.preferences.javaScriptCanOpenWindowsAutomatically=false
+        let config=WKWebViewConfiguration(); config.userContentController.addUserScript(WKUserScript(source:"window.__zhiyunTheme=\""+selectedTheme+"\";",injectionTime:.atDocumentStart,forMainFrameOnly:true));config.websiteDataStore=store; config.userContentController.add(self,name:"native"); config.preferences.javaScriptCanOpenWindowsAutomatically=false
         web=WKWebView(frame:.zero,configuration:config); web.navigationDelegate=self;web.uiDelegate=self
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1320,height:850),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
         window.isReleasedWhenClosed=false; window.title="智云助手"; window.minSize=NSSize(width:640,height:480); window.contentView=web; window.delegate=self;window.setFrameAutosaveName("StudyMainWindow");if !window.setFrameUsingName("StudyMainWindow"){window.center()};installToolbar();installMouseDragMonitor();window.orderFront(nil)
-        startServer();restoreCookies {}
+        applyTheme(selectedTheme,persist:false);startServer();restoreCookies {}
     }
     func installMouseDragMonitor(){
         guard mouseDragMonitor==nil else{return}
@@ -311,6 +311,28 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         item.setDraggingFrame(NSRect(x:point.x-size.width/2,y:point.y-size.height/2,width:size.width,height:size.height),contents:image.image)
         imageDrags[source.id]=source;let session=view.beginDraggingSession(with:[item],event:event,source:source);session.animatesToStartingPositionsOnCancelOrFail=true
     }
+    var themeDefaults = UserDefaults.standard
+    var themeBrandImage: NSImageView?
+    var selectedTheme:String { ["editorial","playful"].contains(themeDefaults.string(forKey:"appearanceTheme") ?? "") ? "playful":"collage" }
+    func themeImage(_ theme:String)->NSImage? {
+        guard let resources=Bundle.main.resourceURL else{return nil}
+        return NSImage(contentsOf:resources.appendingPathComponent("web/theme-"+theme+".png"))
+    }
+    func applyTheme(_ theme:String,persist:Bool=true){
+        guard ["collage","playful"].contains(theme) else{return}
+        if persist { themeDefaults.set(theme,forKey:"appearanceTheme") }
+        if let image=themeImage(theme){NSApp.applicationIconImage=image;themeBrandImage?.image=image}
+        event("appearanceTheme",theme)
+    }
+    @objc func selectTheme(_ sender:NSMenuItem){guard let theme=sender.representedObject as? String else{return};applyTheme(theme)}
+    func showThemeMenu(_ sender:NSButton){
+        let menu=NSMenu(title:"主题")
+        for (key,title) in [("collage","晴日拼贴"),("playful","灵感游乐场")]{
+            let item=NSMenuItem(title:title,action:#selector(selectTheme(_:)),keyEquivalent:"");item.target=self;item.representedObject=key;item.state=selectedTheme==key ? .on:.off
+            if let image=themeImage(key){image.size=NSSize(width:24,height:24);item.image=image};menu.addItem(item)
+        }
+        menu.popUp(positioning:nil,at:NSPoint(x:0,y:sender.bounds.height+4),in:sender)
+    }
     func installToolbar(){
         guard let window=window else{return};let toolbar=NSToolbar(identifier:"StudyToolbar")
         toolbar.delegate=self;toolbar.allowsUserCustomization=false;toolbar.autosavesConfiguration=false;toolbar.displayMode = .iconOnly;toolbar.sizeMode = .small
@@ -319,7 +341,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func toolbarIdentifiers()->[NSToolbarItem.Identifier]{
         var values=[NSToolbarItem.Identifier("brand"),.flexibleSpace]
         if toolbarLoggedIn{if !toolbarName.isEmpty{values.append(NSToolbarItem.Identifier("name"))};values.append(NSToolbarItem.Identifier("home"))}
-        values.append(NSToolbarItem.Identifier("privacy"));if toolbarLoggedIn{values.append(NSToolbarItem.Identifier("logout"))};return values
+        values.append(NSToolbarItem.Identifier("theme"));values.append(NSToolbarItem.Identifier("privacy"));if toolbarLoggedIn{values.append(NSToolbarItem.Identifier("logout"))};return values
     }
     func toolbarAllowedItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier]{toolbarIdentifiers()}
     func toolbarDefaultItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier]{toolbarIdentifiers()}
@@ -329,10 +351,10 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let text=key=="brand" ? "智云助手":toolbarName,label=NSTextField(labelWithString:text)
             label.font=NSFont.systemFont(ofSize:key=="brand" ? 14:12,weight:key=="brand" ? .semibold:.regular);label.textColor=key=="brand" ? .labelColor:.secondaryLabelColor
             label.lineBreakMode = .byTruncatingTail;label.setAccessibilityLabel(key=="brand" ? "智云助手":text);label.sizeToFit();if key=="name"{label.frame.size.width=min(160,label.frame.width)}
-            item.view=label;item.label=text;return item
+            if key=="brand" {let image=NSImageView();image.image=themeImage(selectedTheme);image.imageScaling = .scaleProportionallyUpOrDown;image.translatesAutoresizingMaskIntoConstraints=false;NSLayoutConstraint.activate([image.widthAnchor.constraint(equalToConstant:22),image.heightAnchor.constraint(equalToConstant:22)]);themeBrandImage=image;let stack=NSStackView(views:[image,label]);stack.orientation = .horizontal;stack.spacing=7;item.view=stack}else{item.view=label};item.label=text;return item
         }
-        guard ["home","privacy","logout"].contains(key) else{return nil}
-        let title=key=="home" ? "我的课堂":key=="privacy" ? "隐私":"退出登录",button=NSButton(title:title,target:self,action:#selector(toolbarClicked(_:)))
+        guard ["home","theme","privacy","logout"].contains(key) else{return nil}
+        let title=key=="home" ? "我的课堂":key=="theme" ? "主题":key=="privacy" ? "隐私":"退出登录",button=NSButton(title:title,target:self,action:#selector(toolbarClicked(_:)))
         button.bezelStyle = .rounded;button.isBordered=false;button.controlSize = .small;button.font = .systemFont(ofSize:12);button.identifier=NSUserInterfaceItemIdentifier(key);button.setAccessibilityLabel(title);button.sizeToFit()
         item.view=button;item.label=title;item.toolTip=title;return item
     }
@@ -342,7 +364,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard let toolbar=mainToolbar else{return};while !toolbar.items.isEmpty{toolbar.removeItem(at:0)}
         for (index,key) in toolbarIdentifiers().enumerated(){toolbar.insertItem(withItemIdentifier:key,at:index)}
     }
-    @objc func toolbarClicked(_ sender:NSButton){guard let action=sender.identifier?.rawValue,["home","privacy","logout"].contains(action) else{return};event("toolbarAction",action)}
+    @objc func toolbarClicked(_ sender:NSButton){guard let action=sender.identifier?.rawValue,["home","theme","privacy","logout"].contains(action) else{return};if action=="theme"{showThemeMenu(sender)}else{event("toolbarAction",action)}}
     func setupMenu() {
         let menu=NSMenu(); let appItem=NSMenuItem(); menu.addItem(appItem); let am=NSMenu(); appItem.submenu=am
         am.addItem(withTitle:"关于智云助手",action:#selector(about),keyEquivalent:""); am.addItem(.separator()); am.addItem(withTitle:"退出智云助手",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q")

@@ -1,6 +1,6 @@
 # macOS 预览版本分发
 
-Mac 1.1.1（构建 4）为 universal 应用，最低 macOS 13。GitHub 提供 DMG、应用 ZIP、独立源码 ZIP 和 SHA256SUMS.txt。
+Mac 1.4.0（构建 7）为 universal 应用，最低 macOS 13。GitHub 提供 DMG、应用 ZIP、独立源码 ZIP 和 SHA256SUMS.txt。
 
 使用 ad-hoc 签名，并在构建后执行 `codesign --verify --deep --strict`。当前没有 Developer ID 发行证书和 Apple 公证记录，不以此包宣称已完成 Mac App Store 或正式公证分发。
 

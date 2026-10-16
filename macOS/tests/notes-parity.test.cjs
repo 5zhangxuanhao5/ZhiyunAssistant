@@ -2,8 +2,8 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {JSDOM}=require('jsdom');
 async function fixture(html='',extra={}) {
   const dom=new JSDOM('<!doctype html><div id="notes"></div><button id="elsewhere">Elsewhere</button>',{url:'http://127.0.0.1:5000/token/index.html',pretendToBeVisual:true});
-  const context=vm.createContext({console,Date,Math,Number,String,Object,Array,TypeError,Error});
-  const module=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../web/parity-notes.js'),'utf8'),{context});await module.link(()=>{});await module.evaluate();
+  const context=vm.createContext({console,Date,Math,Number,String,Object,Array,TypeError,Error,document:dom.window.document});
+  const module=new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../web/parity-notes.js'),'utf8'),{context});await module.link(()=>new vm.SourceTextModule(fs.readFileSync(path.join(__dirname,'../web/theme-icons.js'),'utf8'),{context}));await module.evaluate();
   const changes=[],links=[],times=[],opts={note:{id:'n',html},clock:()=>125,onChange:h=>changes.push(h),onNavigate:b=>links.push(b),onTimeLink:n=>times.push(n),...extra};
   const editor=new module.namespace.NoteEditor(dom.window.document.querySelector('#notes'),opts);
   dom.window.HTMLElement.prototype.scrollIntoView=()=>{};

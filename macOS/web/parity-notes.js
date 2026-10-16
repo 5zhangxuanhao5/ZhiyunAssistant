@@ -1,3 +1,4 @@
+import {makeIcon} from "./theme-icons.js";
 /**
  * The Harmony note-block editing model, backed by native WebKit editing on Mac.
  * Keep one instance mounted for a note: live captions and media updates must not
@@ -101,7 +102,7 @@ export class NoteEditor {
     const header=this.doc.createElement('figcaption');header.className='note-block-header';header.tabIndex=0;header.setAttribute('role','button');header.setAttribute('aria-label','返回'+figure.dataset.label+'的来源');
     const name=this.doc.createElement('span');name.className='note-source-name';name.textContent=figure.dataset.label;
     const time=this.doc.createElement('time');time.className='note-block-time';time.textContent=stamp(figure.dataset.t);time.dataset.noteUi='true';
-    const remove=this.doc.createElement('button');remove.type='button';remove.className='note-remove';remove.textContent='×';remove.title='删除这个笔记框';remove.setAttribute('aria-label','删除'+figure.dataset.label);remove.dataset.noteUi='true';
+    const remove=this.doc.createElement('button');remove.type='button';remove.className='note-remove';remove.append(makeIcon('close',this.doc));remove.title='删除这个笔记框';remove.setAttribute('aria-label','删除'+figure.dataset.label);remove.dataset.noteUi='true';
     header.append(name,time,remove);figure.append(header);
     const body=this.doc.createElement('div');body.className=source==='mine'?'note-body':'note-reference-content rich-text';
     if(source==='mine'){body.contentEditable='true';body.setAttribute('contenteditable','true');body.setAttribute('role','textbox');body.setAttribute('aria-label','我的笔记');body.setAttribute('aria-multiline','true');body.dataset.placeholder=this.options.placeholder;body.spellcheck=false;body.style.textAlign=align||'left'}

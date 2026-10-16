@@ -252,7 +252,12 @@ final class Download: NSObject, URLSessionDownloadDelegate {
 final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate, URLSessionTaskDelegate, WKUIDelegate, NSToolbarDelegate, NSMenuItemValidation {
     var window: NSWindow!, web: WKWebView!, login: NSWindow?, loginWeb: WKWebView?
     var listener: NWListener!, origin="", token=UUID().uuidString, account="guest", downloads=[String:Download](), requests=[String:URLSessionDataTask](), cancelledRequests=Set<String>(),pendingRequests=Set<String>()
-    let fm=FileManager.default, store=WKWebsiteDataStore.nonPersistent()
+    let fm=FileManager.default
+    #if NATIVE_CONTRACT_TESTS
+    let store=WKWebsiteDataStore.nonPersistent()
+    #else
+    let store=WKWebsiteDataStore.default()
+    #endif
     let storageQueue=DispatchQueue(label:"cn.suike.mac.storage",qos:.utility)
     var loggingOut=false, lastWebRecovery=Date.distantPast
     var sessionNeedsResume=false
@@ -312,26 +317,22 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         imageDrags[source.id]=source;let session=view.beginDraggingSession(with:[item],event:event,source:source);session.animatesToStartingPositionsOnCancelOrFail=true
     }
     var themeDefaults = UserDefaults.standard
-    var themeBrandImage: NSImageView?
-    var selectedTheme:String { ["editorial","playful"].contains(themeDefaults.string(forKey:"appearanceTheme") ?? "") ? "playful":"collage" }
+    var themeBrandImage:NSImageView?
+    let themeIdentifiers=["collage","playful","press","acid","bauhaus","candy","terminal","swiss","field","film","workshop","post","memphis","retro","glass","marginalia","metro","sketch","racing","gallery"]
+    var selectedTheme:String {
+        let value=themeDefaults.string(forKey:"appearanceTheme") ?? "collage"
+        if value=="editorial"{return "playful"}
+        return themeIdentifiers.contains(value) ? value:"collage"
+    }
     func themeImage(_ theme:String)->NSImage? {
-        guard let resources=Bundle.main.resourceURL else{return nil}
+        guard let resources=Bundle.main.resourceURL,themeIdentifiers.contains(theme) else{return nil}
         return NSImage(contentsOf:resources.appendingPathComponent("web/theme-"+theme+".png"))
     }
     func applyTheme(_ theme:String,persist:Bool=true){
-        guard ["collage","playful"].contains(theme) else{return}
-        if persist { themeDefaults.set(theme,forKey:"appearanceTheme") }
+        guard themeIdentifiers.contains(theme) else{return}
+        if persist{themeDefaults.set(theme,forKey:"appearanceTheme")}
         if let image=themeImage(theme){NSApp.applicationIconImage=image;themeBrandImage?.image=image}
         event("appearanceTheme",theme)
-    }
-    @objc func selectTheme(_ sender:NSMenuItem){guard let theme=sender.representedObject as? String else{return};applyTheme(theme)}
-    func showThemeMenu(_ sender:NSButton){
-        let menu=NSMenu(title:"主题")
-        for (key,title) in [("collage","晴日拼贴"),("playful","灵感游乐场")]{
-            let item=NSMenuItem(title:title,action:#selector(selectTheme(_:)),keyEquivalent:"");item.target=self;item.representedObject=key;item.state=selectedTheme==key ? .on:.off
-            if let image=themeImage(key){image.size=NSSize(width:24,height:24);item.image=image};menu.addItem(item)
-        }
-        menu.popUp(positioning:nil,at:NSPoint(x:0,y:sender.bounds.height+4),in:sender)
     }
     func installToolbar(){
         guard let window=window else{return};let toolbar=NSToolbar(identifier:"StudyToolbar")
@@ -364,7 +365,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard let toolbar=mainToolbar else{return};while !toolbar.items.isEmpty{toolbar.removeItem(at:0)}
         for (index,key) in toolbarIdentifiers().enumerated(){toolbar.insertItem(withItemIdentifier:key,at:index)}
     }
-    @objc func toolbarClicked(_ sender:NSButton){guard let action=sender.identifier?.rawValue,["home","theme","privacy","logout"].contains(action) else{return};if action=="theme"{showThemeMenu(sender)}else{event("toolbarAction",action)}}
+    @objc func toolbarClicked(_ sender:NSButton){guard let action=sender.identifier?.rawValue,["home","theme","privacy","logout"].contains(action) else{return};event("toolbarAction",action)}
     func setupMenu() {
         let menu=NSMenu(); let appItem=NSMenuItem(); menu.addItem(appItem); let am=NSMenu(); appItem.submenu=am
         am.addItem(withTitle:"关于智云助手",action:#selector(about),keyEquivalent:""); am.addItem(.separator()); am.addItem(withTitle:"退出智云助手",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q")
@@ -497,11 +498,24 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         return credentialCache.access(name,data,remove:remove,allowUI:allowUI,onError:onError)
     }
     func hasLogoutMarker()->Bool{fm.fileExists(atPath:logoutMarker(in:root).path)}
+    func profileIdentityURL()->URL{root.appendingPathComponent("identity-profile.json")}
+    func normalizedIdentity(_ text:String)throws->Data{
+        guard text.utf8.count<=64*1024,let data=text.data(using:.utf8),let row=try? JSONSerialization.jsonObject(with:data) as? [String:Any],let id=row["id"] as? String,!id.isEmpty,id.utf8.count<=256 else{throw appError("账号资料格式无效")}
+        // Profile metadata contains no password, Cookie, bearer or API key.
+        let clean:[String:Any]=["id":id,"name":String((row["name"] as? String ?? "同学").prefix(256)),"tenantId":row["tenantId"] as? Int ?? 112,"username":String((row["username"] as? String ?? "").prefix(256))]
+        return try JSONSerialization.data(withJSONObject:clean,options:.sortedKeys)
+    }
     func storedIdentity()->String{
-        guard !hasLogoutMarker() else{return ""};return String(data:sessionKeychain("identity") ?? Data(),encoding:.utf8) ?? ""
+        guard !hasLogoutMarker() else{return ""}
+        if let data=try? Data(contentsOf:profileIdentityURL()),let text=String(data:data,encoding:.utf8),let valid=try? normalizedIdentity(text){return String(data:valid,encoding:.utf8) ?? ""}
+        // One silent, read-only migration. A signing change never triggers a password sheet.
+        guard let data=sessionKeychain("identity"),let text=String(data:data,encoding:.utf8),let valid=try? normalizedIdentity(text) else{return ""}
+        try? saveIdentity(text);return String(data:valid,encoding:.utf8) ?? ""
     }
     func saveIdentity(_ text:String,allowUI:Bool=false)throws{
-        guard text.utf8.count<=64*1024,sessionKeychain("identity",Data(text.utf8),allowUI:allowUI) != nil else{throw appError("无法保存登录状态，请检查钥匙串访问授权")}
+        let data=try normalizedIdentity(text)
+        try fm.createDirectory(at:root,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        try data.write(to:profileIdentityURL(),options:.atomic);try fm.setAttributes([.posixPermissions:0o600],ofItemAtPath:profileIdentityURL().path)
         try removeLogoutMarker(in:root)
     }
     func clearPreparedImages(){imagePreparationGeneration=UUID();preparedDrags.removeAll();preparedDragOrder.removeAll();lastMouseDrag=nil;event("imageDragCacheCleared",true)}
@@ -513,29 +527,30 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let group=DispatchGroup();for cookie in cookies{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}}
             group.notify(queue:.main){self.storageQueue.async{
                 let error={(status:OSStatus) in self.diagnostic("Session keychain removal failed: "+String(status))}
-                _=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error);self.credentialCache.invalidate();self.latestCookieSnapshot=nil
+                _=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error);self.credentialCache.invalidate();self.latestCookieSnapshot=nil;try? self.fm.removeItem(at:self.profileIdentityURL())
                 DispatchQueue.main.async{self.account="guest";self.reply(id,true)}
             }}
         }
     }
     func restoreCookies(_ done:@escaping()->Void){
         if cookieRestoreComplete{done();return};cookieRestoreCallbacks.append(done);guard !cookieRestoreStarted else{return};cookieRestoreStarted=true
-        storageQueue.async{let data=self.hasLogoutMarker() ? Data():(self.sessionKeychain("cookies") ?? Data());self.latestCookieSnapshot=data.isEmpty ? nil:data;DispatchQueue.main.async{self.restoreCookies(from:data){
-            self.cookieRestoreComplete=true;let callbacks=self.cookieRestoreCallbacks;self.cookieRestoreCallbacks.removeAll();callbacks.forEach{$0()}
-        }}}
+        let finish={self.cookieRestoreComplete=true;let callbacks=self.cookieRestoreCallbacks;self.cookieRestoreCallbacks.removeAll();callbacks.forEach{$0()}}
+        store.httpCookieStore.getAllCookies{existing in
+            if self.hasLogoutMarker(){let group=DispatchGroup();for cookie in existing{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}};group.notify(queue:.main){self.sessionNeedsResume=false;finish()};return}
+            if !self.hasLogoutMarker(),campusBearer(existing) != nil{self.sessionNeedsResume=false;finish();return}
+            self.storageQueue.async{let data=self.hasLogoutMarker() ? Data():(self.sessionKeychain("cookies") ?? Data());self.latestCookieSnapshot=data.isEmpty ? nil:data;DispatchQueue.main.async{self.restoreCookies(from:data){finish()}}}
+        }
     }
     func restoreCookies(from data:Data,done:@escaping()->Void){
         let cookies=hasLogoutMarker() ? []:decodedCookies(data);sessionNeedsResume = !cookies.isEmpty;installCookies(cookies){self.cookieRestoreComplete=true;done()}
     }
     func persistCookies(_ done:(()->Void)?=nil){
         guard !loggingOut,!hasLogoutMarker() else{done?();return}
-        #if NATIVE_CONTRACT_TESTS
-        if testSkipCookiePersistence{done?();return}
-        #endif
-        let allowUI=credentialUIAllowed
+        // The persistent WKWebsiteDataStore owns disk persistence. Keep a bounded
+        // memory copy for in-process recovery; do not rewrite the legacy Keychain.
         store.httpCookieStore.getAllCookies{cookies in
             guard !self.loggingOut,let data=try? encodedCookies(cookies) else{done?();return}
-            self.storageQueue.async{if !self.loggingOut{self.latestCookieSnapshot=data;_=self.sessionKeychain("cookies",data,allowUI:allowUI,onError:{status in self.diagnostic("Cookie keychain save failed: "+String(status))})};DispatchQueue.main.async{done?()}}
+            self.latestCookieSnapshot=data;done?()
         }
     }
     func cookieRequest(_ url:URL,body:String="",range:String?=nil,done:@escaping(URLRequest)->Void){
@@ -552,7 +567,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     // A login form is never filled here; denial and unavailable networks keep the
     // local identity/offline files intact. All callers share one bounded handshake.
     func resumeOfficialSession(force:Bool=false,done:@escaping(Bool)->Void){
-        guard !loggingOut else{done(false);return}
+        guard !loggingOut,(!hasLogoutMarker() || login != nil) else{done(false);return}
         guard cookieRestoreComplete else{restoreCookies{self.resumeOfficialSession(force:force,done:done)};return}
         if !sessionCallbacks.isEmpty{sessionCallbacks.append(done);return}
         if !force && !sessionNeedsResume{done(true);return}
@@ -597,6 +612,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                             if ready{self.performCourseRequest(id,url:url,body:body,retried:true)}else{self.reply(id,["status":401,"text":"{\"code\":401,\"message\":\"在线会话需要重新登录；离线课程仍可查看\"}"])}
                         };return
                     }
+                    if url.path.contains("get-week-schedules"),let envelope=try? JSONSerialization.jsonObject(with:data) as? [String:Any]{let result=envelope["result"];let kind=result is [Any] ? "array":result is [String:Any] ? "object":"empty";let keys=(result as? [String:Any])?.keys.sorted().joined(separator:",") ?? "";self.diagnostic("Schedule schema code " + String(describing:envelope["code"] ?? "none") + " result " + kind + " keys " + keys)}
                     self.diagnostic("API "+url.path+" status "+String(response.statusCode));self.reply(id,["status":expired ? 401:response.statusCode,"text":String(data:data,encoding:.utf8) ?? ""])
                 }
             }};self.requests[id]=task;task.resume()
@@ -615,7 +631,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func event(_ name:String,_ value:Any) { js("window.native.event",["name":name,"value":value]) }
     func js(_ function:String,_ value:Any) { guard let data=try? JSONSerialization.data(withJSONObject:value),let json=String(data:data,encoding:.utf8) else { return }; DispatchQueue.main.async { self.web?.evaluateJavaScript(function+"("+json+")",completionHandler:nil) } }
     func userContentController(_ userContentController:WKUserContentController,didReceive message:WKScriptMessage) {
-        guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.absoluteString.hasPrefix(origin+"/"+token+"/") == true, let args=message.body as? [String:Any], let id=args["id"] as? String, let action=args["action"] as? String else { return }
+        guard message.webView === web,message.frameInfo.isMainFrame, message.frameInfo.request.url?.absoluteString.hasPrefix(origin+"/"+token+"/") == true, let args=message.body as? [String:Any], let id=args["id"] as? String, let action=args["action"] as? String else { return }
         let p=args["params"] as? [String:Any] ?? [:]
         switch action {
         case "prepareImageDrag":
@@ -648,8 +664,11 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }
         case "cancelRequest":
             if let target=p["id"] as? String,pendingRequests.contains(target) || requests[target] != nil{cancelledRequests.insert(target);requests[target]?.cancel()};reply(id,true)
+        case "appearanceTheme": reply(id,selectedTheme)
+        case "setAppearanceTheme":
+            guard let theme=p["theme"] as? String,themeIdentifiers.contains(theme) else{reply(id,nil,"主题无效");return};applyTheme(theme);reply(id,theme)
         case "login":
-            loggingOut=false;credentialUIAllowed=true
+            loggingOut=false;credentialUIAllowed=false
             if let login=login { login.makeKeyAndOrderFront(nil); reply(id,true); return }
             let config=WKWebViewConfiguration(); config.websiteDataStore=store
             let view=WKWebView(frame:.zero,configuration:config); view.navigationDelegate=self;view.uiDelegate=self; loginWeb=view
@@ -676,8 +695,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             storageQueue.async{do{try self.fm.createDirectory(at:path.deletingLastPathComponent(),withIntermediateDirectories:true);try text.write(to:path,atomically:true,encoding:.utf8);self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}}
         case "keychainStatus":
             let name=account+"-deepseek";storageQueue.async{
-                let session=self.credentialCache.requiresAuthorization(["cookies","identity"]),api=self.credentialCache.requiresAuthorization([name])
-                self.reply(id,["authorizationRequired":session || api,"sessionAuthorizationRequired":session,"apiAuthorizationRequired":api])
+                let api=self.credentialCache.requiresAuthorization([name])
+                DispatchQueue.main.async{self.requiresSessionRecovery{session in self.reply(id,["authorizationRequired":session || api,"sessionAuthorizationRequired":session,"apiAuthorizationRequired":api])}}
             }
         case "authorizeCredentials": authorizeCredentials(id,purpose:p["purpose"] as? String ?? ((p["scope"] as? String)=="secret" ? "api":"session"))
         case "secret":
@@ -799,14 +818,12 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 let name=owner+"-deepseek",data=self.sessionKeychain(name,allowUI:true),required=self.credentialCache.requiresAuthorization([name])
                 DispatchQueue.main.async{guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return};self.reply(id,["ready":data?.isEmpty==false,"authorizationRequired":required])};return
             }
-            guard !self.hasLogoutMarker() else{self.reply(id,["ready":false,"authorizationRequired":false]);return}
-            var failure:OSStatus?;let identity=self.sessionKeychain("identity",allowUI:true,onError:{failure=$0})
-            if failure != nil{self.reply(id,["ready":false,"authorizationRequired":true]);return}
-            let persisted=self.sessionKeychain("cookies",allowUI:true),cookies=self.latestCookieSnapshot ?? persisted,required=self.credentialCache.requiresAuthorization(["identity","cookies"])
-            if let cookies=cookies,!required{_=self.sessionKeychain("cookies",cookies,allowUI:true)}
             DispatchQueue.main.async{
                 guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
-                self.restoreCookies(from:cookies ?? Data()){self.reply(id,["ready":identity?.isEmpty==false,"authorizationRequired":required])}
+                self.resumeOfficialSession(force:true){ready in
+                    guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
+                    self.reply(id,["ready":ready,"authorizationRequired":false,"officialLoginRequired":!ready])
+                }
             }
         }
     }

@@ -122,8 +122,8 @@ final class SyntheticCourseProtocol:URLProtocol {
         let loggedItems=app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}
         check(loggedItems==["brand","NSToolbarFlexibleSpaceItem","name","home","theme","privacy","logout"],"signed-in native title bar contains identity, theme and account actions")
         check((app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue=="name"})?.view as? NSTextField)?.stringValue=="测试姓名","native title bar displays synced user name")
-        for key in ["home","privacy","logout"]{(app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue==key})!.view as! NSButton).performClick(nil)}
-        var toolbarValues:String?,readToolbar=false;view.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,80));return JSON.stringify(window.toolbarEvents.map(event=>event.value));",arguments:[:],in:nil,in:.page){result in if case .success(let value)=result{toolbarValues=value as? String};readToolbar=true};try waitUntil({readToolbar});check(toolbarValues=="[\"home\",\"privacy\",\"logout\"]","real native toolbar buttons emit string action contract")
+        for key in ["home","theme","privacy","logout"]{(app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue==key})!.view as! NSButton).performClick(nil)}
+        var toolbarValues:String?,readToolbar=false;view.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,80));return JSON.stringify(window.toolbarEvents.map(event=>event.value));",arguments:[:],in:nil,in:.page){result in if case .success(let value)=result{toolbarValues=value as? String};readToolbar=true};try waitUntil({readToolbar});check(toolbarValues=="[\"home\",\"theme\",\"privacy\",\"logout\"]","real native toolbar buttons emit string action contract")
         app.updateToolbar(name:"",loggedIn:false);check(app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}==["brand","NSToolbarFlexibleSpaceItem","theme","privacy"],"signed-out title bar offers theme and privacy")
         check(!window.isVisible,"toolbar synchronization preserves hidden window")
         let themeSuite="zhiyun-theme-test-"+UUID().uuidString
@@ -139,6 +139,9 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(app.selectedTheme=="playful","unknown theme cannot alter selection")
         app.applyTheme("collage")
         check(app.selectedTheme=="collage","theme can switch back without reloading web view")
+        check(app.themeIdentifiers.count==20 && Set(app.themeIdentifiers).count==20,"twenty stable native theme identifiers")
+        for theme in app.themeIdentifiers{app.applyTheme(theme);check(app.selectedTheme==theme,"native theme persists "+theme)}
+        isolatedThemeDefaults.set("editorial",forKey:"appearanceTheme");check(app.selectedTheme=="playful","legacy editorial preference migrates to playground")
         isolatedThemeDefaults.removePersistentDomain(forName:themeSuite)
 
         // Complete Cookie -> WK store -> encrypted snapshot rows -> new WK store
@@ -222,7 +225,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(bridgeCookieWrites==0,"ordinary responses without Set-Cookie never trigger credential persistence")
         let unchangedCookieResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/ordinary-api")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"application/json","Set-Cookie":"stable-snapshot=ready; Path=/; Secure; HttpOnly"])!
         for _ in 0..<3{var completed=false;app.absorbCookies(unchangedCookieResponse){completed=true};try waitUntil({completed})};app.storageQueue.sync{}
-        check(bridgeCookieWrites==1,"identical repeated Set-Cookie responses persist only one canonical snapshot")
+        check(bridgeCookieWrites==0,"Set-Cookie persistence stays in WebKit and never rewrites legacy session Keychain items")
         app.testSkipCookiePersistence=true
         app.storageQueue.sync{app.credentialCache.invalidate()};var silentDenied=0,interactiveAttempts=0,declineAuthorization=true,unexpectedCredentialReads=0
         app.testKeychainOperation={name,data,remove,allowUI,onError in
@@ -293,8 +296,16 @@ final class SyntheticCourseProtocol:URLProtocol {
         try writeLogoutMarker(in:markerProfile);check(markerApp.hasLogoutMarker(),"explicit logout is persisted before clearing credentials")
         check(markerApp.storageQueue.sync{markerApp.storedIdentity()}.isEmpty && credentialReads==0,"logout marker blocks stale identity without accessing keychain")
         var markerRestore=false;markerApp.restoreCookies{markerRestore=true};try waitUntil({markerRestore});var blockedCookies=[HTTPCookie]();readCookies=false;markerApp.store.httpCookieStore.getAllCookies{blockedCookies=$0;readCookies=true};try waitUntil({readCookies});check(blockedCookies.isEmpty && credentialReads==0,"logout marker prevents restoring stale cookie snapshot")
-        do{try markerApp.storageQueue.sync{try markerApp.saveIdentity("{\"id\":\"new-fixture\"}")};fatalError("failed keychain write accepted")}catch{check(markerApp.hasLogoutMarker(),"failed identity save cannot clear explicit logout")}
-        allowIdentityWrite=true;try markerApp.storageQueue.sync{try markerApp.saveIdentity("{\"id\":\"new-fixture\"}",allowUI:true)};check(!markerApp.hasLogoutMarker() && markerApp.storageQueue.sync{markerApp.storedIdentity()}.contains("new-fixture"),"successful fresh identity save clears explicit logout marker")
+        do{try markerApp.storageQueue.sync{try markerApp.saveIdentity("invalid identity")};fatalError("invalid identity accepted")}catch{check(markerApp.hasLogoutMarker(),"invalid profile save cannot clear explicit logout")}
+        let readsBeforeProfile=credentialReads
+        try markerApp.storageQueue.sync{try markerApp.saveIdentity("{\"id\":\"new-fixture\",\"password\":\"excluded\",\"token\":\"excluded\"}")}
+        check(!markerApp.hasLogoutMarker() && markerApp.storageQueue.sync{markerApp.storedIdentity()}.contains("new-fixture") && credentialReads==readsBeforeProfile,"profile metadata restores local account without accessing Keychain")
+        let profile=try String(contentsOf:markerApp.profileIdentityURL(),encoding:.utf8),mode=(try FileManager.default.attributesOfItem(atPath:markerApp.profileIdentityURL().path))[.posixPermissions] as? Int
+        check(!profile.contains("password") && !profile.contains("token") && mode==0o600,"profile cache excludes credentials and is owner-readable only")
+        var interactiveSessionAccess=0;app.testKeychainOperation={_,_,_,allowUI,onError in if allowUI{interactiveSessionAccess+=1};onError(errSecInteractionNotAllowed);return nil}
+        app.sessionNeedsResume=false;app.testSessionBootstrap={done in done(false)}
+        let sessionRecovery=try bridgeCall("authorizeCredentials",["purpose":"session"]) as! [String:Any]
+        check(sessionRecovery["authorizationRequired"] as? Bool==false && interactiveSessionAccess==0,"official session recovery never asks for a Keychain password")
         let impossible=isolated.appendingPathComponent("not-a-directory");try Data("blocked".utf8).write(to:impossible)
         do{try writeLogoutMarker(in:impossible);fatalError("marker write accepted invalid directory")}catch{checks+=1}
         // Actual loopback service and hidden WK page render while a synthetic

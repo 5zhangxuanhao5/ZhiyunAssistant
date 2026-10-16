@@ -1,4 +1,8 @@
 import "./themes.js";
+import {makeIcon,decorateAction,refreshThemeIcons} from "./theme-icons.js";
+import {mountThemePicker} from "./theme-picker.js";
+import {themeFor,themeIcon} from "./theme-catalog.js";
+import {makeClassroomIntro,composeClassroom} from "./theme-home.js";
 import { MacZhiyun } from "./mac-api.js";
 import {
   reusableAttendanceBatch,
@@ -180,7 +184,7 @@ function el(tag, attrs = {}, children = []) {
   return n;
 }
 function button(text, fn, cls = "") {
-  return el("button", {
+  return decorateAction(el("button", {
     text,
     class: cls,
     onclick: (e) => {
@@ -189,7 +193,10 @@ function button(text, fn, cls = "") {
         .then(() => fn?.(e))
         .catch((error) => toast(error.message));
     },
-  });
+  }),text);
+}
+function iconButton(name,label,fn){
+ const node=button("",fn,"icon-only");node.append(makeIcon(name));node.setAttribute("aria-label",label);node.title=label;return node;
 }
 function toast(text) {
   $("#toast").textContent = text;
@@ -293,19 +300,9 @@ async function restoreSignedInSession() {
   sessionRecoveryBusy = true;
   renderSessionRecovery();
   try {
-    const status = await native.call("keychainStatus");
-    if (!current()) return;
-    const protectedSession = status?.sessionAuthorizationRequired ?? status?.authorizationRequired;
-    if (protectedSession === false) {
-      await native.call("login");
-      return;
-    }
-    const result = await native.call("authorizeCredentials", { purpose: "session" });
-    if (!current()) return;
-    if (!result?.ready || result.authorizationRequired) {
-      toast("登录尚未恢复，本机资料仍可查看，可以再次尝试");
-      return;
-    }
+    const result=await native.call("authorizeCredentials",{purpose:"session"});
+    if(!current())return;
+    if(!result?.ready){await native.call("login");return;}
     sessionRecoveryRequired = false;
     const real = await api.account();
     if (!current()) return;
@@ -384,44 +381,14 @@ function title(text, sub = "", actions = []) {
   $("#topActions").replaceChildren(...actions);
   renderSessionRecovery();
 }
-const designPaths = {
- home:'M3 11 12 3l9 8v10H3Z M9 21v-7h6v7',
- favourite:'m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z',
- later:'M12 7v5l3 2 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',
- offline:'M12 3v12m-4-4 4 4 4-4 M4 16v5h16v-5',
- noteManager:'M5 3h11l3 3v15H5Z M9 10h6m-6 4h6m-6 4h4',
- cache:'M4 7h16v14H4Z M3 3h18v4H3Z M9 11h6',
- plaza:'M3 3h7v7H3Z M14 3h7v7h-7Z M3 14h7v7H3Z M14 14h7v7h-7Z',
- book:'M12 5C8 2 4 3 2 4v15c4-2 7-1 10 1 3-2 6-3 10-1V4c-2-1-6-2-10 1Zm0 0v15',
-};
-function designIcon(name){
- const span=el("span",{class:"design-icon","aria-hidden":"true"});
- span.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="'+(designPaths[name]||designPaths.book)+'"/></svg>';
- return span;
-}
+const designIcon=makeIcon;
 function courseArtwork(c){
  const key=String(c.title||'');let tone=0;for(const ch of key)tone=(tone+ch.charCodeAt(0))%4;
  return el("div",{class:"course-art tone-"+tone,"aria-hidden":"true"},[designIcon('book'),el('span',{class:'art-line'}),el('span',{class:'art-dot'})]);
 }
-function classroomIntro(rows){
- const stamp=new Intl.DateTimeFormat('zh-CN',{month:'long',day:'numeric',weekday:'long',timeZone:'Asia/Shanghai'}).format(new Date());
- return el('section',{class:'classroom-intro','aria-label':'课堂概览'},[
-  el('div',{class:'intro-copy'},[
-   el('span',{class:'intro-eyebrow',text:stamp}),
-   el('h2',{class:'collage-copy',text:'把今天，翻成新的一页。'}),
-   el('h2',{class:'playful-copy',text:'让好奇心，带个路。'}),
-   el('p',{text:'听课、记录、追问。在这里，把知识变成自己的。'}),
-   el('div',{class:'intro-actions'},[button('打开我的笔记',()=>go('noteManager'),'intro-notes'),button('发现更多课程',()=>go('plaza'),'intro-explore')]),
-  ]),
-  el('div',{class:'intro-art','aria-hidden':'true'},[
-   el('span',{class:'paper-back'}),el('span',{class:'orbit orbit-one'}),el('span',{class:'orbit orbit-two'}),
-   el('img',{class:'theme-icon',src:'theme-'+(document.documentElement.dataset.theme||'collage')+'.png',alt:''}),
-   el('span',{class:'paper-label collage-copy',text:'A FRESH PAGE'}),el('span',{class:'paper-label playful-copy',text:'STAY CURIOUS'}),
-  ]),
-  el('div',{class:'intro-index'},[el('strong',{text:String(rows.length).padStart(2,'0')}),el('span',{text:page==='all'?'上课记录':'当前课表'})]),
- ]);
-}
+function classroomIntro(rows){return makeClassroomIntro(rows,{el,button,go,page});}
 function nav() {
+  document.body.dataset.page=page;
   document.body.classList.toggle("study-mode", page === "study");
   document.body.classList.toggle("logged-in", !!account);
   const items = [
@@ -429,41 +396,55 @@ function nav() {
     ["later", "稍后再看"],
     ["offline", "离线课程"],
     ["noteManager", "笔记管理"],
+    ["themes", "主题"],
     ["cache", "缓存设置"],
     ["plaza", "课程广场"],
   ];
   const home=button("我的课堂",()=>go(lastClassPage),["today","recent","all","chapters"].includes(page)?"active":"");home.prepend(designIcon('home'));home.title="我的课堂";
   $("#navigation").replaceChildren(
-    el('div',{class:'nav-brand'},[el('img',{class:'theme-icon',src:'theme-'+(document.documentElement.dataset.theme||'collage')+'.png',alt:''}),el('strong',{text:'智云助手'})]),
+    el('div',{class:'nav-brand'},[el('img',{class:'theme-icon',src:themeIcon(document.documentElement.dataset.theme),alt:''}),el('strong',{text:'智云助手'})]),
     el('span',{class:'nav-caption',text:'我的学习空间'}),home,
     ...items.map(([id, t]) => {const b=button(t,()=>go(id),page===id?"active":"");b.prepend(designIcon(id));b.title=t;return b;}),
-    el('div',{class:'nav-footer'},[el('span',{class:'collage-copy',text:'一点一滴，拼成自己的知识。'}),el('span',{class:'playful-copy',text:'每一个问题，都是新的入口。'})]),
+    el('div',{class:'nav-footer'},[el('span',{text:themeFor(document.documentElement.dataset.theme).quote})]),
   );
   native.call("toolbar", {
     name: account?.name || "",
     loggedIn: !!account,
   }).catch(() => {});
 }
-native.on("appearanceTheme", () => {
+let themePicker=null;
+native.on("appearanceTheme", (value) => {
+  refreshThemeIcons();
+  themePicker?.selected(value);
+  if (["today","recent","all","chapters"].includes(page) && account) {
+    const scroll=$("#content").scrollTop;nav();showCourses(false);$("#content").scrollTop=scroll;
+  }
   const tools=$("#studyTools"), content=$("#content");
   if (tools && content) content.style.setProperty("--tools-height",tools.offsetHeight+"px");
   // Reflow immediately even when WebKit pauses animation frames in a background window.
   layoutControl?.refresh({preserve:true});
 });
 native.on("toolbarAction", (action) => {
-  if (action === "privacy") privacy();
+  if(action==="theme")go("themes").catch(error=>toast(error.message));
+  else if (action === "privacy") privacy();
   else if (action === "home" && account)
     go(lastClassPage, null, false).catch((error) => toast(error.message));
   else if (action === "logout" && account)
     logout().catch((error) => toast(error.message));
 });
+function showThemes(){
+ title("主题","选择适合今天的学习风格",[button("返回",back)]);
+ const wrap=el("div",{class:"theme-page"},[el("div",{class:"theme-hero"},[el("div",{},[el("span",{class:"eyebrow",text:"ZHIYUN / APPEARANCE"}),el("h2",{text:"找到你的学习风格"}),el("p",{text:"单击预览，双击选用并返回。主题会自动保存。"})]),el("span",{id:"selectedTheme",role:"status","aria-live":"polite"})]),el("div",{id:"themeGrid","aria-label":"主题首页预览"})]);
+ replaceContent(wrap);
+ themePicker=mountThemePicker(document,theme=>native.call("setAppearanceTheme",{theme}),document.documentElement.dataset.theme,()=>wrap.isConnected&&page==="themes"?back():undefined);
+}
 function privacy() {
   openModal("隐私与数据");
   $("#modalBody").append(
     el("div", { class: "layout-help" }, [
       el("h3", { text: "数据保存在你的 Mac" }),
       el("p", {
-        text: "课程、笔记、进度、收藏和离线资源只存储在本机。校园账号密码由浙江大学官方认证页面处理，本应用不保存密码。登录会话与 DeepSeek 密钥存储在 macOS 钥匙串。",
+        text: "课程、笔记、进度、收藏和离线资源只存储在本机。校园账号密码由浙江大学官方认证页面处理，本应用不保存密码。登录会话由本机 WebKit 网站数据保存和恢复；会话失效时使用学校官方认证。DeepSeek 密钥保存在 macOS 钥匙串。",
       }),
       el("p", {
         text: "只有启用 AI 时，所选课程上下文和你的问题才会发送给 DeepSeek。API 费用由你的账户承担。AI 回答可能有误，请结合课堂原文判断。普通缓存清理不删除笔记和离线下载。",
@@ -509,7 +490,7 @@ async function logout() {
 function welcome(options = {}) {
   title("登录智云课堂");
   const box = el("div", { class: "welcome" }, [
-    el("div",{class:"welcome-art"},[el("img", {class:"theme-icon", src: "theme-"+(document.documentElement.dataset.theme||'collage')+".png", alt: "智云助手" })]),
+    el("div",{class:"welcome-art"},[el("img", {class:"theme-icon", src:themeIcon(document.documentElement.dataset.theme), alt: "智云助手" })]),
     el('div',{class:'welcome-copy'},[el('span',{class:'intro-eyebrow',text:'欢迎来到你的学习空间'}),el('h2',{class:'collage-copy',text:'每一天，都有新的一页。'}),el('h2',{class:'playful-copy',text:'好奇心，在这里集合。'}),el('p',{text:'课堂、笔记与灵感，放在一起。'})]),
   ]);
   replaceContent(box);
@@ -532,7 +513,7 @@ function welcome(options = {}) {
           const result = await native.call("authorizeCredentials", { purpose: "session" });
           if (!box.isConnected || account) return;
           if (!result?.ready || result.authorizationRequired) {
-            toast("登录尚未恢复，可以再次尝试或使用官方登录");
+            await native.call("login");
             return;
           }
           await boot();
@@ -543,7 +524,7 @@ function welcome(options = {}) {
           }
         }
       }, "primary");
-      actions.append(restore, el("p", { class: "hint", text: "已保存的登录信息需要你允许访问钥匙串。" }));
+      actions.append(restore, el("p", { class: "hint", text: "使用学校官方认证恢复，不需要输入 Mac 密码或授权钥匙串。" }));
     }
     actions.append(button("登录智云课堂", () => native.call("login"), required ? "" : "primary"));
   };
@@ -736,8 +717,8 @@ function route() {
   };
 }
 async function go(next, params = null, push = true) {
-  if (!account) {
-    welcome();
+  if (!account && next!=="themes") {
+    page=next;nav();welcome();
     return;
   }
   const prior = route();
@@ -759,7 +740,8 @@ async function go(next, params = null, push = true) {
       refreshCourses().catch((e) => toast(e.message));
     } else if (page !== "chapters")
       refreshCourses().catch((e) => toast(e.message));
-  } else if (page === "plaza") showPlaza();
+  } else if(page==="themes")showThemes();
+  else if (page === "plaza") showPlaza();
   else if (["favourite", "later"].includes(page)) showCollections();
   else if (page === "offline") showOffline();
   else if (page === "cache") await showCache();
@@ -777,10 +759,16 @@ async function back() {
   page = prior.page;
   await go(page, null, false);
 }
-async function refreshCourses() {
+let courseRefresh=null,courseRefreshOwner="";
+function refreshCourses(){
+ const owner=String(account?.id||"")+":"+String(account?.tenantId||"");
+ if(courseRefresh&&courseRefreshOwner===owner)return courseRefresh;
+ courseRefreshOwner=owner;const operation=performRefreshCourses();courseRefresh=operation;operation.finally(()=>{if(courseRefresh===operation)courseRefresh=null}).catch(()=>{});return operation;
+}
+async function performRefreshCourses() {
   const owner = account?.id;
   if (!owner) return;
-  const result = await api.courses(account);
+  const result = api.mergeCurrentSchedules(await api.courses(account),courses);
   if (account?.id !== owner) return;
   await api.refreshToday(result);
   if (account?.id !== owner) return;
@@ -892,7 +880,7 @@ function toolbarTabs() {
   );
 }
 let allMode = "course";
-function showCourses() {
+function showCourses(recheck = true) {
   if (!account) return welcome();
   const rows =
     page === "chapters"
@@ -934,7 +922,7 @@ function showCourses() {
           },
           allMode === "date" ? "active" : "",
         ),
-        button("▦ 选择日期", () =>
+        button("选择日期", () =>
           calendar(rows, (d) => {
             const n = $('[data-date="' + d + '"]');
             n?.scrollIntoView({ block: "start", behavior: "smooth" });
@@ -980,8 +968,9 @@ function showCourses() {
       }),
     );
   wrap.append(cards);
+  composeClassroom(wrap,{el,button,go});
   replaceContent(wrap);
-  checkRows(rows.slice(0, 100), true).catch(() => {});
+  if(recheck)checkRows(rows.slice(0, 100), true).catch(() => {});
 }
 function dateGroups(rows) {
   const map = new Map();
@@ -1019,10 +1008,8 @@ function markButton(kind, c, whole = false, known = []) {
   const selected = whole
     ? collections.hasCourse(kind, c.courseId)
     : collections.hasLesson(kind, c);
-  const symbol =
-    kind === "favourite" ? (selected ? "★" : "☆") : selected ? "◷" : "◴";
   const n = button(
-    symbol,
+    "",
     () => {
       if (
         (whole
@@ -1033,22 +1020,7 @@ function markButton(kind, c, whole = false, known = []) {
         return;
       if (whole) collections.toggleCourse(kind, c, known);
       else collections.toggleLesson(kind, c);
-      n.textContent =
-        kind === "favourite"
-          ? (
-              whole
-                ? collections.hasCourse(kind, c.courseId)
-                : collections.hasLesson(kind, c)
-            )
-            ? "★"
-            : "☆"
-          : (
-                whole
-                  ? collections.hasCourse(kind, c.courseId)
-                  : collections.hasLesson(kind, c)
-              )
-            ? "◷"
-            : "◴";
+      n.replaceChildren(makeIcon(kind));
       n.setAttribute(
         "aria-pressed",
         String(
@@ -1069,6 +1041,7 @@ function markButton(kind, c, whole = false, known = []) {
   n.title = kind === "favourite" ? "收藏" : "稍后再看";
   n.setAttribute("aria-label", n.title);
   n.setAttribute("aria-pressed", String(selected));
+  n.append(makeIcon(kind));
   return n;
 }
 function courseCard(c) {
@@ -1200,7 +1173,7 @@ function showPlaza() {
     ),
     input,
     button("搜索", search, "primary"),
-    button("▦ " + plazaDate, () =>
+    button(plazaDate, () =>
       calendar(plazaRows, (d) => {
         plazaDate = d;
         searchTerm = "";
@@ -1516,11 +1489,11 @@ function calendar(rows, onDate) {
     };
     box.append(
       el("div", { class: "calendar-head" }, [
-        button("≪ 年", () => step(-12)),
-        button("‹ 月", () => step(-1)),
+        iconButton("previousYear","上一年",()=>step(-12)),
+        iconButton("previous","上个月",()=>step(-1)),
         el("strong", { text: y + " 年 " + m + " 月" }),
-        button("月 ›", () => step(1)),
-        button("年 ≫", () => step(12)),
+        iconButton("next","下个月",()=>step(1)),
+        iconButton("nextYear","下一年",()=>step(12)),
       ]),
     );
     const grid = el("div", { class: "calendar-grid" });
@@ -1538,18 +1511,18 @@ function calendar(rows, onDate) {
             closeModal();
             onDate(date);
           },
-          rows.some((c) => shanghaiDate(c.start) === date) ? "has-class" : "",
+          [rows.some((c) => shanghaiDate(c.start) === date)?"has-class":"",date===shanghaiDate(Date.now()/1000)?"is-today":""].join(" "),
         ),
       );
     }
     box.append(
       grid,
       el("p", {
-        class: "hint",
+        class: "calendar-hint",
         text:
           page === "plaza"
             ? "所有日期均可选择，课程权限将在后台确认。"
-            : "蓝色日期有上课记录。",
+            : "标记的日期有上课记录。",
         style: "margin-top:15px",
       }),
     );
@@ -1899,6 +1872,7 @@ function renderTools() {
     if (typeof event.target?.scrollIntoView === "function")
       event.target.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
+  if (tools.isConnected) $("#content").style.setProperty("--tools-height",tools.offsetHeight+"px");
   requestAnimationFrame(() => {
     if (tools.isConnected)
       $("#content").style.setProperty(
@@ -1978,15 +1952,15 @@ function createPane(key) {
   panes[key] = pane;
   if (key === "slides") {
     head.querySelector(".mini").append(
-      button("‹", () => pageMove(-1)),
-      button("›", () => pageMove(1)),
+      iconButton("previous","上一页",()=>pageMove(-1)),
+      iconButton("next","下一页",()=>pageMove(1)),
       button("最新", () => followNow()),
     );
   }
   if (key === "transcript") {
     head.querySelector(".mini").append(
-      button("‹", () => pageMove(-1)),
-      button("›", () => pageMove(1)),
+      iconButton("previous","上一页",()=>pageMove(-1)),
+      iconButton("next","下一页",()=>pageMove(1)),
     );
     body.onscroll = () => {
       if (returnPoint?.pane === "transcript") updateReturn("transcript");
@@ -2043,8 +2017,8 @@ function createPane(key) {
   }
   if (key === "summary") {
     head.querySelector(".mini").append(
-      button("‹", () => pageMove(-1)),
-      button("›", () => pageMove(1)),
+      iconButton("previous","上一页",()=>pageMove(-1)),
+      iconButton("next","下一页",()=>pageMove(1)),
       button("API设置", () => apiSetup("summary")),
     );
     const options = el("div", { class: "summary-options" }, [
@@ -2126,9 +2100,9 @@ function createPane(key) {
         },
       ),
       el("span", { class: "right" }),
-      button("≡", () => formatNote("justifyLeft")),
-      button("☰", () => formatNote("justifyCenter")),
-      button("≣", () => formatNote("justifyRight")),
+      iconButton("alignLeft","左对齐",()=>formatNote("justifyLeft")),
+      iconButton("alignCenter","居中对齐",()=>formatNote("justifyCenter")),
+      iconButton("alignRight","右对齐",()=>formatNote("justifyRight")),
     );
     pane.insertBefore(format, body);
   }
@@ -6009,7 +5983,7 @@ function showSettings() {
           save("prefs.json", prefs);
           renderTools();
         }),
-        el("span", { class: "drag-grip", text: "≡" }),
+        el("span", { class: "drag-grip" },[makeIcon("grip")]),
       ],
     );
     row.ondragstart = (e) => {

@@ -142,7 +142,7 @@ test('a protected saved session renders immediate launch status and waits for an
   assert.equal(f.r.calls.some(([action]) => action === 'authorizeCredentials'), false);
 });
 
-test('denied session restoration reenables the same button without looping or probing the guest account', async t => {
+test('unavailable official session restoration opens official login once without guest probes or logout', async t => {
   const f = await authorizationFixture(t, { sessionBlocked: true });
   await f.app.boot();
   const restore = findButton(f.doc, '恢复登录');
@@ -156,7 +156,8 @@ test('denied session restoration reenables the same button without looping or pr
   await waitFor(() => !restore.disabled && restore.textContent === '恢复登录', 'restore button after refusal');
   assert.equal(f.accountCalls(), 0);
   assert.equal(f.authorizations.length, 1);
-  assert.equal(f.r.calls.some(([action]) => action === 'logout' || action === 'login'), false);
+  assert.equal(f.r.calls.filter(([action])=>action==='login').length,1);
+  assert.equal(f.r.calls.some(([action])=>action==='logout'),false);
 });
 
 test('successful session restoration resumes the saved classroom without logout or a document reload', async t => {
@@ -295,9 +296,11 @@ test('an expired but unprotected login offers official reauthentication without 
   assert.equal(f.doc.querySelector('.welcome'), null);
   assert.ok(f.doc.querySelector('#topActions [data-session-recovery]'));
   f.doc.querySelector('#topActions [data-session-recovery]').click();
+  await waitFor(()=>f.authorizations.length===1,'official session resume attempt');
+  f.authorizations[0].resolve({ready:false,authorizationRequired:false,officialLoginRequired:true});
   await waitFor(() => f.r.calls.some(([action]) => action === 'login'), 'official reauthentication window');
   await waitFor(() => !f.doc.querySelector('#topActions [data-session-recovery]').disabled, 'restore control after official login opens');
-  assert.equal(f.authorizations.length, 0);
+  assert.equal(f.authorizations.length, 1);
   assert.equal(f.r.calls.some(([action]) => action === 'logout'), false);
   assert.equal(f.r.calls.filter(([action]) => action === 'toolbar').at(-1)[1].loggedIn, true);
 });

@@ -74,8 +74,11 @@ test('a login error envelope with a result object cannot erase cached attendance
 
 test('an incomplete success envelope remains unverified instead of an empty authoritative week', async t => {
   const f = await nativeFixture(t, { code: 0, result: {} });
-  await assert.rejects(f.api.schedules(account('A'), '2020-01-01', '2020-01-07'), /课表同步失败/);
-  assert.equal(f.api.verifiedSchedules[0].ok, false);
+  assert.deepEqual(await f.api.schedules(account('A'), '2020-01-01', '2020-01-07'), []);
+  assert.equal(f.api.verifiedSchedules[0].ok, true);
+  assert.equal(f.api.verifiedSchedules[0].authoritative, false);
+  const state=await f.api.attendanceHistory(account('A'),()=>{},{courses:[lesson('retained')],complete:true});
+  assert.deepEqual(state.courses.map(c=>c.subId),['retained']);
 });
 
 test('a confirmed empty official week is still authoritative', async t => {
@@ -91,3 +94,7 @@ test('Mac session validation preserves the interactive transcript origin and req
   assert.equal(f.calls[0][1].url, 'https://interactivemeta.cmc.zju.edu.cn/v1/search-trans-result');
   assert.equal(f.calls[0][1].body, '{"fixture":true}');
 });
+
+for(const result of [[],null,{list:null}])test('successful empty schedule shape '+JSON.stringify(result)+' does not falsely report a sync failure or erase cache',async t=>{const f=await nativeFixture(t,{code:0,result});assert.deepEqual(await f.api.schedules(account('A'),'2020-01-01','2020-01-07'),[]);assert.equal(f.api.verifiedSchedules[0].authoritative,false)});
+test('malformed success and server errors retain cached weeks',async t=>{const f=await nativeFixture(t,{code:0,result:{list:'invalid'}});await assert.rejects(f.api.schedules(account('A'),'2020-01-01','2020-01-07'),/格式/);assert.equal(f.api.verifiedSchedules[0].authoritative,false)});
+test('uncertain empty current window keeps cached courses while verified empty window removes them',async()=>{const f=await fixture({clock:()=>epoch('2020-01-07')}),old=lesson('old');f.api.request=async()=>JSON.stringify({code:0,result:{list:[]},__macScheduleAuthoritative:false});await f.api.schedules(account('A'),'2020-01-01','2020-01-07');assert.deepEqual(f.api.mergeCurrentSchedules([],[old]).map(c=>c.subId),['old']);f.api.request=async()=>json([]);await f.api.schedules(account('A'),'2020-01-01','2020-01-07');assert.deepEqual(f.api.mergeCurrentSchedules([],[old]),[])});

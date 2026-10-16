@@ -80,17 +80,30 @@ export function reconcileVerifiedCourses(
     );
 }
 
+/** Normalize successful empty windows without treating unknown payloads as
+ * evidence for deleting local records. Error envelopes always fail closed. */
+export function normalizeScheduleEnvelope(data) {
+  const code=data?.code==null?null:Number(data.code);
+  if(code===401)throw new Error("课程会话未恢复，请恢复登录后重试");
+  if(!data || (code!==null&&![0,200].includes(code)))throw new Error("课表服务暂时不可用，本机记录已保留");
+  const result=data.result??data.data;
+  const list=result?.list??result?.data?.list;
+  if(Array.isArray(list))return{days:list,authoritative:true};
+  // Some successful no-class responses contain [] or an empty object rather
+  // than list:[]. They are readable but cannot authorize cache removal.
+  if(code===0||code===200){
+    if(result==null || (Array.isArray(result)&&result.length===0) || (typeof result==='object'&&!Array.isArray(result)&&Object.keys(result).length===0) || (typeof result==='object'&&('list' in result)&&result.list==null))return{days:[],authoritative:false};
+  }
+  throw new Error("课表数据格式暂时无法识别，本机记录已保留");
+}
+
 /** Mac adapter; shared endpoint, permission and parsing implementations stay intact. */
 export class MacZhiyun extends Zhiyun {
   async request(path, body = "", origin = undefined) {
     const text = await super.request(path, body, origin);
     if (path.startsWith("/courseapi/v2/schedule/get-week-schedules")) {
-      const data = JSON.parse(text),
-        list = data.result?.list ?? data.result?.data?.list;
-      // An authenticated identity does not prove the course-service session is
-      // usable. Never make an error envelope authoritative for cache removal.
-      if ((data.code != null && ![0, 200].includes(Number(data.code))) || !Array.isArray(list))
-        throw new Error(Number(data.code) === 401 ? "课程会话未恢复，请重试同步或重新登录" : "课表同步失败，请稍后重试");
+      const data=JSON.parse(text),normalized=normalizeScheduleEnvelope(data);
+      return JSON.stringify({...data,result:{list:normalized.days},__macScheduleAuthoritative:normalized.authoritative});
     }
     return text;
   }
@@ -137,7 +150,7 @@ export class MacZhiyun extends Zhiyun {
       keys: new Set(snapshot.keys),
     }));
   }
-  recordSchedule(start, end, rows, ok, sequence, revision) {
+  recordSchedule(start, end, rows, ok, sequence, revision, verified=true) {
     if (
       revision !== this.scheduleRevision ||
       !dateValid(start) ||
@@ -146,7 +159,7 @@ export class MacZhiyun extends Zhiyun {
     )
       return;
     const retained = rows.filter(rowValid),
-      authoritative = retained.length <= this.maxRecords;
+      authoritative = verified && retained.length <= this.maxRecords;
     const snapshot = {
       start,
       end,
@@ -185,15 +198,29 @@ export class MacZhiyun extends Zhiyun {
     const revision = this.ensureScheduleScope(account),
       sequence = ++this.scheduleSequence;
     try {
-      const rows = await super.schedules(account, start, end);
-      if (revision !== this.scheduleRevision)
-        throw new Error("账号已更换，原课表同步已取消");
-      this.recordSchedule(start, end, rows, true, sequence, revision);
+      const path=`/courseapi/v2/schedule/get-week-schedules?user_id=${encodeURIComponent(account.id)}&tenant_id=${account.tenantId}&start_at=${start}&end_at=${end}`;
+      const data=JSON.parse(await this.request(path)),rows=[];
+      for(const day of data.result.list){
+        const items=day?.course??day?.courses??day?.list??[];
+        if(!Array.isArray(items))throw new Error("课表课程格式暂时无法识别，本机记录已保留");
+        for(const c of items){
+          const begin=this.epochSeconds(c.start_at),finish=this.epochSeconds(c.end_at),sub=c.sub_id||c.class_id||c.id;
+          if(sub&&c.course_id&&begin>0&&finish>begin)rows.push({subId:String(sub),courseId:String(c.course_id),title:c.course_title||c.title||'未命名课程',term:this.termLabel(c.term_name||''),teacher:c.teacher_name||c.lecturer_name||'',room:c.room_name||'',status:String(c.status||c.sub_status||c.status_label||''),start:begin,end:finish});
+        }
+      }
+      rows.sort((a,b)=>a.start-b.start);
+      if(revision!==this.scheduleRevision)throw new Error("账号已更换，原课表同步已取消");
+      this.recordSchedule(start,end,rows,true,sequence,revision,data.__macScheduleAuthoritative!==false);
       return rows;
     } catch (error) {
       this.recordSchedule(start, end, [], false, sequence, revision);
       throw error;
     }
+  }
+  mergeCurrentSchedules(fresh,cached=[]) {
+    const start=shanghaiDate(this.clock()-14*86400),end=shanghaiDate(this.clock()+86400);
+    const candidates=[...cached,...fresh].filter(row=>rowValid(row)&&shanghaiDate(row.start)>=start&&shanghaiDate(row.start)<=end);
+    return reconcileVerifiedCourses(candidates,this.verifiedSchedules,{now:Infinity}).sort((a,b)=>a.start-b.start);
   }
   /** Call super for all official history paging; normalize both progress and final states. */
   async attendanceHistory(account, progress = () => {}, initial) {

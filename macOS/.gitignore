@@ -1,6 +1,6 @@
 # Local build products, test dependencies and OS metadata
 build/
-node_modules/
+node_modules
 .DS_Store
 *.log
 *.crash

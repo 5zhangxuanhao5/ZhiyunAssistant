@@ -11,13 +11,13 @@
 | 客户端 | 版本与目标系统 | 下载选择 | 验证范围 |
 | --- | --- | --- | --- |
 | Windows | 0.8.0-beta.1；Windows 10/11，x64 / ARM64 | Intel、AMD 的 64 位电脑选 x64；ARM 电脑选 ARM64；提供 Setup.exe 与 ZIP | 处于测试阶段。Mac 上的模型、服务及 Electron 检查不代替 Windows 原生验收；实际 CI 状态以 [Actions](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/actions) 为准 |
-| Mac 原生版 | 1.4.0；macOS 13 及以上 | [Mac 下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/mac-v1.4.0-preview)：同一 DMG / ZIP 包含 Intel 与 Apple Silicon | 新版有完整页面回归、隐藏真实 WebKit 流程、合成视频实际解码与原生桥验证，见 [Mac 验证记录](macOS/VERIFICATION.md)；Intel 为编译检查 |
+| Mac 原生版 | 1.6.0；macOS 13 及以上 | [Mac 下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/mac-v1.6.0-preview)：同一 DMG / ZIP 包含 Intel 与 Apple Silicon | 新版有完整页面回归、隐藏真实 WebKit 流程、合成视频实际解码与原生桥验证，见 [Mac 验证记录](macOS/VERIFICATION.md)；Intel 为编译检查 |
 | HarmonyOS 原生版 | 0.7.4；最低 HarmonyOS 6.1.1 / API 24，手机 / 平板 | [鸿蒙下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/harmony-v0.7.4-preview)：未签名 HAP、源码和安装说明，需自行配置设备调试签名 | 374 项自动回归；此前在 HarmonyOS 7 手机/平板测试，不能视为全部设备或交互已验收 |
 | Android | 0.1.0-beta.2；Android 8.0 及以上，手机 / 平板 / 折叠屏 | [Android 下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/android-v0.1.0-beta.2)：已签名通用 APK | 本次修正 vivo 图标裁切；0.1.0-beta.1 已验证登录、视频及内外屏切换，并通过 240 项共享测试、7 项合成界面检查和 10 项原生 JVM 测试通过；双铰链为合成布局检查，见 [Android 验证记录](android/VERIFICATION.md) |
 
 鸿蒙版上架涉及备案、授权材料、发行签名和审核，目前尚未完成，先通过 GitHub 提供开发者自行签名安装的版本。可在设备开启开发者模式，通过 DevEco Studio 配置自己的调试签名后安装；**开发者模式本身不能免除签名或设备绑定要求**，详见[鸿蒙安装说明](harmonyOS/INSTALLATION.md)。不公开作者的私人签名材料或测试设备信息。
 
-Mac 1.4.0 重构晴日拼贴与灵感游乐场两套界面，包含不同的导航、课堂卡片和学习工具布局。标题栏可切换主题并记住选择，运行时 Dock 图标同步变化；应用图标已修正透明外缘。保留六个自由功能区、笔记引用和下载队列。提供 DMG、应用 ZIP、独立源码 ZIP 和 `SHA256SUMS.txt`；公开资料不含用户账号、密钥或课程内容。
+Mac 1.6.0 提供 20 套完整主题，主窗口内单击真实首页截图预览，双击确认并返回，日期、日历、收藏、翻页与笔记图标按主题统一设计。恢复登录使用学校官方网页会话，不再要求交互式解锁旧登录钥匙串；修复空课表误报并保护未确认窗口内的缓存。保留六个自由功能区、笔记引用和下载队列，Dock 与标题栏图标同步切换。提供 DMG、应用 ZIP、源码 ZIP 与 SHA256；公开资料不含用户账号、密钥或私人课程内容。
 
 Mac 包采用 ad-hoc 签名，尚未完成 Apple Developer ID 签名与公证。Windows 当前也没有发布者代码签名。这些包作为预览版本提供，不保证所有电脑、显卡、外设或教室媒体格式都已通过测试。
 

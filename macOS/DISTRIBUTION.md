@@ -1,10 +1,10 @@
 # macOS 预览版本分发
 
-Mac 1.4.0（构建 7）为 universal 应用，最低 macOS 13。GitHub 提供 DMG、应用 ZIP、独立源码 ZIP 和 SHA256SUMS.txt。
+Mac 1.6.0（构建 9）为 universal 应用，最低 macOS 13。GitHub 提供 DMG、应用 ZIP、独立源码 ZIP 和 SHA256SUMS.txt。
 
 使用 ad-hoc 签名，并在构建后执行 `codesign --verify --deep --strict`。当前没有 Developer ID 发行证书和 Apple 公证记录，不以此包宣称已完成 Mac App Store 或正式公证分发。
 
-应用后台不会主动弹出钥匙串授权。临时签名更新后若原有条目受系统保护，可在应用中主动点击“恢复登录”或“恢复已保存的密钥”授权；读取后在当前进程内复用，只有凭据变化才保存。升级身份稳定性仍需正式开发者签名，依据 [Apple 的签名要求说明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)。
+学校登录使用持久化 WebKit 会话与官方认证续接；“恢复登录”不会请求交互式钥匙串权限。旧登录条目无法静默迁移或学校会话过期时，需要在学校官方页面登录一次。DeepSeek 密钥仍由钥匙串独立保护，只有主动点击“恢复已保存的密钥”才请求密钥恢复授权。升级身份稳定性仍需正式开发者签名，依据 [Apple 的签名要求说明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)。
 
 公开包仅包含程序、图标、界面与共享模型。测试数据为人工合成，源码和安装包不包含课程截图、实际转写、用户身份、Cookie、API 密钥、签名私钥或本机资料目录。
 

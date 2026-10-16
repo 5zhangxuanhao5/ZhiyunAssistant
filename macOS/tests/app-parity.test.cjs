@@ -9,3 +9,22 @@ test('missing course resources cannot be enabled and do not turn normal preferen
 test('search counterpart, room and term facets narrow to nonempty results',async t=>{const{app,doc}=await start(t,['showPlaza']);const hits=[{courseId:'a',title:'Synthetic A',teacher:'Teacher A',room:'Room A',term:'2026 秋'},{courseId:'b',title:'Synthetic B',teacher:'Teacher B',room:'Room B',term:'2025 秋'}];app.api.searchCourses=async()=>({list:hits,total:2});app.api.chapters=async()=>[];app.api.plaza=async()=>[];await app.go('plaza');const input=doc.querySelector('#content input');input.value='Synthetic';[...doc.querySelectorAll('#content button')].find(b=>b.textContent==='搜索').click();await wait();const teacher=doc.querySelector('#plazaFacets select');assert.ok(teacher);teacher.value='Teacher A';teacher.dispatchEvent(new doc.defaultView.Event('change',{bubbles:true}));await wait();assert.equal(doc.querySelectorAll('[data-hit]').length,1);const other=[...doc.querySelectorAll('#plazaFacets select')][1];assert.ok([...other.options].some(o=>o.value==='Room A'));assert.ok(![...other.options].some(o=>o.value==='Room B'));});
 test('AI panels without an API key show setup instead of unusable scope controls',async t=>{const{r,app,doc}=await start(t);await app.enter(r.current);app.togglePane('summary');assert.equal(doc.querySelector('.summary-options').hidden,true);app.togglePane('question');assert.equal(doc.querySelector('.question-options').hidden,true);assert.match(doc.querySelector('#questionBody').textContent,/连接 AI 助手/);});
 test('a summary reading scroll writes to its original lesson when navigation happens before debounce',async t=>{const{r,app,doc}=await start(t,['renderSummary']);await app.enter(r.current);app.put({summaries:{'a|page':{text:'Fixture',scroll:0,t:0}},apiReady:false});app.togglePane('summary');doc.querySelector('#summaryBody').scrollTop=35;doc.querySelector('#summaryBody').dispatchEvent(new doc.defaultView.Event('scroll'));await app.enter({...r.current,subId:'next'});await new Promise(resolve=>setTimeout(resolve,550));const original=JSON.parse(r.data.get('summary-'+app.courseKey(r.current)+'.json'));assert.equal(original['a|page'].scroll,35);assert.ok(!r.data.get('summary-course-next.json')||!JSON.parse(r.data.get('summary-course-next.json'))['a|page']);});
+test('all-course date selection follows grouping through themes and return navigation',async t=>{
+ const{r,app,doc}=await start(t);const find=text=>[...doc.querySelectorAll('#content button')].find(n=>n.textContent===text);
+ await app.go('all');await wait();assert.equal(find('选择日期'),undefined);
+ find('按日期').click();await wait();assert.ok(find('选择日期'));find('选择日期').click();await wait();assert.equal(doc.querySelector('#modalTitle').textContent,'选择日期');app.closeModal();
+ await app.go('themes');await app.back();assert.ok(find('选择日期'));
+ find('按课程').click();await wait();assert.equal(find('选择日期'),undefined);
+ await app.go('recent');assert.equal(find('选择日期'),undefined);await app.go('today');assert.equal(find('选择日期'),undefined);
+});
+test('batch date navigation keeps selection and download options and permits cancel',async t=>{
+ const{r,app,doc}=await start(t,['batchDownload']);await app.batchDownload([r.current]);await wait();
+ const find=text=>[...doc.querySelectorAll('#modalToolbar button')].find(n=>n.textContent===text),inputs=()=>[...doc.querySelectorAll('#modalToolbar input')];
+ assert.equal(find('选择日期').hidden,true);find('按日期').click();await wait();assert.equal(find('选择日期').hidden,false);
+ const slides=inputs()[0],video=inputs()[2];slides.checked=false;slides.dispatchEvent(new r.win.Event('change'));video.checked=true;video.dispatchEvent(new r.win.Event('change'));
+ const lesson=doc.querySelector('#modalBody input');assert.ok(lesson);lesson.click();
+ find('选择日期').click();await wait();assert.equal(doc.querySelector('#modalClose').textContent,'返回');doc.querySelector('#modalClose').click();await wait();
+ assert.equal(doc.querySelector('#modalTitle').textContent,'批量下载');assert.equal(inputs()[0].checked,false);assert.equal(inputs()[2].checked,true);assert.equal(doc.querySelector('#modalBody input').checked,true);
+ find('选择日期').click();await wait();doc.querySelector('.calendar-grid button').click();await wait();assert.equal(doc.querySelector('#modalTitle').textContent,'批量下载');assert.equal(inputs()[0].checked,false);assert.equal(inputs()[2].checked,true);assert.equal(doc.querySelector('#modalBody input').checked,true);
+ find('按课程').click();await wait();assert.equal(find('选择日期').hidden,true);app.closeModal();
+});

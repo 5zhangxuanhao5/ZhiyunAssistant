@@ -84,6 +84,16 @@ import CryptoKit
   _=try evaluate(view,"[...document.querySelectorAll('#navigation button')].find(n=>n.textContent==='我的课堂').click();void 0")
   try waitJS(view,"!!document.querySelector('.classroom-page')")
   _=try evaluate(view,"[...document.querySelectorAll('.toolbar button')].find(n=>n.textContent==='所有课程').click();void 0")
+  try waitJS(view,"[...document.querySelectorAll('button')].some(n=>n.textContent==='按日期')")
+  guard try evaluate(view,"![...document.querySelectorAll('#content button')].some(n=>n.textContent==='选择日期')") as? Bool==true else{throw appError("Course grouping must not expose the date picker")}
+  for id in app.themeIdentifiers {
+   app.applyTheme(id)
+   _=try evaluate(view,"[...document.querySelectorAll('#content button')].find(n=>n.textContent==='按日期').click();void 0")
+   try waitJS(view,"[...document.querySelectorAll('#content button')].some(n=>n.textContent==='选择日期'&&n.getBoundingClientRect().width>0)")
+   _=try evaluate(view,"[...document.querySelectorAll('#content button')].find(n=>n.textContent==='按课程').click();void 0")
+   try waitJS(view,"![...document.querySelectorAll('#content button')].some(n=>n.textContent==='选择日期')")
+  }
+  _=try evaluate(view,"[...document.querySelectorAll('#content button')].find(n=>n.textContent==='按日期').click();void 0")
   try waitJS(view,"[...document.querySelectorAll('button')].some(n=>n.textContent==='选择日期')")
   _=try evaluate(view,"[...document.querySelectorAll('button')].find(n=>n.textContent==='选择日期').click();void 0")
   try waitJS(view,"document.querySelectorAll('.calendar-head svg').length===4")
@@ -95,8 +105,17 @@ import CryptoKit
    view.takeSnapshot(with:options){image,_ in if let data=image?.tiffRepresentation,let bitmap=NSBitmapImageRep(data:data){png=bitmap.representation(using:.png,properties:[:])};captured=true}
    try smokeWait({captured});guard let data=png else{throw appError("Calendar snapshot unavailable")};try data.write(to:calendars.appendingPathComponent(id+".png"))
   }
+  _=try evaluate(view,"document.querySelector('#modalClose').click();[...document.querySelectorAll('#topActions button')].find(n=>n.textContent==='批量下载')?.click();void 0")
+  try waitJS(view,"document.querySelector('#modalTitle').textContent==='批量下载'")
+  for id in app.themeIdentifiers {
+   app.applyTheme(id)
+   try waitJS(view,"[...document.querySelectorAll('#modalToolbar button')].some(n=>n.textContent==='选择日期'&&getComputedStyle(n).display==='none')")
+   _=try evaluate(view,"[...document.querySelectorAll('#modalToolbar button')].find(n=>n.textContent==='按日期').click();void 0")
+   try waitJS(view,"[...document.querySelectorAll('#modalToolbar button')].some(n=>n.textContent==='选择日期'&&getComputedStyle(n).display!=='none')")
+   _=try evaluate(view,"[...document.querySelectorAll('#modalToolbar button')].find(n=>n.textContent==='按课程').click();void 0")
+  }
   let errors=try evaluate(view,"window.__smoke.errors") as? [String] ?? [];guard errors.isEmpty else{throw appError("Page errors: "+errors.joined(separator:"; "))}
-  let manifest:[String:Any]=["status":"passed","themes":records,"themeCount":records.count,"compactWidth":640,"captureViewport":[1200,820],"source":"Actual production index.html and modules rendered by macOS WKWebView with synthetic course data","pickerChoicesVerified":20,"preservedStudyNodeChecks":20,"themePageInMainWindow":true,"twoClickSelectionReturnsToStudy":true,"unexpectedCourseRequests":afterRequests-beforeRequests,"foregroundWindows":false]
+  let manifest:[String:Any]=["status":"passed","themes":records,"themeCount":records.count,"compactWidth":640,"captureViewport":[1200,820],"source":"Actual production index.html and modules rendered by macOS WKWebView with synthetic course data","pickerChoicesVerified":20,"preservedStudyNodeChecks":20,"themePageInMainWindow":true,"twoClickSelectionReturnsToStudy":true,"datePickerOnlyInDateMode":true,"dateGroupingThemeChecks":20,"batchDateVisibilityThemeChecks":20,"unexpectedCourseRequests":afterRequests-beforeRequests,"foregroundWindows":false]
   try JSONSerialization.data(withJSONObject:manifest,options:[.prettyPrinted,.sortedKeys]).write(to:temporary.appendingPathComponent("theme-validation.json"))
   window.contentView=nil;window.close();server.listener.cancel();print("Twenty themes, real screenshots, picker selection and live study preservation passed")
  }

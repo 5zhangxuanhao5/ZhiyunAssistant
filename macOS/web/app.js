@@ -922,12 +922,12 @@ function showCourses(recheck = true) {
           },
           allMode === "date" ? "active" : "",
         ),
-        button("选择日期", () =>
+        ...(allMode === "date" ? [button("选择日期", () =>
           calendar(rows, (d) => {
             const n = $('[data-date="' + d + '"]');
             n?.scrollIntoView({ block: "start", behavior: "smooth" });
           }),
-        ),
+        )] : []),
       ]),
     );
   const cards = el("div", { class: "cards" });
@@ -1474,8 +1474,12 @@ function closeModal() {
   $("#modalBody").ongesturechange = null;
 }
 let calendarMonth = null;
-function calendar(rows, onDate) {
+function calendar(rows, onDate, onCancel = null) {
   openModal("选择日期");
+  if (onCancel) {
+    $("#modalClose").textContent = "返回";
+    $("#modalClose").onclick = () => { closeModal(); onCancel(); };
+  }
   calendarMonth = (
     rows[0] ? date(rows[0]) : shanghaiDate(Date.now() / 1000)
   ).slice(0, 7);
@@ -4718,7 +4722,7 @@ async function batchDownload(rows, restore = {}) {
     visible = [],
     timer,
     disposed = false;
-  const options = { slides: true, transcript: true, video: false },
+  const options = { slides: true, transcript: true, video: false, ...restore.options },
     toolbar = $("#modalToolbar"),
     notice = button("", () => refreshList());
   notice.hidden = true;
@@ -4761,6 +4765,13 @@ async function batchDownload(rows, restore = {}) {
       if (active()) toast(e.message);
     }
   };
+  const chooseDate = button("选择日期", () => {
+    const source = currentSource();
+    const resume = (date = null) => batchDownload(source, {
+      selected: [...downloadsSelected], mode: "date", date, options: { ...options },
+    });
+    calendar(source, resume, () => resume());
+  });
   toolbar.append(
     button("按课程", () => {
       mode = "course";
@@ -4770,19 +4781,7 @@ async function batchDownload(rows, restore = {}) {
       mode = "date";
       render();
     }),
-    button("选择日期", () => {
-      const source = currentSource();
-      const chosen = () => {
-        calendar(source, (d) => {
-          batchDownload(source, {
-            selected: [...downloadsSelected],
-            mode: "date",
-            date: d,
-          });
-        });
-      };
-      chosen();
-    }),
+    chooseDate,
     button("全选", () => {
       visible.forEach((c) => downloadsSelected.add(courseKey(c)));
       render();
@@ -4793,9 +4792,9 @@ async function batchDownload(rows, restore = {}) {
     }),
     button("刷新权限", rescan),
     notice,
-    check("课件", true, (v) => (options.slides = v)),
-    check("转写", true, (v) => (options.transcript = v)),
-    check("视频", false, (v) => (options.video = v)),
+    check("课件", options.slides, (v) => (options.slides = v)),
+    check("转写", options.transcript, (v) => (options.transcript = v)),
+    check("视频", options.video, (v) => (options.video = v)),
     button(
       "下载所选",
       async () => {
@@ -4813,6 +4812,7 @@ async function batchDownload(rows, restore = {}) {
   );
   function render() {
     if (!active()) return;
+    chooseDate.hidden = mode !== "date";
     for (const item of toolbar.querySelectorAll("button")) {
       if (item.textContent === "按课程" || item.textContent === "按日期")
         item.classList.toggle(

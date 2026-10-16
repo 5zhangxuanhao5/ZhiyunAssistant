@@ -1,3 +1,5 @@
+/* Functional visibility must survive theme-specific display rules. */
+[hidden] { display: none !important; }
 :root {
   font:
     14px -apple-system,

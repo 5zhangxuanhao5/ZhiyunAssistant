@@ -83,15 +83,18 @@ export function reconcileVerifiedCourses(
 /** Normalize successful empty windows without treating unknown payloads as
  * evidence for deleting local records. Error envelopes always fail closed. */
 export function normalizeScheduleEnvelope(data) {
-  const code=data?.code==null?null:Number(data.code);
-  if(code===401)throw new Error("课程会话未恢复，请恢复登录后重试");
-  if(!data || (code!==null&&![0,200].includes(code)))throw new Error("课表服务暂时不可用，本机记录已保留");
+  if(!data || typeof data!=='object')throw new Error("课表服务暂时不可用，本机记录已保留");
   const result=data.result??data.data;
+  // Some official endpoints nest their service status beside the list.
+  // Never let an error carrying list:[] authorize deleting cached courses.
+  const codes=[data.code,result?.code,result?.data?.code].filter(code=>code!=null).map(Number);
+  if(codes.includes(401))throw new Error("课程会话未恢复，请恢复登录后重试");
+  if(codes.some(code=>![0,200].includes(code)))throw new Error("课表服务暂时不可用，本机记录已保留");
   const list=result?.list??result?.data?.list;
   if(Array.isArray(list))return{days:list,authoritative:true};
   // Some successful no-class responses contain [] or an empty object rather
   // than list:[]. They are readable but cannot authorize cache removal.
-  if(code===0||code===200){
+  if(codes.length){
     if(result==null || (Array.isArray(result)&&result.length===0) || (typeof result==='object'&&!Array.isArray(result)&&Object.keys(result).length===0) || (typeof result==='object'&&('list' in result)&&result.list==null))return{days:[],authoritative:false};
   }
   throw new Error("课表数据格式暂时无法识别，本机记录已保留");

@@ -120,6 +120,27 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(deniedReads==1 && deniedWrites==0 && deniedCache.requiresAuthorization(["blocked"]),"denied background read is negatively cached without prompting or repeated writes")
         _ = deniedCache.access("blocked",allowUI:true);for _ in 0..<10{_ = deniedCache.access("blocked")};check(authorizedReads==1 && deniedReads==1 && !deniedCache.requiresAuthorization(["blocked"]),"one explicit recovery unlocks future reads without repeated authorization")
         check(try encodedCookies([secureCookieFixture(),plainCookieFixture()])==encodedCookies([plainCookieFixture(),secureCookieFixture()]),"canonical cookie bytes do not change when WK cookie order changes")
+        let slotFolder=FileManager.default.temporaryDirectory.appendingPathComponent("zhiyun-credential-slots-"+UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:slotFolder)}
+        let slotIndex=slotFolder.appendingPathComponent("index.json")
+        var slotValues=["campus":Data("legacy-protected".utf8)],slotRequests=[String](),slotFailures=[OSStatus](),denyOld=true
+        let slotBackend:CredentialSlots.Backend={name,data,remove,onError in
+            slotRequests.append(name)
+            if name=="campus" && denyOld{onError(errSecInteractionNotAllowed);return nil}
+            if remove{slotValues.removeValue(forKey:name);return nil}
+            if let data=data{slotValues[name]=data};return slotValues[name]
+        }
+        let slots=CredentialSlots(indexURL:slotIndex,tag:"build-A",backend:slotBackend)
+        check(slots.access("campus",nil,remove:false,onError:{slotFailures.append($0)})==nil && slotFailures==[errSecInteractionNotAllowed],"blocked legacy slot returns error without access escalation")
+        slotRequests.removeAll();let syntheticSlotSecret=Data("synthetic-private-value".utf8)
+        check(slots.access("campus",syntheticSlotSecret,remove:false,onError:{slotFailures.append($0)})==syntheticSlotSecret && slotRequests==["campus-app-build-A"],"reconfiguration writes only a new owned slot, never protected legacy item")
+        let indexText=try String(contentsOf:slotIndex,encoding:.utf8)
+        let indexMode=(try FileManager.default.attributesOfItem(atPath:slotIndex.path))[.posixPermissions] as? Int
+        check(!indexText.contains("synthetic-private-value") && indexText.contains("campus-app-build-A") && indexMode==0o600,"slot index has owner-only names and no credential values")
+        let nextSlots=CredentialSlots(indexURL:slotIndex,tag:"build-B",backend:slotBackend)
+        check(nextSlots.access("campus",nil,remove:false,onError:{slotFailures.append($0)})==syntheticSlotSecret && slotValues["campus-app-build-B"]==syntheticSlotSecret,"readable previous slot migrates silently to next build")
+        _ = nextSlots.access("campus",nil,remove:true,onError:{slotFailures.append($0)});denyOld=false;slotRequests.removeAll()
+        check(nextSlots.access("campus",nil,remove:false,onError:{slotFailures.append($0)})==nil && slotRequests.isEmpty,"explicit delete tombstone prevents legacy secret resurrection")
         // Real WKWebView, real App WKUIDelegate methods, isolated nonpersistent data
         // store and hidden window. No account/keychain reads or external requests.
         let application=NSApplication.shared;application.setActivationPolicy(.prohibited)
@@ -288,20 +309,22 @@ final class SyntheticCourseProtocol:URLProtocol {
         for _ in 0..<3{var completed=false;app.absorbCookies(unchangedCookieResponse){completed=true};try waitUntil({completed})};app.storageQueue.sync{}
         check(bridgeCookieWrites==0,"Set-Cookie persistence stays in WebKit and never rewrites legacy session Keychain items")
         app.testSkipCookiePersistence=true
-        app.storageQueue.sync{app.credentialCache.invalidate()};var silentDenied=0,interactiveAttempts=0,declineAuthorization=true,unexpectedCredentialReads=0
+        app.storageQueue.sync{app.credentialCache.invalidate()};var silentDenied=0,interactiveAttempts=0,ownedSecret:Data?,unexpectedCredentialReads=0
         app.testKeychainOperation={name,data,remove,allowUI,onError in
+            if allowUI{interactiveAttempts+=1}
             guard name.hasSuffix("-deepseek") else{unexpectedCredentialReads+=1;onError(errSecInteractionNotAllowed);return nil}
-            if !allowUI{silentDenied+=1;onError(errSecInteractionNotAllowed);return nil}
-            interactiveAttempts+=1;if declineAuthorization{onError(errSecUserCanceled);return nil};return Data("restored-synthetic-key".utf8)
+            if let data=data{ownedSecret=data;return data}
+            if let saved=ownedSecret{return saved}
+            silentDenied+=1;onError(errSecInteractionNotAllowed);return nil
         }
         for _ in 0..<3{check(try bridgeCall("secret") as? String=="","silently blocked API secret stays unavailable without UI")}
-        let blockedStatus=try bridgeCall("keychainStatus") as! [String:Any];check(blockedStatus["apiAuthorizationRequired"] as? Bool==true && silentDenied==1,"native status reports blocked saved API key after one silent attempt")
-        let cancelledRecovery=try bridgeCall("authorizeCredentials",["purpose":"api"]) as! [String:Any]
-        check(cancelledRecovery["ready"] as? Bool==false && cancelledRecovery["authorizationRequired"] as? Bool==true && interactiveAttempts==1,"cancelled explicit API recovery remains blocked")
-        _ = try bridgeCall("secret");check(silentDenied==1 && interactiveAttempts==1,"cancelled authorization is not immediately retried by passive reads")
-        declineAuthorization=false;let acceptedRecovery=try bridgeCall("authorizeCredentials",["purpose":"api"]) as! [String:Any]
-        check(acceptedRecovery["ready"] as? Bool==true && acceptedRecovery["authorizationRequired"] as? Bool==false && unexpectedCredentialReads==0,"explicit API recovery reads only current API key, never restores course cookies")
-        check(try bridgeCall("secret") as? String=="restored-synthetic-key" && silentDenied==1 && interactiveAttempts==2,"restored API key remains reusable in RAM without new prompts")
+        let blockedStatus=try bridgeCall("keychainStatus") as! [String:Any];check(blockedStatus["apiAuthorizationRequired"] as? Bool==true && silentDenied==1,"blocked old secret is negatively cached")
+        let blockedRecovery=try bridgeCall("authorizeCredentials",["purpose":"api"]) as! [String:Any]
+        check(blockedRecovery["ready"] as? Bool==false && interactiveAttempts==0,"legacy recovery bridge cannot enable Keychain interaction")
+        _ = try bridgeCall("secret");check(silentDenied==2 && interactiveAttempts==0,"failed legacy recovery remains silent and does not loop")
+        _ = try bridgeCall("secret",["text":"sk-synthetic-reconfigured-key-123456"])
+        check(try bridgeCall("secret") as? String=="sk-synthetic-reconfigured-key-123456" && unexpectedCredentialReads==0,"in-app reconfiguration saves a usable key without touching session credentials")
+        check(interactiveAttempts==0,"all credential routes suppress interactive backend access including writes")
         var guardedCookieReads=0
         app.storageQueue.sync{app.credentialCache.invalidate()};app.testKeychainOperation={name,data,remove,allowUI,onError in if name=="cookies"{guardedCookieReads+=1;onError(errSecInteractionNotAllowed)};return nil}
         app.storageQueue.sync{_ = app.sessionKeychain("cookies")}
@@ -366,7 +389,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         var interactiveSessionAccess=0;app.testKeychainOperation={_,_,_,allowUI,onError in if allowUI{interactiveSessionAccess+=1};onError(errSecInteractionNotAllowed);return nil}
         app.sessionNeedsResume=false;app.testSessionBootstrap={done in done(false)}
         let sessionRecovery=try bridgeCall("authorizeCredentials",["purpose":"session"]) as! [String:Any]
-        check(sessionRecovery["authorizationRequired"] as? Bool==false && interactiveSessionAccess==1,"only an explicit protected session recovery authorizes a credential read")
+        check(sessionRecovery["authorizationRequired"] as? Bool==false && interactiveSessionAccess==0,"explicit session recovery also forbids interactive credential reads")
         let impossible=isolated.appendingPathComponent("not-a-directory");try Data("blocked".utf8).write(to:impossible)
         do{try writeLogoutMarker(in:impossible);fatalError("marker write accepted invalid directory")}catch{checks+=1}
         // Actual loopback service and hidden WK page render while a synthetic

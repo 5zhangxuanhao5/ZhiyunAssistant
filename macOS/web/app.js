@@ -4225,31 +4225,8 @@ function apiSetup(key) {
       if (!active()) return;
       return secret ? resumeAPI() : renderForm();
     }
-    const restore = button("恢复已保存的密钥", async () => {
-      if (restore.disabled || !active()) return;
-      restore.disabled = true;
-      restore.textContent = "恢复中…";
-      try {
-        const result = await native.call("authorizeCredentials", { purpose: "api" });
-        if (!active()) return;
-        if (!result?.ready) return toast("密钥尚未恢复，可以再次尝试");
-        const secret = await native.call("secret");
-        if (!active()) return;
-        if (!secret) return toast("未能读取已保存的密钥，请重试");
-        resumeAPI();
-      } finally {
-        if (restore.isConnected) {
-          restore.disabled = false;
-          restore.textContent = "恢复已保存的密钥";
-        }
-      }
-    }, "primary");
-    body.replaceChildren(el("div", { class: "api-form" }, [
-      el("h3", { text: "恢复 AI 助手" }),
-      el("p", { class: "hint", text: "本机已保存 API 密钥，需要你允许访问钥匙串。" }),
-      restore,
-      button("使用新密钥", renderForm),
-    ]));
+    renderForm();
+    body.querySelector('.api-form')?.append(el('p', { class:'hint', text:'旧版本密钥无法静默读取，请在此重新配置。不会要求输入 Mac 密码。' }));
   }).catch((error) => {
     if (!active()) return;
     renderForm();
@@ -6580,10 +6557,8 @@ function getGlobalAssistant() {
     setProvider: async provider => { prefs.aiProvider = provider; campusNoticeShown = false; if (aiConnection.effective() === "campus") toast(CAMPUS_NOTICE); await save("prefs.json", prefs); await refreshAIAvailability(); syncAIOptions(); },
     setCampusKey: async key => { await native.call("campusGateway", { key }); await refreshAIAvailability(); for (const id of ["question", "summary"]) if (panes[id] && apiReady) showAIContent(id); },
     setCampusOCRKey: async key => { await native.call("campusOCRKey", { key }); await refreshAIAvailability(); },
-    recoverCampusOCRKey: async () => { const result = await native.call("authorizeCredentials", { purpose: "campusOCR" }); if (!result?.ready) throw new Error("校园OCR密钥尚未恢复"); await refreshAIAvailability(); },
-    recoverCampusKey: async () => { const result = await native.call("authorizeCredentials", { purpose: "campus" }); if (!result?.ready) throw new Error("校园网关密钥尚未恢复"); await refreshAIAvailability(); },
     model: () => prefs.agentModel || prefs.model || "deepseek-flash", setModel: async model => { prefs.agentModel = model; await save("prefs.json", prefs); },
-    setKey: async text => { await native.call("secret", { text }); prefs.aiProvider = "personal"; await save("prefs.json", prefs); apiReady = true; aiConnection.status.personalReady = true; }, recoverKey: async () => { const result = await native.call("authorizeCredentials", { purpose: "api" }); if (!result?.ready) throw new Error("密钥尚未恢复"); apiReady = true; },
+    setKey: async text => { await native.call("secret", { text }); prefs.aiProvider = "personal"; await save("prefs.json", prefs); apiReady = true; aiConnection.status.personalReady = true; },
     stream: async (messages, delta, tools, setCancel) => {
       notifyCampusAI();
       const operation = native.call("ai", { ...aiConnection.request(), messages, tools, model: prefs.agentModel || prefs.model || "deepseek-flash" });

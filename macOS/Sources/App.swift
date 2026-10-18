@@ -21,7 +21,7 @@ func withKeychainInteractionPolicy<T>(allowUI:Bool,get:()throws->Bool,set:(Bool)
     let prior=try get();defer{if prior{try? set(prior)}};if prior{try set(false)};return try operation()
 }
 func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=false,onError:((OSStatus)->Void)?=nil)->Data?{
-    do{return try withKeychainInteractionPolicy(allowUI:allowUI,get:{
+    do{return try withKeychainInteractionPolicy(allowUI:false,get:{
         var allowed=DarwinBoolean(false);let status=SecKeychainGetUserInteractionAllowed(&allowed);guard status==errSecSuccess else{throw appError("钥匙串策略不可读",code:Int(status))};return allowed.boolValue
     },set:{allowed in
         let status=SecKeychainSetUserInteractionAllowed(allowed);guard status==errSecSuccess else{throw appError("钥匙串交互策略不可设置",code:Int(status))}
@@ -32,8 +32,8 @@ func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=fals
             var status=SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary)
             if status==errSecItemNotFound{
                 var add=query;add[kSecValueData as String]=data;add[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-                add[kSecAttrLabel as String]=(name=="cookies" || name==persistedSessionCredential) ? "智云助手 · 智云课堂会话":name=="identity" ? "智云助手 · 账号信息":name==campusGatewayCredential ? "智云助手 · 浙大校园网关":name==campusOCRCredential ? "智云助手 · 校园课件OCR":"智云助手 · DeepSeek API密钥"
-                add[kSecAttrDescription as String]=(name=="cookies" || name==persistedSessionCredential) ? "恢复课堂登录会话，不保存校园密码":name=="identity" ? "恢复账号和本机学习入口":"用于课程问答和本页速览"
+                add[kSecAttrLabel as String]=(name.hasPrefix("cookies") || name.hasPrefix(persistedSessionCredential)) ? "智云助手 · 智云课堂会话":name.hasPrefix("identity") ? "智云助手 · 账号信息":name.hasPrefix(campusGatewayCredential) ? "智云助手 · 浙大校园网关":name.hasPrefix(campusOCRCredential) ? "智云助手 · 校园课件OCR":"智云助手 · DeepSeek API密钥"
+                add[kSecAttrDescription as String]=(name.hasPrefix("cookies") || name.hasPrefix(persistedSessionCredential)) ? "恢复课堂登录会话，不保存校园密码":name.hasPrefix("identity") ? "恢复账号和本机学习入口":"用于课程问答和本页速览"
                 status=SecItemAdd(add as CFDictionary,nil)
             }
             guard status==errSecSuccess else{onError?(status);return nil};return data
@@ -43,6 +43,48 @@ func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=fals
         guard status==errSecSuccess else{if status != errSecItemNotFound{onError?(status)};return nil};return output as? Data
     })}catch{onError?(OSStatus((error as NSError).code));return nil}
 }
+// A new ad-hoc build must not update an old build's ACL-protected item. Keep
+// secrets in Keychain; this owner-only index contains item names, never values.
+final class CredentialSlots {
+    typealias Backend=(String,Data?,Bool,@escaping(OSStatus)->Void)->Data?
+    private let indexURL:URL,tag:String,backend:Backend
+    init(indexURL:URL,tag:String,backend:@escaping Backend){self.indexURL=indexURL;self.tag=tag;self.backend=backend}
+    private func index()->[String:String]{guard let data=try? Data(contentsOf:indexURL),data.count<256*1024 else{return [:]};return (try? JSONDecoder().decode([String:String].self,from:data)) ?? [:]}
+    private func record(_ logical:String,_ slot:String)throws{
+        var rows=index();rows[logical]=slot
+        try FileManager.default.createDirectory(at:indexURL.deletingLastPathComponent(),withIntermediateDirectories:true)
+        try JSONEncoder().encode(rows).write(to:indexURL,options:.atomic)
+        try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:indexURL.path)
+    }
+    func access(_ name:String,_ data:Data?,remove:Bool,onError:@escaping(OSStatus)->Void)->Data?{
+        let slot=name+"-app-"+tag,previous=index()[name]
+        if remove{
+            // Tombstone first: an inaccessible legacy item must never reappear.
+            do{try record(name,"")}catch{onError(errSecIO);return nil}
+            _ = backend(slot,nil,true){onError($0)};return nil
+        }
+        if let data=data{
+            guard let stored=backend(slot,data,false,onError) else{return nil}
+            do{try record(name,slot)}catch{onError(errSecIO);return nil};return stored
+        }
+        if previous==""{return nil}
+        var failure:OSStatus?
+        var candidates=[slot]
+        if let previous=previous,previous.hasPrefix(name+"-app-"),previous != slot{candidates.append(previous)}
+        candidates.append(name)
+        for candidate in candidates{
+            if let stored=backend(candidate,nil,false,{failure=$0}){
+                if candidate != slot{
+                    // Migration is optional and silent; never replace the source.
+                    if backend(slot,stored,false,{_ in}) != nil{try? record(name,slot)}
+                }
+                return stored
+            }
+        }
+        if let failure=failure{onError(failure)};return nil
+    }
+}
+
 final class KeychainMemoryCache {
     typealias Backend=(String,Data?,Bool,Bool,@escaping(OSStatus)->Void)->Data?
     private let backend:Backend
@@ -283,13 +325,22 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     private var cookieRestoreStarted=false,cookieRestoreComplete=false,cookieRestoreCallbacks=[()->Void](),credentialUIAllowed=false
     private var accountGeneration=UUID()
     private var pendingAI=Set<String>(),cancelledAI=Set<String>()
+    // Legacy allowUI arguments only bypass a cached failure. Actual Keychain
+    // access is ALWAYS noninteractive, including explicit save/recovery routes.
     lazy var credentialCache=KeychainMemoryCache{[unowned self] name,data,remove,allowUI,onError in
         #if NATIVE_CONTRACT_TESTS
-        if let operation=self.testKeychainOperation{return operation(name,data,remove,allowUI,onError)}
+        if let operation=self.testKeychainOperation{return operation(name,data,remove,false,onError)}
         if let storage=self.testSessionKeychain{return storage(name,data,remove)}
         #endif
-        return keychain(name,data,remove:remove,allowUI:allowUI,onError:onError)
+        return self.credentialSlots.access(name,data,remove:remove,onError:onError)
     }
+    private lazy var credentialSlots:CredentialSlots={
+        let bytes=Bundle.main.executableURL.flatMap{try? Data(contentsOf:$0,options:.mappedIfSafe)} ?? Data("unknown-build".utf8)
+        let tag=SHA256.hash(data:bytes).prefix(12).map{String(format:"%02x",$0)}.joined()
+        return CredentialSlots(indexURL:root.appendingPathComponent("credential-slots.json"),tag:tag){name,data,remove,onError in
+            keychain(name,data,remove:remove,allowUI:false,onError:onError)
+        }
+    }()
     private var sessionWeb:WKWebView?,sessionCallbacks=[(Bool)->Void](),sessionDeadline:DispatchWorkItem?,sessionLastAttempt=Date.distantPast,sessionGeneration=UUID()
     private var toolbarName="",toolbarLoggedIn=false
     var mainToolbar:NSToolbar?
@@ -781,8 +832,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         case "secret":
             let name=account+"-deepseek",owner=account,generation=accountGeneration
             storageQueue.async{
-                if p["remove"] as? Bool == true{var failure:OSStatus?;_=self.sessionKeychain(name,remove:true,allowUI:true,onError:{failure=$0});if failure != nil{self.reply(id,nil,"无法移除密钥，请检查钥匙串访问授权")}else{self.reply(id,true)}}
-                else if let text=p["text"] as? String{guard self.sessionKeychain(name,Data(text.utf8),allowUI:true) != nil else{self.reply(id,nil,"无法保存密钥，请检查钥匙串访问授权");return};self.reply(id,true)}
+                if p["remove"] as? Bool == true{var failure:OSStatus?;_=self.sessionKeychain(name,remove:true,allowUI:true,onError:{failure=$0});if failure != nil{self.reply(id,nil,"无法静默移除密钥，请稍后重试")}else{self.reply(id,true)}}
+                else if let text=p["text"] as? String{guard self.sessionKeychain(name,Data(text.utf8),allowUI:true) != nil else{self.reply(id,nil,"无法静默保存密钥，请确认登录钥匙串已解锁后重试");return};self.reply(id,true)}
                 else{let text=String(data:self.sessionKeychain(name) ?? Data(),encoding:.utf8) ?? "";DispatchQueue.main.async{guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return};self.reply(id,text)}}
             }
         case "cache":
@@ -928,7 +979,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let name=campus ? campusGatewayCredential:owner+"-deepseek",key=campus ? String(data:self.sessionKeychain(name) ?? Data(),encoding:.utf8) ?? "":personal,required=self.credentialCache.requiresAuthorization([name])
             DispatchQueue.main.async{
                 self.pendingAI.remove(id);guard !self.loggingOut,owner==self.account,generation==self.accountGeneration,self.cancelledAI.remove(id)==nil else{self.reply(id,nil,"请求已取消");return}
-                guard !key.isEmpty else{self.reply(id,nil,required ? "请在API设置中恢复已保存的密钥":campus ? "本机尚未预置校园网关密钥，可在API设置中接入个人API":"请先设置 DeepSeek API 密钥");return}
+                guard !key.isEmpty else{self.reply(id,nil,required ? "旧版本密钥无法静默读取，请在API设置中重新配置":campus ? "本机尚未预置校园网关密钥，可在API设置中接入个人API":"请先设置 DeepSeek API 密钥");return}
                 var options=params;options["provider"]=campus ? "campus":"personal"
                 self.startAIWithKey(id,params:options,messages:messages,key:key)
             }
@@ -942,7 +993,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let key=String(data:self.sessionKeychain(campusOCRCredential) ?? Data(),encoding:.utf8) ?? ""
             DispatchQueue.main.async{
                 self.pendingAI.remove(id);guard owner==self.account,generation==self.accountGeneration,self.cancelledAI.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"OCR已取消");return}
-                guard !key.isEmpty else{self.reply(id,nil,"本机校园OCR尚未配置或需要主动恢复密钥");return}
+                guard !key.isEmpty else{self.reply(id,nil,"本机校园OCR尚未配置或旧密钥无法静默读取，请在应用内重新配置");return}
                 var request=URLRequest(url:URL(string:campusOCREndpoint)!);request.httpMethod="POST";request.setValue("Bearer "+key,forHTTPHeaderField:"Authorization");request.setValue("application/json",forHTTPHeaderField:"Content-Type");request.httpBody=try? JSONSerialization.data(withJSONObject:["file":decoded.data.base64EncodedString(),"fileType":1])
                 let config=URLSessionConfiguration.ephemeral;config.httpCookieStorage=nil;config.urlCache=nil;config.timeoutIntervalForRequest=25;config.timeoutIntervalForResource=45
                 let session=URLSession(configuration:config);self.ocrOperations[id]=session

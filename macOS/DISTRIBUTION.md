@@ -1,10 +1,10 @@
 # macOS 预览版本分发
 
-Mac 1.7.0（构建 11）为 universal 应用，最低 macOS 13。GitHub 提供 DMG、应用 ZIP、独立源码 ZIP 和 SHA256SUMS.txt。
+Mac 1.7.0（构建 12）为 universal 应用，最低 macOS 13。GitHub 提供 DMG、应用 ZIP、独立源码 ZIP 和 SHA256SUMS.txt。
 
 使用 ad-hoc 签名，并在构建后执行 `codesign --verify --deep --strict`。当前没有 Developer ID 发行证书和 Apple 公证记录，不以此包宣称已完成 Mac App Store 或正式公证分发。
 
-学校登录使用 WebKit 与钥匙串中的受保护会话快照共同恢复，保留会话型 Cookie 的原始属性。后台不主动弹出授权，只有主动点击“恢复登录”才允许系统恢复受保护的会话；真正过期时仍需学校官方认证。DeepSeek 密钥独立保护，主动点击“恢复已保存的密钥”可恢复密钥授权。升级身份稳定性仍需正式开发者签名，依据 [Apple 的签名要求说明](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)。
+学校登录使用 WebKit 与受保护的本机会话快照恢复；真正过期时仍需学校官方认证。所有钥匙串读取、写入、删除和兼容恢复入口一律禁止交互式授权，不弹出 Mac 登录密码框。旧构建的受保护密钥无法静默读取时，仅在应用内提示重新配置；新密钥保存在当前构建自己的钥匙串条目中。普通资料文件只保存条目名称，不保存密钥。正式发行仍需要稳定的开发者签名。
 
 公开包仅包含程序、图标、界面与共享模型。测试数据为人工合成，源码和安装包不包含课程截图、实际转写、用户身份、Cookie、API 密钥、签名私钥或本机资料目录。
 

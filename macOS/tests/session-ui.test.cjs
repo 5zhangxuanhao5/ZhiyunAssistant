@@ -176,53 +176,27 @@ test('successful session restoration resumes the saved classroom without logout 
   assert.equal(f.r.calls.some(([action]) => action === 'logout' || action === 'login'), false);
 });
 
-test('protected API credentials are recovered in the current study view without replacing the note editor or asking for a new key', async t => {
+test('blocked old API keys show in-app reconfiguration without any system authorization request', async t => {
   const f = await authorizationFixture(t, { apiBlocked: true });
-  f.app.setup();
-  await f.app.enter(f.r.current);
-  f.app.togglePane('notes');
-  const editor = f.app.state().notesEditor;
-  editor.insertFragment('Synthetic local note', true);
-  f.app.togglePane('question');
-  f.app.togglePane('summary');
-  const restore = await waitFor(() => findButton(f.doc, '恢复已保存的密钥', f.doc.querySelector('[data-pane=question]')), 'saved-key recovery button');
-  assert.equal(f.doc.querySelector('#questionBody input[type=password]'), null);
-  const before = f.app.state(), course = before.lesson.subId, page = before.index, calls = f.r.calls.length;
-  restore.click();
-  await waitFor(() => f.authorizations.length === 1, 'one API authorization');
-  assert.equal(f.authorizations[0].purpose, 'api');
-  assert.equal(restore.disabled, true);
-  f.authorizations[0].resolve({ ready: true, authorizationRequired: false });
-  await waitFor(() => f.doc.querySelector('#questionBody').textContent.includes('Shift＋Enter') && !f.doc.querySelector('.question-options').hidden, 'current conversation restored');
-  assert.equal(f.app.state().page, 'study');
-  assert.equal(f.app.state().lesson.subId, course);
-  assert.equal(f.app.state().index, page);
-  assert.equal(f.app.state().notesEditor, editor);
-  assert.match(f.doc.querySelector('#notesBody').textContent, /Synthetic local note/);
-  assert.equal(f.doc.querySelector('.summary-options').hidden, false);
-  assert.equal(f.doc.querySelector('.question-options').hidden, false);
-  assert.equal(f.r.calls.slice(calls).some(([action]) => ['identity', 'account', 'login', 'logout', 'resumeSession'].includes(action)), false);
-  assert.equal(f.r.calls.some(([action, params]) => action === 'secret' && params.text !== undefined), false);
+  f.app.setup(); await f.app.enter(f.r.current); f.app.togglePane('notes');
+  const editor=f.app.state().notesEditor;editor.insertFragment('Synthetic local note',true);
+  f.app.togglePane('question');f.app.togglePane('summary');
+  const input=await waitFor(()=>f.doc.querySelector('#questionBody input[type=password]'),'in-app key form');
+  assert.match(f.doc.querySelector('#questionBody').textContent,/不会要求输入 Mac 密码/);
+  assert.equal(findButton(f.doc,'恢复已保存的密钥'),undefined);
+  const course=f.app.state().lesson.subId,page=f.app.state().index;
+  input.value='sk-synthetic-reconfigured-key-123456';findButton(f.doc,'保存密钥',f.doc.querySelector('#questionBody')).click();
+  await waitFor(()=>f.doc.querySelector('#questionBody').textContent.includes('Shift＋Enter'),'conversation after key save');
+  assert.equal(f.app.state().lesson.subId,course);assert.equal(f.app.state().index,page);assert.equal(f.app.state().notesEditor,editor);
+  assert.equal(f.authorizations.length,0);
+  assert.equal(f.r.calls.some(([action,params])=>action==='secret'&&params.text===input.value),true);
 });
 
-test('API authorization finishing after its pane closes cannot update a replacement study view', async t => {
-  const f = await authorizationFixture(t, { apiBlocked: true });
-  f.app.setup();
-  await f.app.enter(f.r.current);
-  f.app.togglePane('question');
-  const restore = await waitFor(() => findButton(f.doc, '恢复已保存的密钥'), 'saved-key recovery button');
-  restore.click();
-  await waitFor(() => f.authorizations.length === 1, 'pending API authorization');
-  f.app.togglePane('question');
-  const calls = f.r.calls.length;
-  f.authorizations[0].resolve({ ready: true, authorizationRequired: false });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.doc.querySelector('#questionBody'), null);
-  assert.equal(f.app.state().page, 'study');
-  assert.equal(f.r.calls.slice(calls).some(([action]) => action === 'secret'), false);
-  f.app.togglePane('question');
-  await waitFor(() => f.doc.querySelector('#questionBody').textContent.includes('Shift＋Enter') && !f.doc.querySelector('.question-options').hidden, 'reopened pane uses already recovered silent secret');
-  assert.equal(f.authorizations.length, 1);
+test('closing and reopening a blocked API pane never starts interactive credential recovery',async t=>{
+  const f=await authorizationFixture(t,{apiBlocked:true});f.app.setup();await f.app.enter(f.r.current);f.app.togglePane('question');
+  await waitFor(()=>f.doc.querySelector('#questionBody input[type=password]'),'key form');
+  f.app.togglePane('question');f.app.togglePane('question');
+  await waitFor(()=>f.doc.querySelector('#questionBody input[type=password]'),'reopened key form');assert.equal(f.authorizations.length,0);
 });
 
 test('a readable identity with protected cookies keeps local pages available, blocks guest probes and still permits a new official login', async t => {

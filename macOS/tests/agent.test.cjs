@@ -59,7 +59,7 @@ test('assistant floats on nonstudy pages, docks into a resizable pane, survives 
  const{r,a,assistant,doc}=await fixture(t);await assistant.show();assert.equal(assistant.root.hidden,false);const root=assistant.root;await a.go('offline');assert.equal(root.isConnected,true);
  await a.enter(r.current);await assistant.setMode('pane');assert.ok(doc.querySelector('[data-pane=agent] [data-global-agent]'));assert.equal(root.dataset.mode,'pane');assert.ok(Number.parseFloat(doc.querySelector('[data-pane=agent]').style.width)>0);
  assistant.history=[{role:'user',content:'Synthetic conversation'}];await assistant.persist();await a.go('recent');assert.equal(root.isConnected,true);assert.equal(root.dataset.mode,'floating');assert.equal(assistant.history.length,1);
- await a.enter(r.current);assert.equal(root.dataset.mode,'pane');assert.ok(root.closest('[data-pane=agent]'));await assistant.setMode('floating');assert.equal(doc.querySelector('[data-pane=agent]'),null);
+ assistant.floatingControl.select(true);await a.enter(r.current);assert.equal(root.dataset.mode,'pane');assert.equal(assistant.floatingControl.selected,false);assert.ok(root.closest('[data-pane=agent]'));await assistant.setMode('floating');assert.equal(doc.querySelector('[data-pane=agent]'),null);
  assistant.hide();assert.equal(root.hidden,true);assert.equal(assistant.bubble.hidden,false);assert.ok(JSON.parse(r.data.get('chats-agent.json')).conversations.length);
 });
 test('interface excludes credentials and its own assistant and rejects expired observed controls',async t=>{
@@ -114,4 +114,28 @@ test('interface can open disclosure controls and paginate without making hidden 
 });
 test('course index and background materials avoid navigating away from the user lesson',async t=>{
  const{a,actions}=await fixture(t);const before=a.state().page,list=await actions.execute('list_courses',{});assert.equal(list.total,1);const key=list.courses[0].keys[0];const result=await actions.execute('read_material',{key,from:60,limit:1});assert.equal(result.lines[0].text,'Fixture sentence two');assert.equal(a.state().page,before);assert.ok(result.pages.length);
+});
+
+test('floating assistant requires its grip, resizes from all eight directions and deselects on content or outside press',async t=>{
+ const{r,assistant,doc}=await fixture(t);await assistant.show();const root=assistant.root,control=assistant.floatingControl,grip=assistant.dragHandle;
+ root.getBoundingClientRect=()=>({left:parseFloat(root.style.left),top:parseFloat(root.style.top),width:parseFloat(root.style.width),height:parseFloat(root.style.height)});
+ const initial={left:200,top:100,width:450,height:400},pointer=(node,type,x,y,kind='mouse')=>{const e=new r.win.MouseEvent(type,{bubbles:true,cancelable:true,button:0,clientX:x,clientY:y});Object.defineProperties(e,{pointerId:{value:18},pointerType:{value:kind}});node.dispatchEvent(e);};
+ const drag=(node,dx,dy,kind)=>{pointer(node,'pointerdown',300,200,kind);pointer(root,'pointermove',300+dx,200+dy,kind);pointer(root,'pointerup',300+dx,200+dy,kind);};
+ control.apply(initial);drag(root.querySelector('.agent-head'),30,20);assert.deepEqual(root.getBoundingClientRect(),initial);assert.equal(control.selected,false);
+ drag(root.querySelector('[data-agent-edge=e]'),30,20);assert.deepEqual(root.getBoundingClientRect(),initial);
+ drag(grip,30,20,'touch');assert.equal(control.selected,true);assert.equal(root.getBoundingClientRect().left,230);assert.equal(root.getBoundingClientRect().top,120);
+ for(const edge of ['n','s','w','e','nw','ne','sw','se']){control.apply(initial);drag(root.querySelector('[data-agent-edge='+edge+']'),20,15);const box=root.getBoundingClientRect();assert.equal(box.left,200+(edge.includes('w')?20:0),edge);assert.equal(box.top,100+(edge.includes('n')?15:0),edge);assert.equal(box.width,450+(edge.includes('e')?20:edge.includes('w')?-20:0),edge);assert.equal(box.height,400+(edge.includes('s')?15:edge.includes('n')?-15:0),edge);}
+ pointer(assistant.input,'pointerdown',310,210);assert.equal(control.selected,false);const before=root.getBoundingClientRect();drag(root.querySelector('[data-agent-edge=e]'),30,0);assert.deepEqual(root.getBoundingClientRect(),before);
+ pointer(grip,'pointerdown',300,200);pointer(root,'pointerup',300,200);pointer(doc.body,'pointerdown',10,10);assert.equal(control.selected,false);assert.equal(grip.getAttribute('aria-pressed'),'false');
+ await assistant.persistDisplay();assert.deepEqual(JSON.parse(r.data.get('agent-display.json')).geometry,root.getBoundingClientRect());assert.equal(doc.querySelector('.agent-suggestion'),null);assert.equal(r.calls.filter(c=>c[0]==='ai').length,0);
+});
+test('floating assistant geometry keeps the opposite resize edge fixed and its top grip reachable',async()=>{
+ const r=runtime();try{const{resizeFloatingPane,floatingPaneBounds}=await r.load('parity-interactions.js');const base={left:200,top:100,width:450,height:400};
+ const minimum=resizeFloatingPane(base,1000,1000,'nw',1200,900);assert.equal(minimum.width,300);assert.equal(minimum.height,250);assert.equal(minimum.left+minimum.width,650);assert.equal(minimum.top+minimum.height,500);
+ const offscreen=floatingPaneBounds({...base,left:-1000,top:-1000},1200,900);assert.equal(offscreen.top,0);assert.equal(offscreen.left+offscreen.width,40);
+ const small=floatingPaneBounds(base,280,220);assert.equal(small.width,264);assert.equal(small.height,204);
+ }finally{r.win.close()}
+});
+test('docking and minimising cancel floating adjustment and preserve the saved frame',async t=>{
+ const{r,a,assistant}=await fixture(t);await assistant.show();const control=assistant.floatingControl;control.select(true);await a.enter(r.current);await assistant.setMode('pane');assert.equal(control.selected,false);control.select(true);assert.equal(control.selected,false);await assistant.setMode('floating');control.select(true);assistant.hide();assert.equal(control.selected,false);assert.equal(assistant.root.hidden,true);
 });

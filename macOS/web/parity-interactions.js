@@ -104,6 +104,52 @@ export function restoreScrollAnchor(root, anchor, selector = '[data-line], [data
 function listen(target, type, listener, options, disposers) { target.addEventListener(type, listener, options); disposers.push(() => target.removeEventListener(type, listener, options)); }
 function element(doc, tag, cls, text) { const node = doc.createElement(tag); if (cls) node.className = cls; if (text != null) node.textContent = text; return node; }
 
+/** Pixel geometry for the global floating pane; keep its top bar reachable. */
+export function floatingPaneBounds(value, width, height) {
+  const maxW=Math.max(1,width-16),maxH=Math.max(1,height-16),w=clamp(value.width,Math.min(300,maxW),maxW),h=clamp(value.height,Math.min(250,maxH),maxH);
+  return {left:clamp(value.left,40-w,width-40),top:clamp(value.top,0,Math.max(0,height-40)),width:w,height:h};
+}
+export function resizeFloatingPane(rect, dx, dy, edge, width, height) {
+  if(edge==='move')return floatingPaneBounds({...rect,left:rect.left+dx,top:rect.top+dy},width,height);
+  let left=rect.left,top=rect.top,right=left+rect.width,bottom=top+rect.height;
+  const maxW=Math.max(1,width-16),maxH=Math.max(1,height-16),minW=Math.min(300,maxW),minH=Math.min(250,maxH);
+  if(edge.includes('w'))left=clamp(left+dx,right-maxW,right-minW);
+  if(edge.includes('e'))right=clamp(right+dx,left+minW,left+maxW);
+  if(edge.includes('n'))top=clamp(top+dy,Math.max(0,bottom-maxH),bottom-minH);
+  if(edge.includes('s'))bottom=clamp(bottom+dy,top+minH,top+maxH);
+  return floatingPaneBounds({left,top,width:right-left,height:bottom-top},width,height);
+}
+/** Same activation contract as study panes: grip first, then any edge or corner. */
+export class FloatingPaneController {
+  constructor({root,handle,enabled=()=>true,onChange=()=>{}}) {
+    Object.assign(this,{root,handle,enabled,onChange});this.selected=false;this.drag=null;this.frame=0;this.disposers=[];
+    const doc=root.ownerDocument;this.win=doc.defaultView;
+    handle.setAttribute('role','button');handle.setAttribute('aria-label','调整应用助手');handle.setAttribute('aria-pressed','false');handle.tabIndex=0;
+    for(const edge of RESIZE_EDGES){const n=element(doc,'div','agent-edge '+edge);n.dataset.agentEdge=edge;n.setAttribute('aria-hidden','true');root.append(n);}
+    listen(root,'pointerdown',e=>{
+      if(!this.enabled()||e.button!==0)return;
+      const grip=handle.contains(e.target),edge=e.target.closest?.('[data-agent-edge]')?.dataset.agentEdge;
+      if(!grip&&!edge){this.select(false);return;}
+      if(edge&&!this.selected)return;
+      e.preventDefault();e.stopPropagation();this.select(true);const box=root.getBoundingClientRect();
+      this.drag={pointer:e.pointerId,edge:edge||'move',x:e.clientX,y:e.clientY,rect:{left:box.left,top:box.top,width:box.width,height:box.height}};
+      root.classList.add('dragging');root.setPointerCapture?.(e.pointerId);
+    },true,this.disposers);
+    listen(root,'pointermove',e=>{if(!this.drag||e.pointerId!==this.drag.pointer)return;e.preventDefault();this.latest={x:e.clientX,y:e.clientY};if(!this.frame)this.frame=this.win.requestAnimationFrame(()=>this.commit());},false,this.disposers);
+    const end=e=>{if(!this.drag||e.pointerId!==this.drag.pointer)return;if(e.type==='pointerup')this.latest={x:e.clientX,y:e.clientY};this.finish();};
+    listen(root,'pointerup',end,false,this.disposers);listen(root,'pointercancel',end,false,this.disposers);listen(root,'lostpointercapture',end,false,this.disposers);
+    listen(doc,'pointerdown',e=>{if(!root.contains(e.target))this.select(false);},true,this.disposers);
+    listen(handle,'keydown',e=>{if(!this.enabled())return;if(e.key==='Enter'||e.key===' '){e.preventDefault();this.select(true);}else if(e.key==='Escape'){e.preventDefault();this.select(false);}},false,this.disposers);
+  }
+  select(value){this.selected=!!value&&this.enabled();this.root.classList.toggle('selected',this.selected);this.handle.setAttribute('aria-pressed',String(this.selected));}
+  apply(rect){Object.assign(this.root.style,{left:rect.left+'px',top:rect.top+'px',width:rect.width+'px',height:rect.height+'px',right:'auto',bottom:'auto'});this.placeHandle(rect);}
+  placeHandle(rect){const w=this.win.innerWidth,visibleLeft=Math.max(0,-rect.left),visibleRight=Math.min(rect.width,w-rect.left),bar=Math.min(56,Math.max(24,visibleRight-visibleLeft-8));this.handle.style.width=bar+'px';this.handle.style.left=clamp((rect.width-bar)/2,visibleLeft+4,visibleRight-bar-4)+'px';}
+  commit(){if(this.frame)this.win.cancelAnimationFrame(this.frame);this.frame=0;if(!this.drag||!this.latest)return;this.apply(resizeFloatingPane(this.drag.rect,this.latest.x-this.drag.x,this.latest.y-this.drag.y,this.drag.edge,this.win.innerWidth,this.win.innerHeight));}
+  finish(){if(!this.drag)return;this.commit();const pointer=this.drag.pointer;this.drag=null;this.latest=null;this.root.classList.remove('dragging');if(this.root.hasPointerCapture?.(pointer))this.root.releasePointerCapture(pointer);this.onChange();}
+  clear(){this.finish();this.select(false);}
+  dispose(){this.clear();this.disposers.forEach(f=>f());}
+}
+
 /**
  * Use one controller per study stage. getPanes/getIds can return the current app maps.
  * callbacks: onFocus(id), onLayout(rects), onContentResize(), onSave(allSaved),

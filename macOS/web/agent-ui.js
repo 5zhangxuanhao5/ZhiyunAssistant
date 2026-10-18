@@ -1,5 +1,6 @@
 import { AgentRunner } from './agent-runtime.js';
 import { makeIcon } from './theme-icons.js';
+import { FloatingPaneController, floatingPaneBounds } from './parity-interactions.js';
 import { CAMPUS_NOTICE, CAMPUS_LIMITS } from './ai-connection.js';
 const create = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 export class GlobalAssistant {
@@ -12,7 +13,7 @@ export class GlobalAssistant {
     if (this.root) return;
     const root = this.root = create('section', 'global-agent'); root.dataset.globalAgent = ''; root.setAttribute('aria-label', '应用助手');
     root.setAttribute('role', 'region'); root.hidden = true;
-    const head = create('header', 'agent-head pane-header'); this.dragHandle = head; const grip=create('span','agent-handle');grip.setAttribute('aria-hidden','true');head.append(grip);
+    const head = create('header', 'agent-head pane-header'); const grip=this.dragHandle=create('span','agent-handle');head.append(grip);
     const title = create('strong', 'pane-title', '应用助手');
     this.status = create('span', 'agent-status', '随时为你操作');
     const identity = create('div', 'agent-identity'); identity.append(title, this.status);
@@ -37,16 +38,9 @@ export class GlobalAssistant {
     root.addEventListener('scroll', () => { if (root.scrollTop || root.scrollLeft) { root.scrollTop = 0; root.scrollLeft = 0; } }, { passive:true });
     this.bubble = this.action('应用助手', () => this.show(), 'agent-bubble'); this.bubble.dataset.globalAgent = ''; this.bubble.hidden = true;
     document.body.append(root, this.bubble);
-    head.addEventListener('pointerdown', e => {
-      if (e.button !== 0 || this.mode === 'pane' || e.target.closest('button')) return;
-      e.preventDefault(); head.setPointerCapture(e.pointerId);
-      const box = root.getBoundingClientRect(), startX = e.clientX, startY = e.clientY;
-      const move = p => { root.style.left = Math.max(0, Math.min(window.innerWidth - 100, box.left + p.clientX - startX)) + 'px'; root.style.top = Math.max(0, Math.min(window.innerHeight - 60, box.top + p.clientY - startY)) + 'px'; root.style.right = 'auto'; root.style.bottom = 'auto'; };
-      const end = () => { head.removeEventListener('pointermove', move); head.removeEventListener('pointerup', end); head.removeEventListener('pointercancel', end); this.rememberGeometry(); };
-      head.addEventListener('pointermove', move); head.addEventListener('pointerup', end); head.addEventListener('pointercancel', end);
-    });
+    this.floatingControl=new FloatingPaneController({root,handle:grip,enabled:()=>this.mode!=='pane'&&!root.hidden,onChange:()=>this.rememberGeometry()});
     this.resizeObserver = new ResizeObserver(() => this.rememberGeometry()); this.resizeObserver.observe(root);
-    window.addEventListener('resize', () => this.clamp());
+    window.addEventListener('resize', () => { this.clamp(); this.rememberGeometry(); });
     this.empty();
   }
   labelAction(node, label) {
@@ -74,18 +68,18 @@ export class GlobalAssistant {
     else if (this.mode !== 'pane') this.options.detach(this.root);
     this.clamp(); this.input.focus({ preventScroll: true });
   }
-  hide() { if (!this.root) return; this.options.undock(); this.mode = 'floating'; this.root.dataset.mode = 'floating'; document.body.append(this.root); this.root.hidden = true; this.bubble.hidden = false; }
+  hide() { if (!this.root) return; this.floatingControl?.clear(); this.options.undock(); this.mode = 'floating'; this.root.dataset.mode = 'floating'; document.body.append(this.root); this.root.hidden = true; this.bubble.hidden = false; }
   toggle() { return !this.root || this.root.hidden ? this.show() : this.hide(); }
   async setMode(mode) {
     this.mount(); if (mode === 'pane' && !this.options.canDock()) { this.notice('进入学习后可以收为功能区'); return; }
-    this.root.hidden = false; this.bubble.hidden = true; this.preferredMode = mode; this.mode = mode; this.root.dataset.mode = mode;
+    this.floatingControl?.clear();this.root.hidden = false; this.bubble.hidden = true; this.preferredMode = mode; this.mode = mode; this.root.dataset.mode = mode;
     if (mode === 'pane') this.options.dock(this.root); else { this.options.undock(); this.options.detach(this.root); this.clamp(); }
     this.labelAction(this.dockButton, mode === 'pane' ? '浮动显示' : '收为功能区');
     await this.persistDisplay();
   }
   routeChanged() {
     if (!this.root || this.root.hidden) return;
-    if (this.preferredMode === 'pane' && this.options.canDock()) { this.mode = 'pane'; this.root.dataset.mode = 'pane'; this.options.dock(this.root); this.labelAction(this.dockButton, '浮动显示'); }
+    if (this.preferredMode === 'pane' && this.options.canDock()) { this.floatingControl?.clear(); this.mode = 'pane'; this.root.dataset.mode = 'pane'; this.options.dock(this.root); this.labelAction(this.dockButton, '浮动显示'); }
   }
   leavePane() {
     if (!this.root || this.mode !== 'pane') return;
@@ -93,9 +87,11 @@ export class GlobalAssistant {
   }
   clamp() {
     if (!this.root || this.mode === 'pane') return;
-    const geo = this.savedGeometry || {}, width = Math.max(300, Math.min(window.innerWidth - 24, Number(geo.width) || 390)), height = Math.max(250, Math.min(window.innerHeight - 24, Number(geo.height) || 540));
-    Object.assign(this.root.style, { width: width + 'px', height: height + 'px', left: Math.max(8, Math.min(window.innerWidth - width - 8, Number(geo.left) || window.innerWidth - width - 24)) + 'px', top: Math.max(8, Math.min(window.innerHeight - height - 8, Number(geo.top) || 72)) + 'px', right: 'auto', bottom: 'auto' });
+    const geo=this.savedGeometry||{},width=Number(geo.width)||390,height=Number(geo.height)||540;
+    const rect=floatingPaneBounds({width,height,left:Number.isFinite(geo.left)?geo.left:window.innerWidth-width-24,top:Number.isFinite(geo.top)?geo.top:72},window.innerWidth,window.innerHeight);
+    this.floatingControl.apply(rect);
   }
+
   rememberGeometry() {
     if (!this.root || this.root.hidden || this.mode === 'pane') return;
     const box = this.root.getBoundingClientRect(); if (!box.width) return;
@@ -107,11 +103,7 @@ export class GlobalAssistant {
     this.root.dataset.view = 'chat';
     const welcome = create('div', 'agent-welcome'), mark = create('div', 'agent-welcome-mark'); mark.append(makeIcon('agent'));
     welcome.append(mark, create('div', 'agent-empty', '从一个想法开始'), create('p', 'agent-empty-detail', '找课程、整理笔记，或处理学习资料。直接告诉我就好。'));
-    const prompts = create('div', 'agent-suggestions');
-    for (const [label, text, icon] of [['继续最近课程', '打开最近一节已结束的课程。', 'book'], ['整理课堂笔记', '把当前课程这一页的重点整理到课堂笔记。', 'notes'], ['下载本节课件', '下载当前这节课的课件，保留在本机。', 'download']]) {
-      const action = this.action(label, () => { this.input.value = text; this.input.dispatchEvent(new this.input.ownerDocument.defaultView.Event('input')); this.input.focus(); }, 'agent-suggestion'); action.prepend(makeIcon(icon)); prompts.append(action);
-    }
-    welcome.append(prompts); this.log.replaceChildren(welcome);
+    this.log.replaceChildren(welcome);
   }
   renderHistory() { this.root.dataset.view = 'chat'; if (!this.history.length) return this.empty(); this.log.replaceChildren(); for (const turn of this.history) this.addTurn(turn.role, turn.content, turn.activity); this.scroll(); }
   addTurn(role, text = '', activity = null) { if (this.log.querySelector('.agent-empty')) this.log.replaceChildren(); this.root.dataset.view = 'chat'; const n = create('div', 'agent-turn ' + role); n.append(create('span', 'agent-speaker', role === 'user' ? '你' : '应用助手'), create('div', 'agent-message', text)); this.log.append(n); const message = n.querySelector('.agent-message'); if (role === 'assistant') { this.format(message, text); if(activity?.steps?.length){const progress=this.makeProgress(activity.steps,activity.status||'已完成');n.insertBefore(progress.node,message);} } return message; }
@@ -228,7 +220,7 @@ export class GlobalAssistant {
     this.log.append(advanced, create('p', 'agent-privacy-note', '只在你发起任务时，向所选服务发送完成任务所需的资料。'), footer); this.log.scrollTop = 0; this.root.scrollTop = 0;
   }
   reset() {
-    this.runner.stop(); this.generation++; clearTimeout(this.geometryTimer); this.history = []; this.messages = []; this.currentId = 'agent-' + Date.now(); this.loadedOwner = null; this.savedGeometry = null; this.progress=null;this.reply=null; this.preferredMode = 'floating';
+    this.floatingControl?.clear();this.runner.stop(); this.generation++; clearTimeout(this.geometryTimer); this.history = []; this.messages = []; this.currentId = 'agent-' + Date.now(); this.loadedOwner = null; this.savedGeometry = null; this.progress=null;this.reply=null; this.preferredMode = 'floating';
     if (this.root) { this.leavePane(); this.options.undock(); this.root.hidden = true; this.bubble.hidden = true; this.busy(false); this.empty(); }
   }
 }

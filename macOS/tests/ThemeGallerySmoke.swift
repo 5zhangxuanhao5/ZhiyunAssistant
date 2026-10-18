@@ -66,11 +66,11 @@ import CryptoKit
    try data.write(to:output.appendingPathComponent(id+".png"));records.append(["id":id,"sha256":hash,"bytes":data.count,"metrics":metrics]);print("Captured actual homepage: "+id)
    app.event("toolbarAction","agent")
    try waitJS(view,"!!document.querySelector('.global-agent:not([hidden]) .agent-empty')")
-   guard try evaluate(view,"document.querySelectorAll('.agent-suggestion').length===3 && !window.__smoke.aiCalls") as? Bool==true else{throw appError("Assistant examples must not execute or make model requests")}
+   guard try evaluate(view,"!document.querySelector('.agent-suggestion') && !window.__smoke.aiCalls") as? Bool==true else{throw appError("Empty assistant must not show fixed suggestions or make model requests")}
    let assistantRectText=try evaluate(view,"JSON.stringify((()=>{const r=document.querySelector('.global-agent').getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}})())") as! String
    let assistantRect=try JSONSerialization.jsonObject(with:Data(assistantRectText.utf8)) as! [String:Double]
    let rect=CGRect(x:assistantRect["x"]!,y:assistantRect["y"]!,width:assistantRect["width"]!,height:assistantRect["height"]!)
-   guard try evaluate(view,"(()=>{const log=document.querySelector('.agent-log'),last=document.querySelector('.agent-suggestions button:last-child');return last.getBoundingClientRect().bottom<=log.getBoundingClientRect().bottom})()") as? Bool==true else{throw appError("Assistant examples clipped behind composer: "+id)}
+   guard try evaluate(view,"(()=>{const log=document.querySelector('.agent-log'),last=document.querySelector('.agent-empty-detail');return last.getBoundingClientRect().bottom<=log.getBoundingClientRect().bottom})()") as? Bool==true else{throw appError("Assistant welcome clipped behind composer: "+id)}
    try capture(view,review.appendingPathComponent("agent/"+id+".png"),rect:rect,width:390)
    _=try evaluate(view,"document.querySelector('.agent-head button[title=设置]').click();void 0")
    try waitJS(view,"document.querySelector('.global-agent')?.dataset.view==='settings' && !!document.querySelector('.agent-settings-group')")

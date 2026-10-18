@@ -180,6 +180,10 @@ final class SyntheticCourseProtocol:URLProtocol {
         for key in ["home","theme","privacy","logout"]{(app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue==key})!.view as! NSButton).performClick(nil)}
         var toolbarValues:String?,readToolbar=false;view.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,80));return JSON.stringify(window.toolbarEvents.map(event=>event.value));",arguments:[:],in:nil,in:.page){result in if case .success(let value)=result{toolbarValues=value as? String};readToolbar=true};try waitUntil({readToolbar});check(toolbarValues=="[\"home\",\"theme\",\"privacy\",\"logout\"]","real native toolbar buttons emit string action contract")
         app.updateToolbar(name:"",loggedIn:false);check(app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}==["brand","NSToolbarFlexibleSpaceItem","agent","theme","privacy"],"signed-out title bar offers theme and privacy")
+        check(["agent","theme","privacy"].allSatisfy{key in (app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue==key})?.view as? NSButton)?.image != nil},"every title bar action has a symbol")
+        check(app.applyWindowChrome("#303a3f") && window.titlebarAppearsTransparent && window.appearance?.name == .darkAqua,"dark theme chrome keeps title bar controls legible")
+        check(app.applyWindowChrome("#F4F8FC") && window.appearance?.name == .aqua,"light theme chrome uses light controls")
+        check(!app.applyWindowChrome("red") && !app.applyWindowChrome("#12345g") && !app.applyWindowChrome("#1234567"),"window chrome accepts only opaque hex colours")
         check(!window.isVisible,"toolbar synchronization preserves hidden window")
         let themeSuite="zhiyun-theme-test-"+UUID().uuidString
         // Use a suite separate from the installed app; switching never touches user preferences.

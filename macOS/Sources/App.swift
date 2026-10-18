@@ -409,6 +409,16 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         toolbar.delegate=self;toolbar.allowsUserCustomization=false;toolbar.autosavesConfiguration=false;toolbar.displayMode = .iconOnly;toolbar.sizeMode = .small
         mainToolbar=toolbar;window.toolbarStyle = .unifiedCompact;window.titleVisibility = .hidden;window.toolbar=toolbar
     }
+    /// The title bar takes the colour at the top of the page, so the window reads as one surface.
+    /// Only an opaque #RRGGBB value is accepted; appearance follows its luminance for legible controls.
+    func applyWindowChrome(_ hex:String)->Bool{
+        guard hex.count==7,hex.hasPrefix("#"),hex.dropFirst().allSatisfy({$0.isHexDigit}),let value=UInt32(hex.dropFirst(),radix:16),let window=window else{return false}
+        let red=CGFloat((value>>16)&255)/255,green=CGFloat((value>>8)&255)/255,blue=CGFloat(value&255)/255
+        window.titlebarAppearsTransparent=true;window.titlebarSeparatorStyle = .none
+        window.backgroundColor=NSColor(srgbRed:red,green:green,blue:blue,alpha:1)
+        window.appearance=NSAppearance(named:0.2126*red+0.7152*green+0.0722*blue<0.5 ? .darkAqua:.aqua)
+        return true
+    }
     func toolbarIdentifiers()->[NSToolbarItem.Identifier]{
         var values=[NSToolbarItem.Identifier("brand"),.flexibleSpace]
         if toolbarLoggedIn{if !toolbarName.isEmpty{values.append(NSToolbarItem.Identifier("name"))};values.append(NSToolbarItem.Identifier("home"))}
@@ -426,7 +436,11 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         }
         guard ["home","agent","theme","privacy","logout"].contains(key) else{return nil}
         let title=key=="home" ? "我的课堂":key=="agent" ? "应用助手":key=="theme" ? "主题":key=="privacy" ? "隐私":"退出登录",button=NSButton(title:title,target:self,action:#selector(toolbarClicked(_:)))
-        button.bezelStyle = .rounded;button.isBordered=false;button.controlSize = .small;button.font = .systemFont(ofSize:12);button.identifier=NSUserInterfaceItemIdentifier(key);button.setAccessibilityLabel(title);button.sizeToFit()
+        button.bezelStyle = .rounded;button.isBordered=false;button.controlSize = .small;button.font = .systemFont(ofSize:12);button.identifier=NSUserInterfaceItemIdentifier(key);button.setAccessibilityLabel(title)
+        // Every title-bar action carries one SF Symbol; none are left text-only.
+        let symbols=["home":"house","agent":"text.bubble","theme":"paintpalette","privacy":"hand.raised","logout":"rectangle.portrait.and.arrow.right"]
+        if let name=symbols[key],let image=NSImage(systemSymbolName:name,accessibilityDescription:nil){button.image=image;button.imagePosition = .imageLeading;button.imageHugsTitle=true;button.symbolConfiguration=NSImage.SymbolConfiguration(pointSize:12,weight:.regular)}
+        button.sizeToFit();button.frame.size.width+=6
         item.view=button;item.label=title;item.toolTip=title;return item
     }
     func updateToolbar(name:String,loggedIn:Bool){
@@ -756,6 +770,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }catch{self.reply(id,nil,error.localizedDescription)}}
         case "dragImage": do{try dragImage(p);reply(id,true)}catch{reply(id,nil,error.localizedDescription)}
         case "toolbar": updateToolbar(name:p["name"] as? String ?? "",loggedIn:p["loggedIn"] as? Bool == true);reply(id,true)
+        case "windowChrome": applyWindowChrome(p["color"] as? String ?? "") ? reply(id,true):reply(id,nil,"颜色无效")
         case "resumeSession": resumeOfficialSession{ready in self.reply(id,["ready":ready])}
         case "request":
             guard let url=URL(string:p["url"] as? String ?? ""),trusted(url),["classroom.zju.edu.cn","interactivemeta.cmc.zju.edu.cn"].contains(url.host ?? "") else{reply(id,nil,"不受支持的课程地址");return}

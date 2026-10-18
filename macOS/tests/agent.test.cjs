@@ -139,3 +139,28 @@ test('floating assistant geometry keeps the opposite resize edge fixed and its t
 test('docking and minimising cancel floating adjustment and preserve the saved frame',async t=>{
  const{r,a,assistant}=await fixture(t);await assistant.show();const control=assistant.floatingControl;control.select(true);await a.enter(r.current);await assistant.setMode('pane');assert.equal(control.selected,false);control.select(true);assert.equal(control.selected,false);await assistant.setMode('floating');control.select(true);assistant.hide();assert.equal(control.selected,false);assert.equal(assistant.root.hidden,true);
 });
+test('agent run shows readable step targets and results while running, then folds into one summary',async t=>{
+ const{r,assistant,doc}=await fixture(t);await assistant.show();assistant.addTurn('user','打开设计心理学');assistant.startProgress();
+ const progress=doc.querySelector('.agent-progress');assert.equal(progress.open,true);assert.equal(progress.dataset.state,'running');
+ assistant.event({type:'turn',index:0});assistant.event({type:'delta',text:'我先找课程。'});assert.equal(progress.querySelector('.agent-progress-label').textContent,'我先找课程。');
+ assistant.event({type:'step',name:'app_do',action:'list_lessons',args:{query:'设计'}});const running=doc.querySelector('.agent-step[data-state=running]');assert.ok(running);assert.match(running.textContent,/查找课次.*设计/);
+ assistant.event({type:'result',ok:true,action:'list_lessons',output:{total:3,lessons:[]}});assert.equal(doc.querySelector('.agent-step[data-ok=true] .agent-step-result').textContent,'3 节');
+ assistant.event({type:'turn',index:1});assert.equal(progress.querySelector('.agent-progress-label').textContent,'正在决定下一步…');
+ assistant.event({type:'step',name:'app_do',action:'open_lesson',args:{key:'course-lesson',at:61}});assert.match(doc.querySelectorAll('.agent-step')[1].textContent,/进入课程.*Synthetic Course.*1:01/);
+ assistant.event({type:'result',ok:false,action:'open_lesson',error:'没有权限'});assistant.event({type:'done',text:'已找到 **3 节**，但无法进入。'});
+ assert.equal(progress.open,false);assert.equal(progress.dataset.state,'done');assert.match(progress.querySelector('.agent-progress-meta').textContent,/2 步 · 1 项未成功/);
+ assert.equal(doc.querySelector('.agent-step[data-ok=false] .agent-step-error').textContent,'没有权限');assert.equal(doc.querySelector('.agent-turn.assistant .agent-message strong').textContent,'3 节');assert.ok(!assistant.log.textContent.includes('我先找课程'));
+ const activity=assistant.activity();assert.equal(activity.steps[0].result,'3 节');assert.match(activity.steps[1].detail,/Synthetic Course/);assert.equal(activity.steps[1].ok,false);
+ assistant.history=[{role:'assistant',content:'已找到。',activity}];assistant.renderHistory();assert.equal(doc.querySelectorAll('.agent-step').length,2);assert.equal(doc.querySelector('.agent-progress').open,false);assert.equal(r.calls.filter(c=>c[0]==='ai').length,0);
+});
+test('stopping during a step marks it unfinished and keeps one stopped summary',async t=>{
+ const{assistant,doc}=await fixture(t);await assistant.show();assistant.addTurn('user','写笔记');assistant.startProgress();assistant.event({type:'step',name:'app_do',action:'note_write',args:{text:'abc',mode:'append'}});
+ assert.match(doc.querySelector('.agent-step[data-state=running]').textContent,/写入笔记.*追加 3 字/);assistant.stop();
+ const progress=doc.querySelector('.agent-progress');assert.equal(progress.dataset.state,'stopped');assert.equal(doc.querySelectorAll('.agent-step[data-state=running]').length,0);assert.equal(doc.querySelectorAll('.agent-step[data-ok=false]').length,1);assert.equal(assistant.status.textContent,'已停止');assert.equal(assistant.sendButton.hidden,false);
+});
+test('runtime reports each model round and the validated arguments and output of every step',async()=>{
+ const{r,AppActions,AgentRunner}=await load();try{const events=[];let requests=0;const registry=new AppActions().register('add','Add',{n:{type:'number'}},['n'],({n})=>({n}));
+ const runner=new AgentRunner({registry,state:()=>({}),inspect:()=>({}),emit:e=>events.push(e),stream:async()=>requests++===0?{calls:[call('add',{n:2})]}:{answer:'Done'}});await runner.run('Add');
+ assert.equal(events.filter(e=>e.type==='turn').length,2);assert.deepEqual(events.find(e=>e.type==='step').args,{n:2});assert.deepEqual(events.find(e=>e.type==='result').output,{n:2});
+ }finally{r.win.close()}
+});

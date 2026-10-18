@@ -96,6 +96,7 @@ final class SmokeServer {
                 case'authorizeCredentials':window.__smoke.authorizations.push(params.purpose);if(params.purpose==='api')apiAuthorizationRequired=false;else sessionAuthorizationRequired=false;value={ready:true,authorizationRequired:false};break;
                 case'account':case'loginDone':case'cancelRequest':case'cancelDownload':case'cancelAI':case'logout':break;
                 case'toolbar':window.fixtureToolbar={...params};break;
+                case'windowChrome':if(!/^#[0-9a-f]{6}$/i.test(params.color||''))throw new Error('Window chrome needs an opaque hex colour');window.__smoke.chrome=params.color;break;
                 case'read':value=files.get(params.key)||'';break;
                 case'write':files.set(params.key,params.text);break;
                 case'aiStatus':value={personalReady:!apiAuthorizationRequired&&!!secret,campusReady:false};break;

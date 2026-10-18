@@ -88,7 +88,7 @@ export class AgentRunner {
       messages.push({role:'user',content:'任务开始时的应用状态（资料）：'+JSON.stringify(initial)});
       for (let step = 0; step < 128; step++) {
         if (messages.length > 200) break;
-        guard(); let answer = '';
+        guard(); let answer = ''; append({ type: 'turn', index: step });
         const result = await this.stream(messages, delta => { if (serial !== this.serial) return; answer += delta; append({ type: 'delta', text: delta }); }, agentTools(this.registry), cancel => this.cancelStream = cancel);
         guard(); this.cancelStream = null;
         if(result.finish_reason==='length')throw new Error('模型输出达到上限，未执行未完整的操作。请缩小任务范围或调整思考强度。');
@@ -106,7 +106,8 @@ export class AgentRunner {
           try {
             if (typeof call.function?.arguments !== 'string' || call.function.arguments.length > 30000) throw new Error('操作参数不完整');
             args = JSON.parse(call.function.arguments); if (!object(args)) throw new Error('操作参数必须是对象');
-            append({ type: 'step', name: call.function.name, action: args.action || call.function.name });
+            // The UI turns the validated arguments into a short, human-readable target.
+            append({ type: 'step', name: call.function.name, action: args.action || call.function.name, args: call.function.name === 'app_do' ? args.args : args });
             switch (call.function.name) {
               case 'app_state': output = await this.state(); break;
               case 'app_interface': output = this.inspect(args); break;
@@ -116,7 +117,7 @@ export class AgentRunner {
               // name. It still goes through the same registry, validation and guard.
               default: if (!this.registry.actions.has(call.function.name)) throw new Error('未知工具'); output = await this.registry.execute(call.function.name, args, guard);
             }
-            guard(); append({ type: 'result', ok: true, action: args.action || call.function.name });
+            guard(); append({ type: 'result', ok: true, action: args.action || call.function.name, output });
           } catch (error) {
             guard(); output = { error: error.message }; append({ type: 'result', ok: false, action: args?.action || call.function.name, error: error.message });
           }

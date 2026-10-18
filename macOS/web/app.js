@@ -1,4 +1,4 @@
-import "./themes.js";
+import { syncWindowChrome } from "./themes.js";
 import { AppActions } from "./agent-runtime.js";
 import { AgentInterface } from "./agent-interface.js";
 import { GlobalAssistant } from "./agent-ui.js";
@@ -446,6 +446,7 @@ function nav() {
     name: account?.name || "",
     loggedIn: !!account,
   }).catch(() => {});
+  syncWindowChrome();
 }
 let themePicker=null;
 native.on("appearanceTheme", (value) => {
@@ -470,7 +471,7 @@ native.on("toolbarAction", (action) => {
 });
 function showThemes(){
  title("主题","选择适合今天的学习风格",[button("返回",back)]);
- const wrap=el("div",{class:"theme-page"},[el("div",{class:"theme-hero"},[el("div",{},[el("span",{class:"eyebrow",text:"ZHIYUN / APPEARANCE"}),el("h2",{text:"找到你的学习风格"}),el("p",{text:"单击预览，双击选用并返回。主题会自动保存。"})]),el("span",{id:"selectedTheme",role:"status","aria-live":"polite"})]),el("div",{id:"themeGrid","aria-label":"主题首页预览"})]);
+ const wrap=el("div",{class:"theme-page"},[el("div",{class:"theme-hero"},[el("p",{text:"单击预览，再次单击同一主题即选用并返回。主题会自动保存。"}),el("span",{id:"selectedTheme",role:"status","aria-live":"polite"})]),el("div",{id:"themeGrid","aria-label":"主题首页预览"})]);
  replaceContent(wrap);
  themePicker=mountThemePicker(document,theme=>native.call("setAppearanceTheme",{theme}),document.documentElement.dataset.theme,()=>wrap.isConnected&&page==="themes"?back():undefined);
 }
@@ -852,7 +853,7 @@ async function checkRows(rows, force = true) {
             : s === "denied"
               ? "需申请权限"
               : "确认权限中";
-        n.className = "badge" + (s === "allowed" ? " live" : "");
+        n.dataset.access = s || "pending";
       });
     },
     force,
@@ -1090,6 +1091,7 @@ function courseCard(c) {
   const badge = el("span", {
     class: "badge",
     "data-permission": c.subId,
+    "data-access": states[c.subId] || "pending",
     text:
       states[c.subId] === "allowed"
         ? "可访问"
@@ -1097,22 +1099,19 @@ function courseCard(c) {
           ? "需申请权限"
           : "确认权限中",
   });
+  const lessonPhase = phase(c, Date.now() / 1000);
   const row = el("article", { class: "course-card", onclick: () => enter(c) }, [
     courseArtwork(c),
     el("div", { class: "course-copy" }, [
       el("h3", { text: c.title }),
-      el("div", {
-        class: "meta",
-        text:
-          date(c) +
-          " " +
-          clockTime(c.start) +
-          " · " +
-          [c.teacher, c.room, c.term].filter(Boolean).join(" · "),
-      }),
+      el("div", { class: "meta" }, [
+        el("span", { class: "course-time", text: date(c) + " " + clockTime(c.start) }),
+        " · " + [c.teacher, c.room, c.term].filter(Boolean).join(" · "),
+      ]),
       el("div", { class: "meta" }, [
         el("span", {
-          class: "badge" + (status(c) === "直播中" ? " live" : ""),
+          class: "badge",
+          "data-status": lessonPhase === "live" ? "live" : lessonPhase === "soon" ? "soon" : lessonPhase === "later" ? "later" : "replay",
           text: status(c),
         }),
         badge,
@@ -1290,12 +1289,10 @@ async function runPlazaSearch() {
 function renderPlazaPermission(hit) {
   const n = $('[data-hit="' + CSS.escape(hit.courseId) + '"]');
   if (!n) return;
-  const allowed = hit.rows?.some((c) => states[c.subId] === "allowed");
-  n.textContent = allowed
-    ? "可访问"
-    : hit.rows?.every((c) => states[c.subId] === "denied")
-      ? "需申请权限"
-      : "确认权限中";
+  const allowed = hit.rows?.some((c) => states[c.subId] === "allowed"),
+    denied = !allowed && hit.rows?.every((c) => states[c.subId] === "denied");
+  n.textContent = allowed ? "可访问" : denied ? "需申请权限" : "确认权限中";
+  n.dataset.access = allowed ? "allowed" : denied ? "denied" : "pending";
 }
 function renderPlaza() {
   if (page !== "plaza") return;
@@ -1996,7 +1993,6 @@ function createPane(key) {
   pane.querySelectorAll(".edge").forEach((n) => (n.onpointerdown = null));
   $("#stage").append(pane);
   panes[key] = pane;
-  if (key === "agent") head.querySelector(".mini").append(button("AI设置", () => getGlobalAssistant().settings()), button("浮动", () => getGlobalAssistant().setMode("floating")), button("收起", () => getGlobalAssistant().hide()));
   if (key === "slides") {
     head.querySelector(".mini").append(
       iconButton("previous","上一页",()=>pageMove(-1)),
@@ -5871,6 +5867,8 @@ function featureButton(id) {
     node.querySelectorAll(".ui-icon").forEach(icon => icon.remove());
     node.prepend(makeIcon(id));
     node.dataset.feature = id;
+    if (!["follow", "overview", "time", "page", "download", "layout"].includes(id))
+      node.setAttribute("aria-pressed", String(node.classList.contains("active")));
   }
   return node;
 }
@@ -5878,13 +5876,13 @@ function featureButtonContent(id) {
   if (id === "agent") return button("应用助手", () => getGlobalAssistant().toggle(), globalAssistant?.root && !globalAssistant.root.hidden ? "active" : "");
   if (paneNames[id])
     return button(
-      (prefs.panes.includes(id) ? "✓ " : "") + paneNames[id],
+      paneNames[id],
       () => togglePane(id),
       prefs.panes.includes(id) ? "active" : "",
     );
   if (id === "crop")
     return button(
-      (prefs.crop ? "✓ " : "") + "去黑边",
+      "去黑边",
       () => {
         prefs.crop = !prefs.crop;
         save("prefs.json", prefs);
@@ -5894,7 +5892,7 @@ function featureButtonContent(id) {
     );
   if (id === "duplicates")
     return button(
-      (prefs.duplicates ? "✓ " : "") + "合并重复课件",
+      "合并重复课件",
       () => {
         prefs.duplicates = !prefs.duplicates;
         save("prefs.json", prefs);
@@ -5905,7 +5903,7 @@ function featureButtonContent(id) {
     );
   if (id === "skip")
     return button(
-      (prefs.skip ? "✓ " : "") + "跳过无转写" + (skipEnabled ? " ▾" : ""),
+      "跳过无转写" + (skipEnabled ? " ▾" : ""),
       () => {
         if (skipEnabled) return chooseSkipMode();
         prefs.skip = !prefs.skip;
@@ -5917,7 +5915,7 @@ function featureButtonContent(id) {
     );
   if (id === "smartSkip")
     return button(
-      (skipEnabled ? "✓ " : "") + "跳过无实质讲解",
+      "跳过无实质讲解",
       toggleSmartSkip,
       skipEnabled ? "active" : "",
     );
@@ -6591,6 +6589,7 @@ function getGlobalAssistant() {
       const off = native.on("ai", event => { if (event.id === operation.id) delta(event.delta); });
       try { const result = await operation; if (result.usage) { const usage = (await saved("ai-usage.json")) || { prompt: 0, hit: 0, output: 0 }; usage.prompt += result.usage.prompt_tokens || 0; usage.hit += result.usage.prompt_cache_hit_tokens || 0; usage.output += result.usage.completion_tokens || 0; await save("ai-usage.json", usage); } return result; } finally { off(); }
     },
+    describeKey: key => known().find(c => courseKey(c) === key)?.title || "",
     canDock: () => page === "study" && !!$("#stage"),
     dock: root => { if (!panes.agent) createPane("agent"); $("#agentBody").append(root); $("#noPanes")?.remove(); positionPanes(); },
     detach: root => document.body.append(root),

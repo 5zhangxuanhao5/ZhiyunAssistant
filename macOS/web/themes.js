@@ -8,6 +8,8 @@ function readable(color,background,ink){const a=rgb(color),b=rgb(ink);for(let st
 const tokens=['brand','bg','paper','ink','dim','line','tint','second'];
 export function applyAppearanceTheme(value){
  const theme=themeFor(value),root=document.documentElement;
+ // Colours switch at once: hover transitions must not animate (or, in a hidden window, freeze) the old theme.
+ root.dataset.themeSwitching='';
  root.dataset.theme=theme.id;root.dataset.themeLayout=theme.layout;root.dataset.themeNav=theme.nav;
  for(const key of tokens)root.style.setProperty('--theme-'+key,theme[key]);
  const dim=readable(theme.dim,theme.paper,theme.ink),accent=readable(theme.brand,theme.tint,theme.ink),action=readable(theme.brand,'#ffffff',theme.ink);
@@ -17,8 +19,18 @@ export function applyAppearanceTheme(value){
  root.style.setProperty('--blue',theme.brand);root.style.setProperty('--bg',theme.bg);root.style.setProperty('--paper',theme.paper);root.style.setProperty('--ink',theme.ink);root.style.setProperty('--muted',dim);root.style.setProperty('--line',theme.line);root.style.setProperty('--soft',theme.tint);
  document.querySelectorAll('.welcome img,.theme-icon').forEach(img=>img.setAttribute('src',themeIcon(theme.id)));
  refreshThemeIcons();
+ void document.body?.offsetHeight;delete root.dataset.themeSwitching;
  return theme.id;
 }
+// The native title bar adopts the colour at the top of the page (navigation bar or window canvas).
+let chrome='';
+function opaque(css,under){const m=/rgba?\(([^)]+)\)/.exec(css||'');if(!m)return under;const [r,g,b,a=1]=m[1].split(/[\s,\/]+/).filter(Boolean).map(Number),base=rgb(under);return'#'+[r,g,b].map((n,i)=>Math.round(n*a+base[i]*(1-a)).toString(16).padStart(2,'0')).join('');}
+export function syncWindowChrome(){
+ const root=document.documentElement,theme=themeFor(root.dataset.theme),nav=document.getElementById('navigation'),body=document.body;
+ const top=body&&nav&&body.classList.contains('logged-in')&&!body.classList.contains('study-mode')&&root.dataset.themeNav==='top'?nav:document.querySelector('main');
+ const color=top?opaque(window.getComputedStyle(top).backgroundColor,theme.bg):theme.bg;
+ if(color===chrome)return;chrome=color;Promise.resolve(window.native.call('windowChrome',{color})).catch(()=>{chrome='';});
+}
 applyAppearanceTheme(window.__zhiyunTheme);
-window.native.on('appearanceTheme',applyAppearanceTheme);
+window.native.on('appearanceTheme',value=>{applyAppearanceTheme(value);syncWindowChrome();});
 new window.MutationObserver(records=>{if(!records.some(r=>r.addedNodes.length))return;const src=themeIcon(document.documentElement.dataset.theme);document.querySelectorAll('.welcome img,.theme-icon').forEach(img=>{if(img.getAttribute('src')!==src)img.setAttribute('src',src);});}).observe(document.body,{childList:true,subtree:true});

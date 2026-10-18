@@ -1,3 +1,7 @@
+## Mac UI source update (2026-10-19)
+
+The main branch now preserves Claude UI pass 1. Both passes are kept as separate commits/tags: `mac-claude-ui-round1-20261018` and `mac-claude-ui-round2-20261019`. See [revision details](docs/mac-claude-ui-iterations-2026-10-19.md). Existing Mac 1.8.1 release installers remain the earlier build; this update uploads source only.
+
 # 智云助手
 
 把智云课堂中的课件、课堂转写、视频和笔记放在同一个学习窗口，按课程时间线回看。在线资源按校园账号的实际权限访问，AI 功能由用户自行配置 DeepSeek API。

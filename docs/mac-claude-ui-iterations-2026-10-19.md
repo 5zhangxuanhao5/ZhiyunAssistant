@@ -8,6 +8,10 @@ Tag: `mac-claude-ui-round1-20261018`. Source was reconstructed from the 2026-10-
 
 The first pass replaces layered CSS, reorganises classroom/study controls, redesigns the floating agent into task cards with live step status and collapsed completion summaries, and unifies native toolbar symbols/window surfaces. It retains 20 themes. Local validation: 205 Node/DOM tests and 58 browser-module/resource checks passed; all 20 themes passed the real hidden-WebKit gallery.
 
+## Second pass
+
+Tag: `mac-claude-ui-round2-20261019`. This is the current Mac source copied from the user's Claude working project. It adds responsive agent history and record clearing, background assistant actions, past-only recent courses, a timetable-style classroom, compact study headers and refined privacy/note pages. Appearance is reduced to three palettes with light/dark/system modes, preserving mappings for previous theme IDs. Local validation: 215 Node/DOM tests and 58 browser-module/resource checks passed. Repository CI validates the newly uploaded head separately; these local checks do not claim all physical peripherals or live classroom sources were retested.
+
 ## Scope and recovery
 
 Only Mac source and this revision record were updated. Other clients, existing release tags and previously uploaded 1.8.1 installer assets remain unchanged. No handoff-package API keys, account state, notes, recordings, signing material, build output or installed dependencies were uploaded. Check out either tag to recover that revision. The latest source is on main; the old 1.8.1 release installers do not contain these UI passes.

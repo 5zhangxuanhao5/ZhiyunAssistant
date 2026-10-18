@@ -45,6 +45,14 @@ const paths = {
  alignLeft:'M4 5h16M4 10h11M4 15h16M4 20h11',alignCenter:'M4 5h16M7 10h10M4 15h16M7 20h10',alignRight:'M4 5h16M9 10h11M4 15h16M9 20h11',
  plus:'M12 5v14M5 12h14',minus:'M5 12h14',
  pause:'M8 5v14M16 5v14', play:'m7 4 13 8-13 8Z',
+ trash:'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6m4-6v6',
+ info:'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M12 11v6m0-9.5h.01',
+ shield:'M12 3l7.5 3v5.5c0 4.6-3.2 8-7.5 9.5-4.3-1.5-7.5-4.9-7.5-9.5V6Zm-3.5 9 2.5 2.5 4.5-5',
+ lock:'M5.5 11h13v10h-13Z M8.5 11V8a3.5 3.5 0 0 1 7 0v3M12 15v2',
+ edit:'M4 20h4.5L19.5 9 15 4.5 4 15.5Z M12.5 7l4.5 4.5',
+ manage:'M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01',
+ image:'M4 5h16v14H4Z M4 16l5-5 4 4 2.5-2.5L20 17M15.5 9.5h.01',
+ palette:'M12 3.5a8.5 8.5 0 1 0 0 17c1.2 0 1.9-.8 1.9-1.7 0-.5-.2-.9-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1 .8-1.7 1.8-1.7h2.1a3.7 3.7 0 0 0 3.7-3.7c0-4-3.8-7.3-8.5-7.3ZM7.8 12h.01M9.5 8h.01M14.5 8h.01',
 };
 const profiles = {
  collage:['paper',1.65,'round'], playful:['soft',1.8,'round'], press:['editorial',1.5,'square'],
@@ -91,7 +99,8 @@ export function makeIcon(name, doc=document) {
  const node=doc.createElement('span');node.className='design-icon ui-icon';node.dataset.uiIcon=name;node.setAttribute('aria-hidden','true');
  const host=doc.createElement('div');host.append(node);refreshThemeIcons(host);return node;
 }
-const actions={'刷新':'refresh','批量下载':'offline','选择日期':'calendar','返回':'back','返回课堂':'back','导出':'export','下载课程':'offline','布局':'layout','概览':'slides','跳转时间':'later','跳转页数':'book','发送':'export','功能':'layout','打开我的笔记':'noteManager','发现更多课程':'plaza','管理':'layout'};
+const actions={'刷新':'refresh','批量下载':'offline','选择日期':'calendar','返回':'back','返回课堂':'back','导出':'export','下载课程':'offline','布局':'layout','概览':'slides','跳转时间':'later','跳转页数':'book','发送':'send','功能':'layout','打开我的笔记':'noteManager','发现更多课程':'plaza','管理':'manage',
+ '重命名':'edit','新对话':'plus','历史':'history','API设置':'settings','选课件':'slides','最新':'follow','重试':'refresh','图片':'image','新建':'plus','颜色':'palette','设置':'settings','批量导出':'export'};
 export function decorateAction(button, label=button.textContent) {
- const name=actions[label]||(/^\d{4}-\d{2}-\d{2}$/.test(label)?"calendar":null);if(name&&!button.querySelector('.ui-icon'))button.prepend(makeIcon(name));return button;
+ const name=actions[label]||(/^\d{4}-\d{2}-\d{2}$/.test(label)?"calendar":null);if(name&&!button.querySelector('.ui-icon')){button.prepend(makeIcon(name));if(!button.title)button.title=label;}return button;
 }

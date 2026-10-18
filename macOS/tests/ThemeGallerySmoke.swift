@@ -40,7 +40,10 @@ import CryptoKit
   """
   let server=SmokeServer(app:app,root:root,video:temporary.appendingPathComponent("unused.mp4"),bridge:bridge);var ready=false
   try server.start{app.origin=server.origin;view.load(URLRequest(url:URL(string:server.origin+"/fixture/index.html")!));ready=true}
-  try smokeWait({ready});try waitJS(view,"document.querySelectorAll('.classroom-page .course-card').length===2 && !!window.__smoke")
+  try smokeWait({ready});try waitJS(view,"!!document.querySelector('.classroom-page') && !!window.__smoke")
+  // The synthetic lessons start two hours ago, which can be yesterday; 近两周 always lists both.
+  _=try evaluate(view,"[...document.querySelectorAll('.classroom-tabs button')].find(n=>n.textContent==='近两周').click();void 0")
+  try waitJS(view,"document.querySelectorAll('.classroom-page .course-card').length===2")
   RunLoop.current.run(until:Date().addingTimeInterval(0.3))
   _=try evaluate(view,"void import('./theme-icons.js').then(({iconNames,makeIcon})=>{const host=document.createElement('div');host.id='icon-geometry-review';host.style.cssText='position:fixed;left:-10000px;top:0;display:flex';for(const name of iconNames)host.append(makeIcon(name));document.body.append(host);window.__iconReviewReady=true})")
   try waitJS(view,"window.__iconReviewReady===true")
@@ -55,6 +58,8 @@ import CryptoKit
    var decoded=false,decodeFailure:Error?
    view.callAsyncJavaScript("await Promise.all([...document.querySelectorAll('.theme-icon')].map(n=>n.decode()));return true",arguments:[:],in:nil,in:.page){result in if case .failure(let e)=result{decodeFailure=e};decoded=true}
    try smokeWait({decoded});if let error=decodeFailure{throw error}
+   // Previews show the page itself, not the minimised assistant left from the previous scheme.
+   _=try evaluate(view,"document.querySelector('.agent-bubble')?.setAttribute('hidden','');void 0")
    RunLoop.current.run(until:Date().addingTimeInterval(0.45))
    let info=try evaluate(view,"JSON.stringify({theme:document.documentElement.dataset.theme,composition:document.querySelector('.classroom-page').dataset.composition,cards:document.querySelectorAll('.classroom-page .course-card').length,bodyOverflow:document.documentElement.scrollWidth>innerWidth+1,css:getComputedStyle(document.querySelector('.classroom-intro')).backgroundColor})") as! String
    let metrics=try JSONSerialization.jsonObject(with:Data(info.utf8)) as! [String:Any];guard metrics["bodyOverflow"] as? Bool == false else{throw appError("Theme overflow: "+id)}
@@ -90,7 +95,8 @@ import CryptoKit
   }
   let afterRequests=(try evaluate(view,"window.__smoke.requests.length")) as? Int ?? -2
   guard beforeRequests==afterRequests else{throw appError("Changing appearance unexpectedly requested course resources")}
-  _=try evaluate(view,"document.querySelector('.course-card .primary').click();void 0")
+  // Enter the synthetic lesson that carries mocked permission, slides and transcript data.
+  _=try evaluate(view,"[...document.querySelectorAll('.course-card')].find(n=>n.querySelector('h3')?.textContent==='设计心理学').querySelector('.primary').click();void 0")
   try waitJS(view,"!!document.querySelector('#stage .parity-pane') && !!document.querySelector('.notes-editor')")
   _=try evaluate(view,"window.__themeLiveNodes=[...document.querySelectorAll('#stage .parity-pane')];window.__themeEditor=document.querySelector('.notes-editor');void 0")
   app.event("toolbarAction","agent");try waitJS(view,"!!document.querySelector('.global-agent:not([hidden])')")
@@ -101,9 +107,19 @@ import CryptoKit
    guard matching==true else{throw appError("Floating assistant and pane surfaces differ: "+id)}
    try capture(view,review.appendingPathComponent("study/"+id+".png"),width:1200)
   }
+  // Dark appearance: every scheme switches in place, keeps the live study nodes and stays legible.
+  try FileManager.default.createDirectory(at:review.appendingPathComponent("dark"),withIntermediateDirectories:true)
+  app.applyAppearanceMode("dark",persist:false)
+  for id in app.themeIdentifiers{
+   app.applyTheme(id);try waitJS(view,"document.documentElement.dataset.theme==='"+id+"' && document.documentElement.dataset.mode==='dark'")
+   let legible=try evaluate(view,"(()=>{const lum=c=>{const m=c.match(/[\\d.]+/g).map(Number);const v=m.slice(0,3).map(x=>x>1?x/255:x).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4);return .2126*v[0]+.7152*v[1]+.0722*v[2]};const pane=document.querySelector('.parity-pane[data-pane=transcript]'),title=pane.querySelector('.pane-title');return window.__themeLiveNodes.every(n=>n.isConnected)&&lum(getComputedStyle(pane).backgroundColor)<.08&&lum(getComputedStyle(title).color)>.6})()") as? Bool
+   guard legible==true else{throw appError("Dark appearance is not applied in place: "+id)}
+   try capture(view,review.appendingPathComponent("dark/"+id+".png"),width:1200)
+  }
+  app.applyAppearanceMode("system",persist:false)
   // The native toolbar dispatches a route event to the existing main WebView.
   app.event("toolbarAction","theme");let picker=view
-  try waitJS(picker,"document.querySelectorAll('.theme-choice').length===20")
+  try waitJS(picker,"document.querySelectorAll('.theme-choice').length==="+String(app.themeIdentifiers.count))
   // Loading all actual previews is intentional here, independent of lazy display.
   _=try evaluate(picker,"document.querySelectorAll('.theme-choice img').forEach(n=>n.loading='eager');void 0")
   try waitJS(picker,"[...document.querySelectorAll('.theme-choice img')].every(n=>n.complete&&n.naturalWidth>100)")
@@ -113,16 +129,18 @@ import CryptoKit
    _=try evaluate(picker,"document.querySelector('.theme-choice[data-theme=\""+id+"\"]').click();void 0")
    try waitJS(picker,"document.querySelector('.theme-choice[data-theme=\""+id+"\"]').getAttribute('aria-pressed')==='true'")
    guard app.selectedTheme==id else{throw appError("Picker did not persist theme: "+id)}
-   guard try evaluate(view,"document.documentElement.dataset.theme==='"+id+"' && document.querySelectorAll('.theme-choice').length===20") as? Bool==true else{throw appError("Picker did not update live main view: "+id)}
+   guard try evaluate(view,"document.documentElement.dataset.theme==='"+id+"' && document.querySelectorAll('.theme-choice').length==="+String(app.themeIdentifiers.count)) as? Bool==true else{throw appError("Picker did not update live main view: "+id)}
   }
   var pickerCaptured=false,pickerPNG:Data?
   let pickerSnapshot=WKSnapshotConfiguration();pickerSnapshot.afterScreenUpdates=true;pickerSnapshot.snapshotWidth=510
   picker.takeSnapshot(with:pickerSnapshot){image,_ in if let image=image,let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff){pickerPNG=bitmap.representation(using:.png,properties:[:])};pickerCaptured=true}
   try smokeWait({pickerCaptured});if let png=pickerPNG{try png.write(to:temporary.appendingPathComponent("theme-picker-validated.png"))}
   guard !window.isVisible else{throw appError("Theme validation unexpectedly displayed a window")}
-  _=try evaluate(view,"document.querySelector('.theme-choice[data-theme=film]').click();void 0")
-  try waitJS(view,"document.querySelector('.theme-choice[data-theme=film]').getAttribute('aria-pressed')==='true'")
-  _=try evaluate(view,"document.querySelector('.theme-choice[data-theme=film]').click();void 0")
+  // Preview a scheme other than the last one selected above, then click it again to confirm and return.
+  let confirmTheme=app.themeIdentifiers.first{$0 != app.selectedTheme}!
+  _=try evaluate(view,"document.querySelector('.theme-choice[data-theme="+confirmTheme+"]').click();void 0")
+  try waitJS(view,"document.querySelector('.theme-choice[data-theme="+confirmTheme+"]').getAttribute('aria-pressed')==='true'")
+  _=try evaluate(view,"document.querySelector('.theme-choice[data-theme="+confirmTheme+"]').click();void 0")
   try waitJS(view,"!!document.querySelector('#stage .parity-pane') && !!document.querySelector('.notes-editor')")
   _=try evaluate(view,"[...document.querySelectorAll('#navigation button')].find(n=>n.textContent==='我的课堂').click();void 0")
   try waitJS(view,"!!document.querySelector('.classroom-page')")
@@ -158,8 +176,8 @@ import CryptoKit
    _=try evaluate(view,"[...document.querySelectorAll('#modalToolbar button')].find(n=>n.textContent==='按课程').click();void 0")
   }
   let errors=try evaluate(view,"window.__smoke.errors") as? [String] ?? [];guard errors.isEmpty else{throw appError("Page errors: "+errors.joined(separator:"; "))}
-  let manifest:[String:Any]=["status":"passed","themes":records,"themeCount":records.count,"compactWidth":640,"captureViewport":[1200,820],"source":"Actual production index.html and modules rendered by macOS WKWebView with synthetic course data","pickerChoicesVerified":20,"preservedStudyNodeChecks":20,"themePageInMainWindow":true,"twoClickSelectionReturnsToStudy":true,"datePickerOnlyInDateMode":true,"dateGroupingThemeChecks":20,"batchDateVisibilityThemeChecks":20,"unexpectedCourseRequests":afterRequests-beforeRequests,"foregroundWindows":false,"assistantThemesReviewed":20,"assistantSettingsThemesReviewed":20,"studyThemesReviewed":20]
+  let manifest:[String:Any]=["status":"passed","themes":records,"themeCount":records.count,"compactWidth":640,"captureViewport":[1200,820],"source":"Actual production index.html and modules rendered by macOS WKWebView with synthetic course data","pickerChoicesVerified":app.themeIdentifiers.count,"preservedStudyNodeChecks":app.themeIdentifiers.count,"themePageInMainWindow":true,"twoClickSelectionReturnsToStudy":true,"datePickerOnlyInDateMode":true,"dateGroupingThemeChecks":app.themeIdentifiers.count,"batchDateVisibilityThemeChecks":app.themeIdentifiers.count,"unexpectedCourseRequests":afterRequests-beforeRequests,"foregroundWindows":false,"assistantThemesReviewed":app.themeIdentifiers.count,"assistantSettingsThemesReviewed":app.themeIdentifiers.count,"studyThemesReviewed":app.themeIdentifiers.count]
   try JSONSerialization.data(withJSONObject:manifest,options:[.prettyPrinted,.sortedKeys]).write(to:temporary.appendingPathComponent("theme-validation.json"))
-  window.contentView=nil;window.close();server.listener.cancel();print("Twenty themes, real screenshots, picker selection and live study preservation passed")
+  window.contentView=nil;window.close();server.listener.cancel();print("All colour schemes, real screenshots, picker selection and live study preservation passed")
  }
 }

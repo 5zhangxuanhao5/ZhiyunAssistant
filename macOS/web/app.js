@@ -1,11 +1,11 @@
-import { syncWindowChrome } from "./themes.js";
+import { syncWindowChrome, appearanceMode, applyAppearanceMode } from "./themes.js";
 import { AppActions } from "./agent-runtime.js";
 import { AgentInterface } from "./agent-interface.js";
 import { GlobalAssistant } from "./agent-ui.js";
 import { AIConnection, CAMPUS_NOTICE, CAMPUS_LIMITS } from "./ai-connection.js";
 import {makeIcon,decorateAction,refreshThemeIcons} from "./theme-icons.js";
 import {mountThemePicker} from "./theme-picker.js";
-import {THEMES,themeFor,themeIcon} from "./theme-catalog.js";
+import {THEMES,themeFor,themeIcon,APPEARANCE_MODES} from "./theme-catalog.js";
 import {makeClassroomIntro,composeClassroom} from "./theme-home.js";
 import { MacZhiyun } from "./mac-api.js";
 import {
@@ -178,6 +178,7 @@ const paneNames = {
 let globalAssistant = null;
 const aiConnection = new AIConnection(native, () => prefs);
 let campusNoticeShown = false;
+const campusLimitsText = CAMPUS_NOTICE + "。" + CAMPUS_LIMITS;
 async function refreshAIAvailability() {
   const owner = account?.id;
   const ready = await aiConnection.refresh();
@@ -187,9 +188,8 @@ async function refreshAIAvailability() {
 function aiProviderChoices(paneKey) {
   const wrap = el("div", { class: "ai-provider-choices" });
   const picker = select([["auto", "自动 · 优先个人 API"], ["campus", "浙大校内网关"], ["personal", "个人 DeepSeek API"]], aiConnection.provider(), value => {
-    prefs.aiProvider = value; campusNoticeShown = false;
+    prefs.aiProvider = value;
     save("prefs.json", prefs).catch(error => toast(error.message));
-    if (aiConnection.effective() === "campus") toast(CAMPUS_NOTICE);
     hint.textContent = aiConnection.description() + (aiConnection.effective() === "campus" ? "。" + CAMPUS_LIMITS : "");
     refreshAIAvailability().then(ready => { syncAIOptions(); if (ready && paneKey && panes[paneKey]) showAIContent(paneKey); }).catch(error => toast(error.message));
   });
@@ -198,7 +198,13 @@ function aiProviderChoices(paneKey) {
   wrap.append(picker, hint);
   return wrap;
 }
-function notifyCampusAI() { if (aiConnection.effective() === "campus" && !campusNoticeShown) { campusNoticeShown = true; toast(CAMPUS_NOTICE); } }
+// The campus limits are explained once per account, the first time campus AI is actually used.
+function notifyCampusAI(target = "") {
+  if (aiConnection.effective() !== "campus" || campusNoticeShown || prefs.campusLimitsSeen) return;
+  campusNoticeShown = true; prefs.campusLimitsSeen = true; save("prefs.json", prefs).catch(() => {});
+  if (target === "agent" && globalAssistant?.root && !globalAssistant.root.hidden) globalAssistant.notice("校内 AI：" + campusLimitsText, "info");
+  else { toast("校内 AI：" + campusLimitsText); clearTimeout(toast.timer); toast.timer = setTimeout(() => $("#toast").classList.remove("show"), 7000); }
+}
 function el(tag, attrs = {}, children = []) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -282,6 +288,7 @@ function currentRows() {
   return page === "all" ? allHistory?.courses || [] : courses;
 }
 function replaceContent(node) {
+  $("#studyTools")?.remove();
   document.body.classList.remove("study-mode");
   $("#content").classList.remove("study");
   $("#content").replaceChildren(node);
@@ -413,34 +420,26 @@ function title(text, sub = "", actions = []) {
   renderSessionRecovery();
 }
 const designIcon=makeIcon;
+// A course monogram: the first character of its title on a tone derived from the title.
 function courseArtwork(c){
  const key=String(c.title||'');let tone=0;for(const ch of key)tone=(tone+ch.charCodeAt(0))%4;
- return el("div",{class:"course-art tone-"+tone,"aria-hidden":"true"},[designIcon('book'),el('span',{class:'art-line'}),el('span',{class:'art-dot'})]);
+ return el("div",{class:"course-art tone-"+tone,"aria-hidden":"true",text:[...key.trim()][0]||"课"});
 }
-function classroomIntro(rows){return makeClassroomIntro(rows,{el,button,go,page});}
+function classroomIntro(rows,tools){return makeClassroomIntro(rows,{el,page,tools});}
 function nav() {
   document.body.dataset.page=page;
   document.body.classList.toggle("study-mode", page === "study");
   document.body.classList.toggle("logged-in", !!account);
-  const items = [
-    ["favourite", "课程收藏"],
-    ["later", "稍后再看"],
-    ["offline", "离线课程"],
-    ["noteManager", "笔记管理"],
-    ["themes", "主题"],
-    ["cache", "缓存设置"],
-    ["plaza", "课程广场"],
-  ];
-  const home=button("我的课堂",()=>go(lastClassPage),["today","recent","all","chapters"].includes(page)?"active":"");home.prepend(designIcon('home'));home.title="我的课堂";
+  const item = (id, label, icon, active) => { const b = button(label, () => go(id), active ? "active" : ""); b.prepend(designIcon(icon)); b.title = label; return b; };
   $("#navigation").replaceChildren(
-    el('div',{class:'nav-brand'},[el('img',{class:'theme-icon',src:themeIcon(document.documentElement.dataset.theme),alt:''}),el('strong',{text:'智云助手'})]),
-    el('span',{class:'nav-caption',text:'我的学习空间'}),home,
-    ...items.map(([id, t]) => {const b=button(t,()=>go(id),page===id?"active":"");b.prepend(designIcon(id));b.title=t;return b;}),
-    el('div',{class:'nav-footer'},[
-      document.documentElement.dataset.theme === 'collage'
-        ? el('span',{},[el('span',{class:'quote-line',text:'一页一页，'}),el('span',{class:'quote-line',text:'拼成自己的知识。'})])
-        : el('span',{text:themeFor(document.documentElement.dataset.theme).quote})
-    ]),
+    item(lastClassPage, "我的课堂", "home", ["today","recent","all","chapters"].includes(page)),
+    el("span", { class: "nav-caption", text: "资料库" }),
+    ...[["favourite", "课程收藏"], ["later", "稍后再看"], ["offline", "离线课程"], ["noteManager", "笔记管理"]].map(([id, t]) => item(id, t, id, page === id)),
+    el("span", { class: "nav-caption", text: "发现" }),
+    item("plaza", "课程广场", "plaza", page === "plaza"),
+    el("div", { class: "nav-spacer", "aria-hidden": "true" }),
+    item("themes", "外观", "themes", page === "themes"),
+    item("cache", "缓存设置", "cache", page === "cache"),
   );
   native.call("toolbar", {
     name: account?.name || "",
@@ -470,25 +469,36 @@ native.on("toolbarAction", (action) => {
     logout().catch((error) => toast(error.message));
 });
 function showThemes(){
- title("主题","选择适合今天的学习风格",[button("返回",back)]);
- const wrap=el("div",{class:"theme-page"},[el("div",{class:"theme-hero"},[el("p",{text:"单击预览，再次单击同一主题即选用并返回。主题会自动保存。"}),el("span",{id:"selectedTheme",role:"status","aria-live":"polite"})]),el("div",{id:"themeGrid","aria-label":"主题首页预览"})]);
+ title("外观","配色与浅色、深色模式",[button("返回",back)]);
+ const modes=el("div",{class:"toolbar appearance-modes",role:"radiogroup","aria-label":"外观模式"});
+ const renderModes=()=>modes.replaceChildren(...APPEARANCE_MODES.map(([value,label])=>{const active=appearanceMode()===value,b=button(label,()=>chooseMode(value),active?"active":"");b.setAttribute("role","radio");b.setAttribute("aria-checked",String(active));return b;}));
+ // The native preference is authoritative; without it the page still switches for this session.
+ const chooseMode=async value=>{try{await native.call("setAppearanceMode",{mode:value});}catch{}applyAppearanceMode(value);renderModes();};
+ renderModes();
+ const wrap=el("div",{class:"theme-page"},[
+  el("section",{class:"appearance-section"},[el("h3",{text:"模式"}),modes,el("p",{class:"appearance-note",text:"跟随系统时，会随 macOS 的浅色与深色外观自动切换。"})]),
+  el("section",{class:"appearance-section"},[el("div",{class:"theme-hero"},[el("h3",{text:"配色"}),el("p",{text:"单击预览，再次单击同一配色即选用并返回。"}),el("span",{id:"selectedTheme",role:"status","aria-live":"polite"})]),el("div",{id:"themeGrid","aria-label":"配色预览"})]),
+ ]);
  replaceContent(wrap);
  themePicker=mountThemePicker(document,theme=>native.call("setAppearanceTheme",{theme}),document.documentElement.dataset.theme,()=>wrap.isConnected&&page==="themes"?back():undefined);
 }
 function privacy() {
   openModal("隐私与数据");
+  $(".modal-shell").classList.add("compact");
+  const card = (icon, heading, text) => el("section", { class: "privacy-card" }, [el("div", { class: "privacy-icon" }, [designIcon(icon)]), el("h4", { text: heading }), el("p", { text })]);
   $("#modalBody").append(
-    el("div", { class: "layout-help" }, [
-      el("h3", { text: "数据保存在你的 Mac" }),
-      el("p", {
-        text: "课程、笔记、进度、收藏和离线资源只存储在本机。校园账号密码由浙江大学官方认证页面处理，本应用不保存密码。登录会话通过本机 WebKit 与钥匙串中的受保护快照保存和恢复；会话失效时使用学校官方认证。DeepSeek 密钥保存在 macOS 钥匙串。",
-      }),
-      el("p", {
-        text: "只有启用 AI 时，所选课程上下文和你的问题才会发送到所选 AI 服务（浙大校内网关或个人 DeepSeek API）。应用助手会按你的指令读取必要的页面状态并操作本应用，过程可随时停止。API 费用由你的账户承担。AI 回答可能有误，请结合课堂原文判断。普通缓存清理不删除笔记和离线下载。",
-      }),
-      el("p", {
-        text: "本工具独立开发，不代表学校或智云课堂运营方；只访问账号允许的课程。断网不会自动退出登录。",
-      }),
+    el("div", { class: "privacy-page" }, [
+      el("div", { class: "privacy-hero" }, [
+        el("div", { class: "privacy-mark" }, [designIcon("shield")]),
+        el("h3", { text: "数据保存在你的 Mac" }),
+        el("p", { text: "课程、笔记、进度、收藏和离线资源只存储在本机。普通缓存清理不删除笔记和离线下载。" }),
+      ]),
+      el("div", { class: "privacy-grid" }, [
+        card("lock", "校园登录", "校园账号密码由浙江大学官方认证页面处理，本应用不保存密码。登录会话通过本机 WebKit 与钥匙串中的受保护快照保存和恢复；会话失效时使用学校官方认证。"),
+        card("key", "密钥", "DeepSeek 密钥保存在 macOS 钥匙串，不写入普通配置，也不会出现在页面中。"),
+        card("agent", "AI 与应用助手", "只有启用 AI 时，所选课程上下文和你的问题才会发送到所选 AI 服务（浙大校内网关或个人 DeepSeek API）。应用助手会按你的指令读取必要的页面状态并操作本应用，过程可随时停止。API 费用由你的账户承担。AI 回答可能有误，请结合课堂原文判断。"),
+        card("home", "独立工具", "本工具独立开发，不代表学校或智云课堂运营方；只访问账号允许的课程。断网不会自动退出登录。"),
+      ]),
     ]),
   );
 }
@@ -914,7 +924,7 @@ async function loadHistory(force = false) {
 function toolbarTabs() {
   return el(
     "div",
-    { class: "toolbar" },
+    { class: "toolbar classroom-tabs", role: "tablist" },
     [
       ["today", "今日课表"],
       ["recent", "近两周"],
@@ -925,17 +935,19 @@ function toolbarTabs() {
 let allMode = "course";
 function showCourses(recheck = true) {
   if (!account) return welcome();
+  const today = shanghaiDate(Date.now() / 1000);
+  // The synced window reaches tomorrow for live/upcoming detection; 近两周 lists only the past two weeks and today.
   const rows =
     page === "chapters"
       ? currentGroup?.rows || []
       : page === "today"
-        ? courses.filter((c) => date(c) === shanghaiDate(Date.now() / 1000))
+        ? courses.filter((c) => date(c) === today)
         : page === "all"
           ? allHistory?.courses || []
-          : courses;
+          : courses.filter((c) => date(c) <= today);
   title(
     page === "chapters" ? currentGroup?.hit.title || "课程" : "我的课堂",
-    page === "all" ? rows.length + " 条上课记录" : "",
+    page === "all" ? rows.length + " 条上课记录" : page === "chapters" ? [currentGroup?.hit.teacher, rows.length + " 节课"].filter(Boolean).join(" · ") : classroomStamp(),
     [
       button("刷新", () =>
         page === "all" ? loadHistory(true) : refreshCourses(),
@@ -945,10 +957,7 @@ function showCourses(recheck = true) {
     ],
   );
   const wrap = el("div",{class:"classroom-page"});
-  if (page !== "chapters") wrap.append(classroomIntro(rows),toolbarTabs());
-  if (page === "all")
-    wrap.append(
-      el("div", { class: "toolbar" }, [
+  const modes = page === "all" ? el("div", { class: "toolbar classroom-modes" }, [
         button(
           "按课程",
           () => {
@@ -971,9 +980,9 @@ function showCourses(recheck = true) {
             n?.scrollIntoView({ block: "start", behavior: "smooth" });
           }),
         )] : []),
-      ]),
-    );
-  const cards = el("div", { class: "cards" });
+      ]) : null;
+  if (page !== "chapters") wrap.append(classroomIntro(rows, [toolbarTabs(), modes]));
+  const cards = el("div", { class: "cards" + (page === "all" && allMode === "course" ? " course-grid" : " lesson-list") });
   if (page === "all" && allMode === "course") {
     for (const [id, list] of groupCourses(rows)) {
       cards.append(groupCard(list, () => openGroup(list[0], list)));
@@ -992,6 +1001,7 @@ function showCourses(recheck = true) {
             class: "section-heading",
             text: previous,
             "data-date": previous,
+            "data-day": dayLabel(previous),
           }),
         );
       }
@@ -1004,16 +1014,28 @@ function showCourses(recheck = true) {
         class: "empty",
         text:
           page === "today"
-            ? "今天暂时没有上课记录"
-            : historyBusy
-              ? "正在同步历史课表…"
-              : "暂无课程",
+            ? "今天没有课，可以在“近两周”回看最近的课堂"
+            : page === "recent"
+              ? "近两周还没有上课记录"
+              : historyBusy
+                ? "正在同步历史课表…"
+                : "暂无课程",
       }),
     );
   wrap.append(cards);
   composeClassroom(wrap,{el,button,go});
   replaceContent(wrap);
   if(recheck)checkRows(rows.slice(0, 100), true).catch(() => {});
+}
+// "今天 · 周日", "昨天 · 周六", "明天 · 周一" or the weekday, shown beside a schedule date.
+function dayLabel(day) {
+  const today = shanghaiDate(Date.now() / 1000), offset = Math.round((Date.parse(day + "T00:00:00Z") - Date.parse(today + "T00:00:00Z")) / 86400000);
+  const week = "周" + "日一二三四五六"[new Date(day + "T00:00:00Z").getUTCDay()], near = { 0: "今天", [-1]: "昨天", 1: "明天" }[offset];
+  return near ? near + " · " + week : week;
+}
+function classroomStamp() {
+  const now = new Date(), zone = { timeZone: "Asia/Shanghai" };
+  return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", ...zone }).format(now) + " " + new Intl.DateTimeFormat("zh-CN", { weekday: "long", ...zone }).format(now);
 }
 function dateGroups(rows) {
   const map = new Map();
@@ -1099,23 +1121,20 @@ function courseCard(c) {
           ? "需申请权限"
           : "确认权限中",
   });
-  const lessonPhase = phase(c, Date.now() / 1000);
-  const row = el("article", { class: "course-card", onclick: () => enter(c) }, [
-    courseArtwork(c),
+  const lessonPhase = phase(c, Date.now() / 1000),
+    phaseKey = lessonPhase === "live" ? "live" : lessonPhase === "soon" ? "soon" : lessonPhase === "later" ? "later" : "replay";
+  const row = el("article", { class: "course-card lesson-row", "data-phase": phaseKey, onclick: () => enter(c) }, [
+    el("div", { class: "course-when", "aria-label": date(c) + " " + clockTime(c.start) }, [
+      el("span", { class: "course-time", text: clockTime(c.start) }),
+      el("span", { class: "course-end", text: clockTime(c.end) }),
+    ]),
     el("div", { class: "course-copy" }, [
       el("h3", { text: c.title }),
-      el("div", { class: "meta" }, [
-        el("span", { class: "course-time", text: date(c) + " " + clockTime(c.start) }),
-        " · " + [c.teacher, c.room, c.term].filter(Boolean).join(" · "),
-      ]),
-      el("div", { class: "meta" }, [
-        el("span", {
-          class: "badge",
-          "data-status": lessonPhase === "live" ? "live" : lessonPhase === "soon" ? "soon" : lessonPhase === "later" ? "later" : "replay",
-          text: status(c),
-        }),
-        badge,
-      ]),
+      el("div", { class: "meta", text: [c.teacher, c.room, c.term].filter(Boolean).join(" · ") }),
+    ]),
+    el("div", { class: "course-flags" }, [
+      ...(phaseKey === "replay" ? [] : [el("span", { class: "badge", "data-status": phaseKey, text: status(c) })]),
+      badge,
     ]),
     el("div", { class: "actions" }, [
       markButton("favourite", c),
@@ -1131,7 +1150,7 @@ function courseCard(c) {
 }
 function groupCard(list, fn) {
   const c = list[0];
-  return el("article", { class: "course-card", onclick: fn }, [
+  return el("article", { class: "course-card course-tile", onclick: fn }, [
     courseArtwork(c),
     el("div", { class: "course-copy" }, [
       el("h3", { text: c.title }),
@@ -1515,6 +1534,7 @@ function closeModal() {
 let calendarMonth = null;
 function calendar(rows, onDate, onCancel = null) {
   openModal("选择日期");
+  $(".modal-shell").classList.add("compact");
   if (onCancel) {
     $("#modalClose").textContent = "返回";
     $("#modalClose").onclick = () => { closeModal(); onCancel(); };
@@ -1824,10 +1844,10 @@ function showStudy() {
     ],
   );
   $("#content").classList.add("study");
-  $("#content").replaceChildren(
-    el("div", { id: "studyTools" }),
-    el("div", { id: "stage" }),
-  );
+  $("#studyTools")?.remove();
+  // One header row: lesson title, the learning tools, then layout/settings/back.
+  $("#topbar").insertBefore(el("div", { id: "studyTools" }), $("#topActions"));
+  $("#content").replaceChildren(el("div", { id: "stage" }));
   renderTools();
   for (const key of prefs.panes) createPane(key);
   globalAssistant?.routeChanged();
@@ -2053,7 +2073,7 @@ function createPane(key) {
         },
       ),
     ]);
-    pane.insertBefore(questionOptions, body);
+    head.insertBefore(questionOptions, head.querySelector(".mini"));
     footer.append(input, button("发送", sendQuestion, "primary"));
     pane.append(footer);
     head.querySelector(".mini").append(button("选课件", () => overview(true)));
@@ -2103,7 +2123,7 @@ function createPane(key) {
         if (v) generateAllSummaries();
       }),
     ]);
-    pane.insertBefore(options, body);
+    head.insertBefore(options, head.querySelector(".mini"));
   }
   if (key === "notes") {
     head.querySelector(".mini").append(
@@ -2131,6 +2151,7 @@ function createPane(key) {
       }),
       button("颜色", () => {
         openModal("笔记颜色");
+        $(".modal-shell").classList.add("compact");
         $("#modalBody").append(notesEditor.createPaletteControls());
       }),
       select(
@@ -2771,6 +2792,7 @@ function updateReturn(key) {
 }
 function pageJump() {
   openModal("跳转页数");
+  $(".modal-shell").classList.add("compact");
   const input = el("input", {
     type: "number",
     min: 1,
@@ -2797,6 +2819,7 @@ function pageJump() {
 }
 function timeJump() {
   openModal("跳转时间");
+  $(".modal-shell").classList.add("compact");
   const max = Math.max(0, Math.floor(lesson.end - lesson.start));
   let chosen = Math.min(max, Math.max(0, Math.floor(mediaTime())));
   const label = el("h3", { text: stamp(chosen) }),
@@ -4030,9 +4053,8 @@ async function showNoteManager() {
         .sort((a, b) => b.noteIndex.updatedAt - a.noteIndex.updatedAt))
         $("#modalBody").append(
           el("div", { class: "notes-row" }, [
-            el("strong", {
-              text: date(c) + " · " + c.noteIndex.count + " 篇笔记",
-            }),
+            el("strong", { text: date(c) + " · " + dayLabel(date(c)) }),
+            el("span", { class: "meta", text: c.noteIndex.count + " 篇笔记" }),
             button("查看笔记", () => manageNotesFor(c)),
           ]),
         );
@@ -5254,33 +5276,37 @@ function manageOffline() {
     ),
   );
 }
+const cacheNames = {
+  schedule: ["课表与搜索记录", "已同步的课次、学期与课程列表。"],
+  timeline: ["课程时间线", "课程课件索引、转写和视频源信息。"],
+  vision: ["课件识别", "AI 已经读取过的课件图片内容，复用可减少费用。"],
+  summary: ["本页速览", "生成过的速览和阅读位置。"],
+  question: ["AI 对话记录", "每节课的课程问答，以及应用助手的历史对话。"],
+  skip: ["无效片段识别", "已分析过的无实质讲解片段。"],
+  images: ["课件图片", "已查看的原图，与离线下载独立保存。"],
+};
+// In-memory copies are dropped with their files; the assistant stays open and keeps any running task.
+async function afterCacheClear(category) {
+  const all = category === "all";
+  if (all || category === "question") { chats = {}; await globalAssistant?.clearHistory({ ask: false }); }
+  if (all || category === "summary") summaries = {};
+  if (all || category === "vision") visionCache.clear();
+  if (all) imageJobs.clear();
+  if (page === "cache") showCache();
+}
 async function showCache() {
   title("缓存设置", "", [
     button("清理全部缓存", async () => {
       if (confirm("清理普通缓存？课堂笔记、收藏、学习进度和离线课程会保留。")) {
         await native.call("cache", { clear: true });
-        globalAssistant?.reset();
-        imageJobs.clear();
-        visionCache.clear();
-        summaries = {};
-        chats = {};
-        showCache();
+        await afterCacheClear("all");
         toast("普通缓存已清理");
       }
     }),
   ]);
   const result = await native.call("cache"),
-    wrap = el("div");
-  const names = {
-    schedule: ["课表与搜索记录", "已同步的课次、学期与课程列表。"],
-    timeline: ["课程时间线", "课程课件索引、转写和视频源信息。"],
-    vision: ["课件识别", "AI 已经读取过的课件图片内容，复用可减少费用。"],
-    summary: ["本页速览", "生成过的速览和阅读位置。"],
-    question: ["AI 对话记录", "每节课的课程问答，以及应用助手的历史对话。"],
-    skip: ["无效片段识别", "已分析过的无实质讲解片段。"],
-    images: ["课件图片", "已查看的原图，与离线下载独立保存。"],
-  };
-  for (const [category, [name, hint]] of Object.entries(names)) {
+    wrap = el("div", { class: "cache-list" });
+  for (const [category, [name, hint]] of Object.entries(cacheNames)) {
     const entries = result.entries?.[category] || [],
       size = entries.reduce((s, e) => s + e.bytes, 0);
     wrap.append(
@@ -5299,10 +5325,7 @@ async function showCache() {
           async () => {
             if (confirm("清理" + name + "缓存？")) {
               await native.call("cache", { clear: true, category });
-              if (category === "question") { chats = {}; globalAssistant?.reset(); }
-              if (category === "summary") summaries = {};
-              if (category === "vision") visionCache.clear();
-              showCache();
+              await afterCacheClear(category);
             }
           },
           "danger",
@@ -6118,7 +6141,7 @@ async function manageNotesFor(c) {
   for (const note of savedNotes)
     $("#modalBody").append(
       el("div", { class: "notes-row" }, [
-        el("strong", { text: c.title + "_" + date(c) + "_" + note.name }),
+        el("strong", { text: note.name }),
         button("打开笔记", () => {
           closeModal();
           enter(c, {
@@ -6428,9 +6451,6 @@ function syncAIOptions() {
   for (const id of ["summary", "question"]) {
     const pane = panes[id];
     if (!pane) continue;
-    let serviceNote = pane.querySelector(".ai-service-note");
-    if (!serviceNote) { serviceNote = el("details", { class: "ai-service-note" }, [el("summary", { text: "校内 AI · 使用局限" }), el("p", { text: CAMPUS_NOTICE + "。" + CAMPUS_LIMITS })]); pane.insertBefore(serviceNote, pane.querySelector(".pane-content")); }
-    serviceNote.hidden = !apiReady || aiConnection.effective() !== "campus";
     pane
       .querySelectorAll(".summary-options,.question-options")
       .forEach((n) => (n.hidden = !apiReady));
@@ -6533,7 +6553,13 @@ function getGlobalAssistant() {
   registry.register("download_lesson", "下载指定有权限课次，可分别选择课件、转写、视频。应用会重新验证权限。", { key: str("课次key", 300), slides: bool, transcript: bool, video: bool }, ["key", "slides", "transcript", "video"], async ({ key, ...options }, guard) => { const c = find(key); if (!Object.values(options).some(Boolean)) throw new Error("至少选择一种资源"); guard(); await offlineDownloads.enqueue(c, options); return { key, state: offlineDownloads.find(key)?.state }; });
   registry.register("download_control", "管理下载队列：暂停/继续/重试失败/调整顺序/保存可用内容/删除。删除需要确认。", { key: str("下载课次key", 300), command: choice(["pause", "resume", "retry", "first", "last", "preserve", "delete"]) }, ["key", "command"], async ({ key, command }, guard) => { needAccount(); if (!offlineDownloads?.find(key)) throw new Error("下载记录不存在"); guard(); if (command === "delete") { if (!confirm("删除这节课的离线资源？")) throw new Error("用户取消了删除"); guard(); await offlineDownloads.remove(key); } else if (["first", "last"].includes(command)) offlineDownloads.move(key, command); else await offlineDownloads[command](key); return { key, state: offlineDownloads.find(key)?.state || "deleted" }; });
   registry.register("download_queue", "读取全部下载状态（分页），或设置同时下载的课次数1-4。", { offset: num("偏移", 0, 1e6), concurrency: num("可选：并行课次数", 1, 4) }, [], ({ offset = 0, concurrency }) => { needAccount(); if (concurrency != null) { if (!Number.isInteger(concurrency)) throw new Error("并行数必须为整数"); offlineDownloads.maxConcurrent = concurrency; } return { concurrency: offlineDownloads?.maxConcurrent, total: library.length, rows: library.slice(offset, offset + 40).map(r => ({ key: r.key, title: r.course?.title, date: date(r.course), state: r.state, bytes: r.bytes, total: r.total, missing: r.missing })) }; });
-  registry.register("set_theme", "设置应用主题。可先 list=true 查询可用主题。", { theme: str("主题标识", 100), list: bool }, [], async ({ theme, list }) => { if (list || !theme) return { themes: THEMES.map(t => ({ id: t.id, name: t.name })) }; if (!THEMES.some(t => t.id === theme)) throw new Error("主题不存在"); await native.call("setAppearanceTheme", { theme }); return { theme }; });
+  registry.register("set_theme", "设置应用配色（晴空/紫藤/琥珀）或外观模式（跟随系统/浅色/深色），在后台完成。可先 list=true 查询。", { theme: str("配色标识", 100), mode: choice(APPEARANCE_MODES.map(([value]) => value)), list: bool }, [], async ({ theme, mode, list }) => {
+    if (list || (!theme && !mode)) return { themes: THEMES.map(t => ({ id: t.id, name: t.name })), modes: APPEARANCE_MODES.map(([id, name]) => ({ id, name })), current: { theme: document.documentElement.dataset.theme, mode: appearanceMode() } };
+    if (theme && !THEMES.some(t => t.id === theme)) throw new Error("配色不存在");
+    if (theme) await native.call("setAppearanceTheme", { theme });
+    if (mode) { try { await native.call("setAppearanceMode", { mode }); } catch {} applyAppearanceMode(mode); }
+    return { theme: document.documentElement.dataset.theme, mode: appearanceMode() };
+  });
   registry.register("interface_action", "操作刚读取过的页面控件：点击/填写/选择/滚动。不可操作登录密码或 API 密钥；控件ID每次使用后失效。", { id: str("app_interface返回的ID", 80), operation: choice(["click", "fill", "select", "focus", "scroll"]), value: str("输入内容或选项值"), amount: num("滚动像素，可负数", -10000, 10000) }, ["id", "operation"], args => ui.interact(args));
   registry.register("layout", "读取、调整、保存或锁定功能区布局。rects使用0-1相对坐标，z为图层顺序，尺寸下限0.12；未列出的区域保留。", { command: choice(["read", "adjust", "save", "lock", "unlock", "auto", "rows", "columns"]), rects: { type: "array", maxItems: 7, items: { type: "object", properties: { id: choice(Object.keys(paneNames)), x: num("横向位置", -1, 1), y: num("纵向位置", 0, 1), w: num("宽度", 0.12, 1), h: num("高度", 0.12, 1), z: num("图层", 0, 100) }, required: ["id", "x", "y", "w", "h", "z"] } } }, ["command"], async ({ command, rects }) => {
     needLesson(); if (!layoutControl) throw new Error("布局尚未就绪");
@@ -6548,7 +6574,7 @@ function getGlobalAssistant() {
     await refreshAIAvailability(); guard();
     if (provider === "personal" && !aiConnection.status.personalReady || provider === "campus" && !aiConnection.status.campusReady) throw new Error("该来源尚未配置，请在AI设置中完成连接");
     prefs.aiProvider = provider; if (model) prefs.agentModel = model; if(effort)prefs.agentEffort=effort;await save("prefs.json", prefs); guard();
-    campusNoticeShown = false; apiReady = aiConnection.available(); notifyCampusAI(); syncAIOptions(); getGlobalAssistant().updateServiceNote();
+    apiReady = aiConnection.available(); syncAIOptions();
     return { provider, ready: apiReady, description: aiConnection.description(), limitations: aiConnection.effective() === "campus" ? CAMPUS_LIMITS : "" };
   });
   // These commands use the same state and handlers as manual operation; the
@@ -6572,18 +6598,43 @@ function getGlobalAssistant() {
   registry.register("cache_settings", "读取各类缓存大小、说明与保存开关，或修改某一类是否保存。不会清理笔记/离线课程。清理操作请打开缓存页面使用现有确认。", {category:choice(["schedule","timeline","vision","summary","question","skip","images"]),enabled:bool},[],async({category,enabled})=>{needAccount();if(category&&typeof enabled==="boolean")await native.call("cache",{category,enabled});const r=await native.call("cache");return{settings:r.settings||{},categories:Object.entries(r.entries||{}).map(([id,entries])=>({id,bytes:entries.reduce((n,e)=>n+e.bytes,0),entries:entries.length}))};});
   registry.register("open_batch_download", "打开指定课次列表的批量下载页面，之后可以选择资源并下载。省略keys使用已同步且确认有权限的课次。", {keys:{type:"array",maxItems:200,items:str("课次key",300)}},[],async({keys})=>{needAccount();const rows=keys?keys.map(find):known().filter(c=>states[c.subId]==="allowed");if(!rows.length)throw new Error("当前没有已确认有权限的课次，请先查询权限");await batchDownload(rows);return{lessons:rows.length};});
   registry.register("privacy", "查看隐私与数据说明。",{},[],()=>{privacy();return{ok:true};});
+  // Background operations: they change data directly and never navigate the visible app.
+  registry.register("assistant_history", "后台查看、删除或清空应用助手的历史对话，不切换页面。删除和清空使用应用原有确认。", { command: choice(["list", "clear", "delete"]), id: str("要删除的对话id", 80) }, ["command"], async ({ command, id }) => {
+    const assistant = getGlobalAssistant();
+    if (command === "list") return { conversations: assistant.listConversations() };
+    if (command === "delete") { if (!id) throw new Error("请指定对话id"); if (!await assistant.deleteConversation(id)) throw new Error("没有删除：对话不存在或用户取消"); return { deleted: id }; }
+    if (!await assistant.clearHistory()) throw new Error("用户取消了清空"); return { cleared: true };
+  });
+  registry.register("cache_clear", "后台清理普通缓存的某一类或全部，不切换页面；笔记、收藏、学习进度和离线课程不受影响。使用应用原有确认。", { category: choice(["all", "schedule", "timeline", "vision", "summary", "question", "skip", "images"]) }, ["category"], async ({ category }, guard) => {
+    needAccount(); if (!confirm(category === "all" ? "清理普通缓存？课堂笔记、收藏、学习进度和离线课程会保留。" : "清理" + cacheNames[category][0] + "缓存？")) throw new Error("用户取消了清理");
+    await native.call("cache", category === "all" ? { clear: true } : { clear: true, category }); guard();
+    await afterCacheClear(category);
+    return { cleared: category };
+  });
+  registry.register("collection_clear", "后台取消全部收藏或全部稍后再看，不切换页面，使用应用原有确认。", { kind: choice(["favourite", "later"]) }, ["kind"], ({ kind }) => {
+    needAccount(); if (!confirm("取消全部" + (kind === "later" ? "稍后再看" : "收藏") + "记录？")) throw new Error("用户取消了操作");
+    collections.clear(kind); if (page === kind) showCollections(); return { cleared: kind };
+  });
+  registry.register("notes_index", "后台列出所有记过笔记的课次和篇数，不打开课程。", {}, [], async () => {
+    needAccount(); const rows = (await saved("notes-index.json")) || [];
+    return rows.slice(0, 200).map(r => ({ key: r.key, title: r.course?.title || "", date: r.course ? date(r.course) : "", count: r.count, updatedAt: r.updatedAt }));
+  });
+  registry.register("notes_read", "后台读取任一课次的笔记正文（纯文字），不打开课程；key 来自 notes_index 或课次列表。", { key: str("课次key", 300) }, ["key"], async ({ key }) => {
+    needAccount(); const list = (await saved("notes-" + key + ".json")) || [];
+    return list.map(n => { const div = el("div"); div.innerHTML = sanitizeNote(n.html || ""); return { id: n.id, name: n.name, text: div.textContent.slice(0, 12000) }; });
+  });
   registry.register("logout", "退出本机校园登录，继续使用原有的退出确认。",{},[],async()=>{await logout();return{loggedIn:!!account};});
   globalAssistant = new GlobalAssistant({ registry, state, inspect: args => ui.snapshot(args), owner: () => String(account?.id || "guest") + ":" + String(account?.tenantId || ""), read: saved, write: save,
     ready: refreshAIAvailability,
     provider: () => aiConnection.provider(), providerStatus: () => aiConnection.status, providerDescription: () => aiConnection.description(),
-    setProvider: async provider => { prefs.aiProvider = provider; campusNoticeShown = false; if (aiConnection.effective() === "campus") toast(CAMPUS_NOTICE); await save("prefs.json", prefs); await refreshAIAvailability(); syncAIOptions(); },
+    setProvider: async provider => { prefs.aiProvider = provider; await save("prefs.json", prefs); await refreshAIAvailability(); syncAIOptions(); },
     setCampusKey: async key => { await native.call("campusGateway", { key }); await refreshAIAvailability(); for (const id of ["question", "summary"]) if (panes[id] && apiReady) showAIContent(id); },
     setCampusOCRKey: async key => { await native.call("campusOCRKey", { key }); await refreshAIAvailability(); },
     effort: () => prefs.agentEffort||"high", setEffort: async value => { if(!["low","high","max"].includes(value))throw new Error("思考强度无效");prefs.agentEffort=value;await save("prefs.json",prefs); },
     model: () => prefs.agentModel || prefs.model || "deepseek-flash", setModel: async model => { prefs.agentModel = model; await save("prefs.json", prefs); },
     setKey: async text => { await native.call("secret", { text }); prefs.aiProvider = "personal"; await save("prefs.json", prefs); apiReady = true; aiConnection.status.personalReady = true; },
     stream: async (messages, delta, tools, setCancel) => {
-      notifyCampusAI();
+      notifyCampusAI("agent");
       const operation = native.call("ai", { ...aiConnection.request(), messages, tools, purpose:"agent", reasoning_effort:prefs.agentEffort||"high", model: prefs.agentModel || prefs.model || "deepseek-flash" });
       setCancel(() => native.call("cancelAI", { id: operation.id }).catch(() => {}));
       const off = native.on("ai", event => { if (event.id === operation.id) delta(event.delta); });

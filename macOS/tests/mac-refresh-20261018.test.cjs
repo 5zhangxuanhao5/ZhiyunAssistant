@@ -8,9 +8,12 @@ test('every study feature uses one matching icon including active buttons',async
  for(const id of all){const b=r.win.document.querySelector('#studyTools [data-feature="'+id+'"]');assert.ok(b,id);assert.equal(b.querySelectorAll('.ui-icon').length,1,id);assert.equal(b.querySelector('.ui-icon').dataset.uiIcon,id)}
  a.showSettings();assert.ok(r.win.document.querySelector('.modal-shell.learning-settings'));assert.equal(r.win.document.querySelectorAll('.common-row').length,all.length);
 });
-test('first theme footer keeps the final knowledge phrase together',async t=>{
+test('one sidebar keeps the classroom first, the plaza last and settings apart',async t=>{
  const r=runtime();const a=(await r.load('app.js')).testing;a.setup();t.after(()=>{a.cleanup();r.win.close()});await a.go('recent');
- const lines=[...r.win.document.querySelectorAll('.nav-footer .quote-line')].map(n=>n.textContent);assert.deepEqual(lines,['一页一页，','拼成自己的知识。']);await new Promise(resolve=>setTimeout(resolve,40));
+ const nav=r.win.document.querySelector('#navigation'),labels=[...nav.querySelectorAll(':scope > button')].map(n=>n.textContent);
+ assert.deepEqual(labels,['我的课堂','课程收藏','稍后再看','离线课程','笔记管理','课程广场','外观','缓存设置']);
+ assert.ok(nav.querySelector('.nav-spacer').compareDocumentPosition(nav.querySelector('[title=课程广场]'))&r.win.Node.DOCUMENT_POSITION_PRECEDING);
+ assert.equal(nav.querySelector('button.active').textContent,'我的课堂');assert.equal(nav.querySelector('.nav-brand,.nav-footer'),null);await new Promise(resolve=>setTimeout(resolve,40));
 });
 test('saved retired model choices migrate once to current documented identifiers',async t=>{
  const r=runtime({extraTestingNames:['loadData']});const a=(await r.load('app.js')).testing;a.setup();t.after(()=>{a.cleanup();r.win.close()});

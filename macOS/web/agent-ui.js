@@ -2,7 +2,6 @@ import { AgentRunner } from './agent-runtime.js';
 import { makeIcon } from './theme-icons.js';
 import { themeFor } from './theme-catalog.js';
 import { FloatingPaneController, floatingPaneBounds } from './parity-interactions.js';
-import { CAMPUS_NOTICE, CAMPUS_LIMITS } from './ai-connection.js';
 const create = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const clip = (value, max = 40) => { const text = String(value ?? '').replace(/\s+/g, ' ').trim(); return text.length > max ? text.slice(0, max - 1) + '…' : text; };
 const clock = seconds => { const s = Math.max(0, Math.round(Number(seconds) || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
@@ -17,7 +16,7 @@ const STEP_LABELS = {
   set_study_option: '修改学习选项', show_learning_tool: '打开学习工具', video_control: '控制视频', set_collection: '更新收藏',
   notes_list: '读取笔记', note_create: '新建笔记', note_write: '写入笔记', note_rename: '重命名笔记', note_insert_slide: '插入课件到笔记',
   note_export: '导出笔记', download_lesson: '下载课程', download_control: '管理下载', download_queue: '查看下载队列', set_theme: '切换主题',
-  interface_action: '操作界面', layout: '调整布局', set_ai_provider: '切换 AI 来源', close_dialog: '关闭弹层', wait_for: '等待加载',
+  interface_action: '操作界面', layout: '调整布局', set_ai_provider: '切换 AI 来源', assistant_history: '整理助手对话', cache_clear: '清理缓存', collection_clear: '清空收藏', notes_index: '查找笔记', notes_read: '读取笔记', close_dialog: '关闭弹层', wait_for: '等待加载',
   set_common_features: '调整常用功能', note_open: '打开笔记', note_delete: '删除笔记', note_format: '设置笔记格式', note_palette: '设置笔记颜色',
   note_insert_transcript: '插入转写到笔记', ai_content: '读取 AI 结果', summary_control: '本页速览', note_insert_ai: '插入 AI 内容到笔记',
   ai_settings: '课程问答', copy_slide: '复制课件图片', cache_settings: '缓存设置', open_batch_download: '打开批量下载', privacy: '查看隐私说明', logout: '退出登录',
@@ -61,8 +60,7 @@ export class GlobalAssistant {
     bar.append(create('span', 'agent-footnote', 'Enter 发送 · Shift + Enter 换行'), this.sendButton, this.stopButton);
     this.composer.append(this.input, bar);
     this.composer.addEventListener('pointerdown', event => { if (event.target === this.composer || event.target === bar) { event.preventDefault(); this.input.focus({ preventScroll: true }); } });
-    this.serviceNote = create('details', 'agent-service-note'); this.serviceNote.append(create('summary', '', '校内 AI · 仅限内网，图表识别可能遗漏'), create('p', '', CAMPUS_NOTICE + '。' + CAMPUS_LIMITS)); this.serviceNote.hidden = true;
-    root.append(head, this.serviceNote, this.log, this.composer);
+    root.append(head, this.log, this.composer);
     this.input.addEventListener('input', () => this.fitInput());
     this.input.addEventListener('keydown', event => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); this.submit(); }
@@ -80,7 +78,7 @@ export class GlobalAssistant {
   }
   fitInput() { this.input.style.height = 'auto'; this.input.style.height = Math.min(140, Math.max(22, this.input.scrollHeight)) + 'px'; }
   labelAction(node, label) {
-    const icons = { '设置': 'settings', '收起': 'minus', '新对话': 'plus', '历史': 'history', '收为功能区': 'layout', '浮动显示': 'expand', '发送': 'send', '停止': 'stop', '应用助手': 'agent', '返回对话': 'back', '完成': 'check', '保存个人密钥': 'key', '更换个人密钥': 'key', '保存到本机钥匙串': 'check', '保存 OCR 密钥': 'check' };
+    const icons = { '清空记录': 'trash', '删除这段对话': 'close', '设置': 'settings', '收起': 'minus', '新对话': 'plus', '历史': 'history', '收为功能区': 'layout', '浮动显示': 'expand', '发送': 'send', '停止': 'stop', '应用助手': 'agent', '返回对话': 'back', '完成': 'check', '保存个人密钥': 'key', '更换个人密钥': 'key', '保存到本机钥匙串': 'check', '保存 OCR 密钥': 'check' };
     node.replaceChildren(); if (icons[label]) node.append(makeIcon(icons[label]));
     node.append(create('span', 'agent-action-label', label)); node.title = label; node.setAttribute('aria-label', label);
   }
@@ -99,7 +97,7 @@ export class GlobalAssistant {
     this.renderHistory(); this.clamp();
   }
   async show() {
-    this.mount(); await this.ensureOwner(); const generation = this.generation; await this.options.ready(); if (generation !== this.generation) return; this.updateServiceNote(); this.root.hidden = false; this.bubble.hidden = true;
+    this.mount(); await this.ensureOwner(); const generation = this.generation; await this.options.ready(); if (generation !== this.generation) return; this.root.hidden = false; this.bubble.hidden = true;
     if (this.preferredMode === 'pane' && this.options.canDock()) await this.setMode('pane');
     else if (this.mode !== 'pane') this.options.detach(this.root);
     this.clamp(); this.input.focus({ preventScroll: true });
@@ -182,7 +180,7 @@ export class GlobalAssistant {
   notice(text, kind = '') {
     if (!this.log) this.mount();
     if (this.root.dataset.view === 'chat') this.clearWelcome();
-    const n = create('div', 'agent-notice' + (kind ? ' ' + kind : '')); if (kind === 'error') n.append(makeIcon('close')); n.append(create('span', '', text));
+    const n = create('div', 'agent-notice' + (kind ? ' ' + kind : '')); if (kind === 'error') n.append(makeIcon('close')); else if (kind === 'info') n.append(makeIcon('info')); n.append(create('span', '', text));
     this.log.append(n); this.scroll(); return n;
   }
 
@@ -270,8 +268,12 @@ export class GlobalAssistant {
         case 'note_insert_transcript': return clock(args.from) + '–' + clock(args.to);
         case 'layout': case 'download_control': case 'summary_control': return WORDS[args.command] || '';
         case 'wait_for': return WORDS[args.condition] || '';
+        case 'assistant_history': return { list: '查看', clear: '全部清空', delete: '删除一段' }[args.command] || '';
+        case 'cache_clear': return args.category === 'all' ? '全部' : ({ schedule: '课表', timeline: '时间线', vision: '课件识别', summary: '速览', question: 'AI 对话', skip: '无效片段', images: '课件图片' })[args.category] || '';
+        case 'collection_clear': return WORDS[args.kind] || '';
+        case 'notes_read': return title(args.key) || '';
         case 'interface_action': return WORDS[args.operation] || '';
-        case 'set_theme': return args.theme ? themeFor(args.theme).name : args.list ? '查看全部' : '';
+        case 'set_theme': return [args.theme ? themeFor(args.theme).name : '', { system: '跟随系统', light: '浅色', dark: '深色' }[args.mode] || ''].filter(Boolean).join(' · ') || (args.list ? '查看全部' : '');
         case 'set_ai_provider': return WORDS[args.provider] || (args.provider === 'auto' ? '自动' : '');
         default: return '';
       }
@@ -287,7 +289,10 @@ export class GlobalAssistant {
       case 'list_courses': case 'search_courses': return count(output.total, '门');
       case 'read_lesson': case 'read_material': return count(output.lines?.length, '句');
       case 'read_slides': return Array.isArray(output) ? count(output.length, '页') : '';
-      case 'notes_list': return Array.isArray(output) ? count(output.length, '篇') : '';
+      case 'notes_list': case 'notes_read': return Array.isArray(output) ? count(output.length, '篇') : '';
+      case 'notes_index': return Array.isArray(output) ? count(output.length, '节') : '';
+      case 'assistant_history': return output.cleared ? '已清空' : Array.isArray(output.conversations) ? count(output.conversations.length, '段') : output.deleted ? '已删除' : '';
+      case 'cache_clear': case 'collection_clear': return '已清理';
       case 'download_queue': return count(output.total, '项');
       case 'wait_for': return output.ready ? '已就绪' : '仍在加载';
       default: return '';
@@ -343,22 +348,19 @@ export class GlobalAssistant {
   async performSubmission() {
     const text = this.input.value.trim(), history = this.history.slice(), generation = this.generation;
     if (this.root.dataset.view !== 'chat') this.renderHistory();
-    this.input.value = ''; this.fitInput(); this.addTurn('user', text); this.history.push({ role: 'user', content: text }); this.reply = null;
+    this.input.value = ''; this.fitInput(); this.runningTurn = this.addTurn('user', text).parentElement; this.history.push({ role: 'user', content: text }); this.reply = null;
     this.progress = null; this.startProgress(); this.busy(true); this.status.textContent = '正在处理'; this.scroll();
     try { const answer = await this.runner.run(text, history); if (generation === this.generation) this.history.push({ role: 'assistant', content: answer, activity: this.activity() }); }
     catch (error) { if (generation === this.generation) { this.finishProgress('未完成'); this.notice(error.message, 'error'); this.history.push({ role: 'assistant', content: '任务未完成：' + error.message, activity: this.activity('未完成') }); this.status.textContent = '未完成'; } }
     finally { if (generation === this.generation) { this.busy(false); await this.persist(); } }
   }
   busy(value) { this.sendButton.hidden = value; this.stopButton.hidden = !value; this.input.readOnly = value; this.root.dataset.state = value ? 'running' : 'idle'; }
-  updateServiceNote() {
-    const campus = this.options.providerDescription().includes('校内'); this.serviceNote.hidden = !campus;
-    if (campus && !this.showedCampusLimits) { this.serviceNote.open = false; this.showedCampusLimits = true; }
-  }
   stop() { this.finishProgress('已停止'); this.runner.stop(); this.generation++; this.busy(false); this.status.textContent = '已停止'; this.notice('已停止后续操作；已完成的操作会保留。'); this.history.push({ role: 'assistant', content: '用户停止了任务，已完成的操作保留。', activity: this.activity('已停止') }); this.persist().catch(() => {}); }
   async persist() {
     if (this.loadedOwner !== this.options.owner()) return;
+    // A conversation exists in history only once something was said in it.
     const entry = { id: this.currentId, updatedAt: Date.now(), turns: this.history.slice(-100) };
-    this.messages = this.messages.filter(c => c.id !== entry.id).concat(entry).slice(-20);
+    this.messages = this.messages.filter(c => c.id !== entry.id && c.turns.length).concat(entry.turns.length ? [entry] : []).slice(-20);
     return this.options.write('chats-agent.json', { current: this.currentId, conversations: this.messages }, true);
   }
   async newConversation() { if (this.runner.running) this.stop(); await this.persist(); this.currentId = 'agent-' + Date.now(); this.history = []; this.reply = null; this.progress = null; this.empty(); this.status.textContent = '随时为你操作'; await this.persist(); this.input.focus({ preventScroll: true }); }
@@ -367,19 +369,46 @@ export class GlobalAssistant {
   }
   showHistory() {
     if (this.runner.running) { this.notice('请先停止当前任务'); return; }
-    this.root.dataset.view = 'history'; this.log.replaceChildren(this.subhead('历史对话'));
+    this.root.dataset.view = 'history';
+    const head = this.subhead('历史对话');
+    if (this.messages.length) head.append(this.action('清空记录', () => this.clearHistory(), 'agent-clear'));
+    this.log.replaceChildren(head);
     const list = create('div', 'agent-history');
     const when = time => { if (!time) return ''; const d = new Date(time); return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
     for (const c of [...this.messages].reverse()) {
-      const first = c.turns.find(t => t.role === 'user')?.content || '新对话', item = create('button', 'agent-history-item'); item.type = 'button';
-      item.append(create('span', 'agent-history-title', clip(first, 60)), create('span', 'agent-history-meta', [Math.ceil(c.turns.length / 2) + ' 轮', when(c.updatedAt)].filter(Boolean).join(' · ')));
+      const first = c.turns.find(t => t.role === 'user')?.content || '新对话', last = [...c.turns].reverse().find(t => t.role === 'assistant')?.content || '';
+      const item = create('div', 'agent-history-item'), open = create('button', 'agent-history-open'); open.type = 'button';
+      open.append(create('span', 'agent-history-title', clip(first, 80)), create('span', 'agent-history-preview', clip(last.replace(/[*`#>-]/g, ''), 90)), create('span', 'agent-history-meta', [Math.ceil(c.turns.length / 2) + ' 轮', when(c.updatedAt)].filter(Boolean).join(' · ')));
       if (c.id === this.currentId) item.dataset.current = 'true';
-      item.addEventListener('click', e => { e.stopPropagation(); Promise.resolve().then(async () => { await this.persist(); this.currentId = c.id; this.history = c.turns.slice(); this.renderHistory(); }).catch(error => this.notice(error.message, 'error')); });
+      open.addEventListener('click', e => { e.stopPropagation(); Promise.resolve().then(async () => { await this.persist(); this.currentId = c.id; this.history = c.turns.slice(); this.renderHistory(); }).catch(error => this.notice(error.message, 'error')); });
+      item.append(open, this.action('删除这段对话', () => this.deleteConversation(c.id), 'agent-history-delete'));
       list.append(item);
     }
     if (!list.children.length) list.append(create('p', 'agent-history-empty', '还没有历史对话'));
     this.log.append(list); this.log.scrollTop = 0;
   }
+  async deleteConversation(id) {
+    const c = this.messages.find(m => m.id === id); if (!c) return false;
+    if (!confirm('删除这段对话？此操作不能撤销。')) return false;
+    this.messages = this.messages.filter(m => m.id !== id);
+    if (id === this.currentId && !this.runner.running) { this.currentId = 'agent-' + Date.now(); this.history = []; }
+    await this.options.write('chats-agent.json', { current: this.currentId, conversations: this.messages }, true);
+    if (this.root?.dataset.view === 'history') this.showHistory(); return true;
+  }
+  // Clears every saved conversation without leaving the current view. A task that is
+  // running keeps only its own request so its result still has somewhere to land.
+  async clearHistory({ ask = true } = {}) {
+    if (ask && !confirm('清空全部应用助手对话？此操作不能撤销。')) return false;
+    const running = this.runner.running && this.runningTurn?.isConnected;
+    this.messages = []; this.currentId = 'agent-' + Date.now();
+    if (running) {
+      this.history = this.history.slice(-1);
+      while (this.log.firstChild && this.log.firstChild !== this.runningTurn) this.log.firstChild.remove();
+    } else { this.history = []; this.reply = null; this.progress = null; if (this.root) { this.empty(); this.status.textContent = '随时为你操作'; } }
+    await this.options.write('chats-agent.json', { current: this.currentId, conversations: [] }, true);
+    return true;
+  }
+  listConversations() { return [...this.messages].reverse().map(c => ({ id: c.id, title: clip(c.turns.find(t => t.role === 'user')?.content || '新对话', 60), turns: c.turns.length, updatedAt: c.updatedAt })); }
   async settings() {
     if (this.runner.running) { this.notice('请先停止当前任务再修改设置'); return; }
     const generation = this.generation; await this.options.ready(); if (generation !== this.generation) return;
@@ -397,7 +426,7 @@ export class GlobalAssistant {
     source.value = this.options.provider();
     const sourceHint = create('p', 'agent-provider-hint');
     const describe = () => { const description = this.options.providerDescription(); sourceHint.textContent = description + (description.includes('校内') ? '。课件先经 OCR 转为文字，图示关系可能遗漏。' : ''); }; describe();
-    source.onchange = () => this.options.setProvider(source.value).then(() => { this.updateServiceNote(); describe(); modelField.hidden = source.value === 'campus' || (source.value === 'auto' && !personalReady); effortField.hidden = modelField.hidden; }).catch(error => this.notice(error.message, 'error'));
+    source.onchange = () => this.options.setProvider(source.value).then(() => { describe(); modelField.hidden = source.value === 'campus' || (source.value === 'auto' && !personalReady); effortField.hidden = modelField.hidden; }).catch(error => this.notice(error.message, 'error'));
     const model = create('select'); model.setAttribute('aria-label', '助手模型');
     for (const [value, text] of [['deepseek-flash', 'DeepSeek Flash'], ['deepseek-v4-pro', 'DeepSeek Pro']]) { const option = create('option', '', text); option.value = value; model.append(option); }
     model.value = this.options.model(); model.onchange = () => this.options.setModel(model.value);

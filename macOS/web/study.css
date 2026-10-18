@@ -2,11 +2,13 @@
    Geometry contracts (handles, eight resize edges, clipping, containment,
    fullscreen escape, editor line boxes) are functional and must stay intact. */
 
-/* ---------- Study header and tool strip ---------- */
-.study-mode #topbar { min-height: 48px; padding: 8px 14px 6px 18px; }
-.study-mode #pageTitle { font-size: 15.5px; letter-spacing: -.01em; }
-.study-mode #pageSubtitle { font-size: 12px; }
-.study-mode #topActions button { height: 26px; padding: 0 9px; font-size: 12px; }
+/* ---------- Study header: title, tools and actions share one row ---------- */
+.study-mode #topbar { gap: 12px; min-height: 52px; padding: 8px 12px 6px 18px; }
+.study-mode #topbar > div:first-child { flex: 0 1 auto; flex-direction: column; align-items: flex-start; gap: 0; min-width: 96px; max-width: min(30%, 340px); }
+.study-mode #pageTitle { max-width: 100%; font-size: 14.5px; line-height: 1.35; letter-spacing: -.01em; }
+.study-mode #pageSubtitle { max-width: 100%; font-size: 11px; line-height: 1.4; }
+.study-mode #topActions { flex-wrap: nowrap; }
+.study-mode #topActions button { height: 28px; padding: 0 10px; font-size: 12px; }
 
 #content.study {
   display: flex;
@@ -18,26 +20,29 @@
 #studyTools {
   display: flex;
   align-items: center;
-  flex: none;
+  flex: 1 1 0;
   flex-wrap: nowrap;
   gap: 2px;
-  height: 38px;
-  min-height: 38px;
-  padding: 0 6px 6px;
+  min-width: 0;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 2px;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
   overscroll-behavior-x: contain;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
 }
 #studyTools::-webkit-scrollbar { display: none; }
 #studyTools > * { flex-shrink: 0; }
-#studyTools button { height: 28px; padding: 0 10px; gap: 6px; background: transparent; color: var(--text-2); font-size: 12px; }
+#studyTools button { height: 28px; padding: 0 9px; gap: 6px; background: transparent; color: var(--text-2); font-size: 12px; }
 #studyTools button:hover { background: var(--fill); color: var(--text); }
 #studyTools button.active { background: var(--accent-soft); color: var(--accent-ink); }
 #studyTools [data-feature] { display: inline-flex; align-items: center; gap: 6px; }
 #studyTools [data-feature] .ui-icon { flex-shrink: 0; width: 15px; height: 15px; flex-basis: 15px; }
-#studyTools [data-feature=agent] { margin-left: auto; }
 #studyTools select { height: 26px; font-size: 12px; }
+#studyTools > :last-child { margin-right: 16px; }
 
 #stage { position: relative; flex: 1 1 0; min-height: 0; height: auto; overflow: hidden; }
 .parity-stage { isolation: isolate; overflow: hidden; contain: layout paint; }
@@ -97,6 +102,10 @@
 .pane-header button:hover { background: var(--fill); color: var(--text); }
 .pane-header button.icon-only { width: 26px; min-width: 26px; }
 .pane-header button .ui-icon { width: 15px; height: 15px; flex-basis: 15px; }
+/* Pane actions are icons with tooltips; their text stays for assistive technology and tests. */
+.pane-header .mini > button:has(> .ui-icon), .formatbar > button:has(> .ui-icon) { width: 26px; min-width: 26px; padding: 0; gap: 0; font-size: 0; }
+.pane-header > .question-options, .pane-header > .summary-options { flex: 1 1 auto; justify-content: flex-end; gap: 10px; min-width: 0; margin-left: auto; padding: 0; border: 0; font-size: 12px; }
+.pane-header > .question-options + .mini, .pane-header > .summary-options + .mini { flex: none; }
 .parity-pane select { max-width: 100%; height: 26px; font-size: 12px; line-height: 18px; padding-top: 3px; padding-bottom: 3px; vertical-align: middle; }
 
 /* Grip: the only entry into move/resize. */
@@ -243,7 +252,7 @@
   align-items: start;
 }
 .caption-column { min-width: 0; padding-bottom: 6px; }
-.caption-line { padding: 4px 0; font-size: 14px; line-height: 1.75; cursor: text; overflow-wrap: anywhere; }
+.caption-line { padding: 4px 0; font-family: var(--font-read); font-size: 14px; line-height: 1.75; cursor: text; overflow-wrap: anywhere; }
 .caption-time {
   display: inline-block;
   min-width: 38px;
@@ -468,7 +477,7 @@ body:has(.video-fullscreen) #stage { contain: none !important; isolation: auto !
 .note-color-swatch[aria-pressed=true] { border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--surface); }
 
 /* ---------- Course Q&A and page summary ---------- */
-.rich-text { font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; white-space: normal; }
+.rich-text { font-family: var(--font-read); font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; white-space: normal; }
 .rich-text p { margin: 8px 0; }
 .rich-text ul, .rich-text ol { margin: 8px 0; padding-left: 22px; }
 .rich-text h1, .rich-text h2, .rich-text h3, .rich-text h4 { margin: 14px 0 6px; font-size: 14.5px; line-height: 1.5; }
@@ -520,19 +529,6 @@ body:has(.video-fullscreen) #stage { contain: none !important; isolation: auto !
 .question-options label, .summary-options label { display: flex; align-items: center; gap: 5px; }
 .question-options select, .summary-options select { height: 26px; font-size: 12px; padding-top: 3px; padding-bottom: 3px; }
 .ai-provider-choices { display: grid; gap: 8px; }
-.ai-service-note {
-  flex: none;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--border-soft);
-  background: var(--accent-wash);
-  color: var(--text-2);
-  font-size: 11.5px;
-  line-height: 1.7;
-}
-.ai-service-note summary { cursor: pointer; list-style-position: inside; overflow-wrap: anywhere; }
-.ai-service-note p { margin: 6px 0 1px; max-height: 92px; overflow: auto; }
-.ai-service-note[open] summary { color: var(--accent-ink); }
-
 /* ---------- Overview sheet ---------- */
 .parity-overview-shell { display: flex; gap: 10px; flex: 1; min-height: 0; width: 100%; padding-right: 10px; overflow: hidden; }
 #modalBody.parity-overview-scroll { flex: 1; min-width: 0; padding: 16px 4px 20px 20px; overflow: auto; overscroll-behavior: contain; scrollbar-width: none; scrollbar-gutter: auto; }
@@ -597,4 +593,14 @@ body:has(.video-fullscreen) #stage { contain: none !important; isolation: auto !
 @media (prefers-reduced-motion: reduce) {
   .parity-pane, .parity-layout-item { transition: none !important; }
   .parity-notes .note-gap span { transition: none; }
+}
+
+/* ---------- Dark appearance ---------- */
+:root[data-mode=dark] .parity-notes.notes-editor figure.note-block { background: color-mix(in srgb, var(--note-color, #fff5d9) 14%, var(--surface)); border-color: color-mix(in srgb, var(--note-color, #fff5d9) 26%, transparent); }
+:root[data-mode=dark] .parity-notes.note-whole-selected .note-block { background: color-mix(in srgb, var(--accent) 24%, var(--surface)); }
+:root[data-mode=dark] .parity-notes.note-whole-selected .note-gap { background: color-mix(in srgb, var(--accent) 22%, transparent) !important; }
+:root[data-mode=dark] .notes-editor figure[data-source] { background: var(--accent-wash); }
+:root[data-mode=dark] .note-color-swatch { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 18%); }
+@media (max-width: 860px) {
+  .study-mode #topActions button:has(> .ui-icon) { width: 28px; min-width: 28px; padding: 0; gap: 0; font-size: 0; }
 }

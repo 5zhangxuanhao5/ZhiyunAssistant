@@ -364,11 +364,11 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     lazy var network: URLSession = { let c=URLSessionConfiguration.ephemeral; c.timeoutIntervalForRequest=20; c.timeoutIntervalForResource=90; c.httpCookieStorage=nil; c.urlCache=nil; return URLSession(configuration:c,delegate:self,delegateQueue:nil) }()
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular); setupMenu()
-        let config=WKWebViewConfiguration(); config.userContentController.addUserScript(WKUserScript(source:"window.__zhiyunTheme=\""+selectedTheme+"\";",injectionTime:.atDocumentStart,forMainFrameOnly:true));config.websiteDataStore=store; config.userContentController.add(self,name:"native"); config.preferences.javaScriptCanOpenWindowsAutomatically=false
+        let config=WKWebViewConfiguration(); config.userContentController.addUserScript(WKUserScript(source:"window.__zhiyunTheme=\""+selectedTheme+"\";window.__zhiyunMode=\""+selectedMode+"\";",injectionTime:.atDocumentStart,forMainFrameOnly:true));config.websiteDataStore=store; config.userContentController.add(self,name:"native"); config.preferences.javaScriptCanOpenWindowsAutomatically=false
         web=WKWebView(frame:.zero,configuration:config); web.navigationDelegate=self;web.uiDelegate=self
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1320,height:850),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
         window.isReleasedWhenClosed=false; window.title="智云助手"; window.minSize=NSSize(width:640,height:480); window.contentView=web; window.delegate=self;window.setFrameAutosaveName("StudyMainWindow");if !window.setFrameUsingName("StudyMainWindow"){window.center()};installToolbar();installMouseDragMonitor();window.orderFront(nil)
-        applyTheme(selectedTheme,persist:false);startServer();restoreCookies {}
+        applyTheme(selectedTheme,persist:false);applyAppearanceMode(selectedMode,persist:false);startServer();restoreCookies {}
     }
     func installMouseDragMonitor(){
         guard mouseDragMonitor==nil else{return}
@@ -388,11 +388,25 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     }
     var themeDefaults = UserDefaults.standard
     var themeBrandImage:NSImageView?
-    let themeIdentifiers=["collage","playful","press","acid","bauhaus","candy","terminal","swiss","field","film","workshop","post","memphis","retro","glass","marginalia","metro","sketch","racing","gallery"]
+    /// Three colour schemes; each works in light and dark appearance.
+    let themeIdentifiers=["collage","playful","film"]
+    /// Earlier releases offered twenty decorative themes; each maps to the closest colour scheme.
+    let legacyThemes=["editorial":"playful","candy":"playful","retro":"playful","gallery":"playful","bauhaus":"film","field":"film","marginalia":"film","racing":"film","press":"collage","acid":"collage","terminal":"collage","swiss":"collage","workshop":"collage","post":"collage","memphis":"collage","glass":"collage","metro":"collage","sketch":"collage"]
     var selectedTheme:String {
-        let value=themeDefaults.string(forKey:"appearanceTheme") ?? "collage"
-        if value=="editorial"{return "playful"}
+        let stored=themeDefaults.string(forKey:"appearanceTheme") ?? "collage",value=legacyThemes[stored] ?? stored
         return themeIdentifiers.contains(value) ? value:"collage"
+    }
+    let appearanceModes=["system","light","dark"]
+    var selectedMode:String {
+        let value=themeDefaults.string(forKey:"appearanceMode") ?? "system"
+        return appearanceModes.contains(value) ? value:"system"
+    }
+    /// "system" leaves the window appearance unset so WebKit keeps following macOS light/dark changes.
+    func applyAppearanceMode(_ mode:String,persist:Bool=true){
+        guard appearanceModes.contains(mode) else{return}
+        if persist{themeDefaults.set(mode,forKey:"appearanceMode")}
+        window?.appearance = mode=="system" ? nil:NSAppearance(named:mode=="dark" ? .darkAqua:.aqua)
+        event("appearanceMode",mode)
     }
     func themeImage(_ theme:String)->NSImage? {
         guard let resources=Bundle.main.resourceURL,themeIdentifiers.contains(theme) else{return nil}
@@ -410,13 +424,13 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         mainToolbar=toolbar;window.toolbarStyle = .unifiedCompact;window.titleVisibility = .hidden;window.toolbar=toolbar
     }
     /// The title bar takes the colour at the top of the page, so the window reads as one surface.
-    /// Only an opaque #RRGGBB value is accepted; appearance follows its luminance for legible controls.
-    func applyWindowChrome(_ hex:String)->Bool{
-        guard hex.count==7,hex.hasPrefix("#"),hex.dropFirst().allSatisfy({$0.isHexDigit}),let value=UInt32(hex.dropFirst(),radix:16),let window=window else{return false}
+    /// Only an opaque #RRGGBB value and a known appearance mode are accepted.
+    func applyWindowChrome(_ hex:String,mode:String="system")->Bool{
+        guard hex.count==7,hex.hasPrefix("#"),hex.dropFirst().allSatisfy({$0.isHexDigit}),let value=UInt32(hex.dropFirst(),radix:16),appearanceModes.contains(mode),let window=window else{return false}
         let red=CGFloat((value>>16)&255)/255,green=CGFloat((value>>8)&255)/255,blue=CGFloat(value&255)/255
         window.titlebarAppearsTransparent=true;window.titlebarSeparatorStyle = .none
         window.backgroundColor=NSColor(srgbRed:red,green:green,blue:blue,alpha:1)
-        window.appearance=NSAppearance(named:0.2126*red+0.7152*green+0.0722*blue<0.5 ? .darkAqua:.aqua)
+        window.appearance = mode=="system" ? nil:NSAppearance(named:mode=="dark" ? .darkAqua:.aqua)
         return true
     }
     func toolbarIdentifiers()->[NSToolbarItem.Identifier]{
@@ -435,7 +449,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             if key=="brand" {let image=NSImageView();image.image=themeImage(selectedTheme);image.imageScaling = .scaleProportionallyUpOrDown;image.translatesAutoresizingMaskIntoConstraints=false;NSLayoutConstraint.activate([image.widthAnchor.constraint(equalToConstant:22),image.heightAnchor.constraint(equalToConstant:22)]);themeBrandImage=image;let stack=NSStackView(views:[image,label]);stack.orientation = .horizontal;stack.spacing=7;item.view=stack}else{item.view=label};item.label=text;return item
         }
         guard ["home","agent","theme","privacy","logout"].contains(key) else{return nil}
-        let title=key=="home" ? "我的课堂":key=="agent" ? "应用助手":key=="theme" ? "主题":key=="privacy" ? "隐私":"退出登录",button=NSButton(title:title,target:self,action:#selector(toolbarClicked(_:)))
+        let title=key=="home" ? "我的课堂":key=="agent" ? "应用助手":key=="theme" ? "外观":key=="privacy" ? "隐私":"退出登录",button=NSButton(title:title,target:self,action:#selector(toolbarClicked(_:)))
         button.bezelStyle = .rounded;button.isBordered=false;button.controlSize = .small;button.font = .systemFont(ofSize:12);button.identifier=NSUserInterfaceItemIdentifier(key);button.setAccessibilityLabel(title)
         // Every title-bar action carries one SF Symbol; none are left text-only.
         let symbols=["home":"house","agent":"text.bubble","theme":"paintpalette","privacy":"hand.raised","logout":"rectangle.portrait.and.arrow.right"]
@@ -770,7 +784,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }catch{self.reply(id,nil,error.localizedDescription)}}
         case "dragImage": do{try dragImage(p);reply(id,true)}catch{reply(id,nil,error.localizedDescription)}
         case "toolbar": updateToolbar(name:p["name"] as? String ?? "",loggedIn:p["loggedIn"] as? Bool == true);reply(id,true)
-        case "windowChrome": applyWindowChrome(p["color"] as? String ?? "") ? reply(id,true):reply(id,nil,"颜色无效")
+        case "windowChrome": applyWindowChrome(p["color"] as? String ?? "",mode:p["mode"] as? String ?? "system") ? reply(id,true):reply(id,nil,"颜色无效")
         case "resumeSession": resumeOfficialSession{ready in self.reply(id,["ready":ready])}
         case "request":
             guard let url=URL(string:p["url"] as? String ?? ""),trusted(url),["classroom.zju.edu.cn","interactivemeta.cmc.zju.edu.cn"].contains(url.host ?? "") else{reply(id,nil,"不受支持的课程地址");return}
@@ -787,6 +801,9 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         case "cancelRequest":
             if let target=p["id"] as? String,pendingRequests.contains(target) || requests[target] != nil{cancelledRequests.insert(target);requests[target]?.cancel()};reply(id,true)
         case "appearanceTheme": reply(id,selectedTheme)
+        case "appearanceMode": reply(id,selectedMode)
+        case "setAppearanceMode":
+            guard let mode=p["mode"] as? String,appearanceModes.contains(mode) else{reply(id,nil,"外观无效");return};applyAppearanceMode(mode);reply(id,mode)
         case "setAppearanceTheme":
             guard let theme=p["theme"] as? String,themeIdentifiers.contains(theme) else{reply(id,nil,"主题无效");return};applyTheme(theme);reply(id,theme)
         case "login":

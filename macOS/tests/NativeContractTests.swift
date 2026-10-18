@@ -181,9 +181,10 @@ final class SyntheticCourseProtocol:URLProtocol {
         var toolbarValues:String?,readToolbar=false;view.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,80));return JSON.stringify(window.toolbarEvents.map(event=>event.value));",arguments:[:],in:nil,in:.page){result in if case .success(let value)=result{toolbarValues=value as? String};readToolbar=true};try waitUntil({readToolbar});check(toolbarValues=="[\"home\",\"theme\",\"privacy\",\"logout\"]","real native toolbar buttons emit string action contract")
         app.updateToolbar(name:"",loggedIn:false);check(app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}==["brand","NSToolbarFlexibleSpaceItem","agent","theme","privacy"],"signed-out title bar offers theme and privacy")
         check(["agent","theme","privacy"].allSatisfy{key in (app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue==key})?.view as? NSButton)?.image != nil},"every title bar action has a symbol")
-        check(app.applyWindowChrome("#303a3f") && window.titlebarAppearsTransparent && window.appearance?.name == .darkAqua,"dark theme chrome keeps title bar controls legible")
-        check(app.applyWindowChrome("#F4F8FC") && window.appearance?.name == .aqua,"light theme chrome uses light controls")
-        check(!app.applyWindowChrome("red") && !app.applyWindowChrome("#12345g") && !app.applyWindowChrome("#1234567"),"window chrome accepts only opaque hex colours")
+        check(app.applyWindowChrome("#15171b",mode:"dark") && window.titlebarAppearsTransparent && window.appearance?.name == .darkAqua,"dark appearance chrome keeps title bar controls legible")
+        check(app.applyWindowChrome("#F4F5F7",mode:"light") && window.appearance?.name == .aqua,"light appearance chrome uses light controls")
+        check(app.applyWindowChrome("#F4F5F7",mode:"system") && window.appearance==nil,"system appearance leaves the window following macOS")
+        check(!app.applyWindowChrome("red") && !app.applyWindowChrome("#12345g") && !app.applyWindowChrome("#1234567") && !app.applyWindowChrome("#ffffff",mode:"neon"),"window chrome accepts only opaque hex colours and known modes")
         check(!window.isVisible,"toolbar synchronization preserves hidden window")
         let themeSuite="zhiyun-theme-test-"+UUID().uuidString
         // Use a suite separate from the installed app; switching never touches user preferences.
@@ -198,7 +199,12 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(app.selectedTheme=="playful","unknown theme cannot alter selection")
         app.applyTheme("collage")
         check(app.selectedTheme=="collage","theme can switch back without reloading web view")
-        check(app.themeIdentifiers.count==20 && Set(app.themeIdentifiers).count==20,"twenty stable native theme identifiers")
+        check(app.themeIdentifiers==["collage","playful","film"],"three stable native colour scheme identifiers")
+        for (old,now) in [("swiss","collage"),("terminal","collage"),("candy","playful"),("gallery","playful"),("field","film"),("racing","film")]{isolatedThemeDefaults.set(old,forKey:"appearanceTheme");check(app.selectedTheme==now,"retired theme "+old+" maps to "+now)}
+        check(app.selectedMode=="system","appearance follows the system by default")
+        app.applyAppearanceMode("dark");check(app.selectedMode=="dark" && window.appearance?.name == .darkAqua,"dark appearance persists and applies to the window")
+        app.applyAppearanceMode("neon");check(app.selectedMode=="dark","unknown appearance cannot alter selection")
+        app.applyAppearanceMode("system");check(app.selectedMode=="system" && window.appearance==nil,"system appearance clears the window override")
         for theme in app.themeIdentifiers{app.applyTheme(theme);check(app.selectedTheme==theme,"native theme persists "+theme)}
         isolatedThemeDefaults.set("editorial",forKey:"appearanceTheme");check(app.selectedTheme=="playful","legacy editorial preference migrates to playground")
         isolatedThemeDefaults.removePersistentDomain(forName:themeSuite)

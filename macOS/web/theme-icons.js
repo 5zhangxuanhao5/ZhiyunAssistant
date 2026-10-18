@@ -1,9 +1,9 @@
 // One semantic icon vocabulary, with geometry and finish selected by the theme.
 const paths = {
- settings:'M9 3h6l.6 3 2.4 1.4 2.8-1 3 5.2-2.2 2v2.8l2.2 2-3 5.2-2.8-1L15.6 24H9l-.6-3-2.4-1.4-2.8 1-3-5.2 2.2-2v-2.8l-2.2-2 3-5.2 2.8 1L8.4 3Z M15.5 12a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0',
+ settings:'M20.87 9.57 L21.14 10.99 L19.60 12.24 L19.47 13.42 L19.99 16.56 L19.18 17.75 L17.20 17.54 L16.27 18.29 L14.43 20.87 L13.01 21.14 L11.76 19.60 L10.58 19.47 L7.44 19.99 L6.25 19.18 L6.46 17.20 L5.71 16.27 L3.13 14.43 L2.86 13.01 L4.40 11.76 L4.53 10.58 L4.01 7.44 L4.82 6.25 L6.80 6.46 L7.73 5.71 L9.57 3.13 L10.99 2.86 L12.24 4.40 L13.42 4.53 L16.56 4.01 L17.75 4.82 L17.54 6.80 L18.29 7.73Z M15.3 12a3.3 3.3 0 1 1-6.6 0 3.3 3.3 0 0 1 6.6 0',
  history:'M3 11a9 9 0 1 1 2.7 7.4M3 4v7h7M12 7v5l3 2',
  send:'m3 4 19 8-19 8 3-8Zm3 8h16',
- key:'M14 5a5 5 0 1 1-3 9L4 21H1v-3l7-7a5 5 0 0 1 6-6Z M16 8h.1',
+ key:'M12.5 11.5 3 21m0-4v4h4M21 8a5 5 0 1 1-10 0 5 5 0 0 1 10 0M16 8h.1',
  expand:'M14 3h7v7M21 3l-8 8M10 21H3v-7m0 7 8-8',
  stop:'M6 6h12v12H6Z',
 
@@ -11,7 +11,7 @@ const paths = {
  crop:'M7 3v14h14M3 7h14v14',
  duplicates:'M8 3h13v13H8Z M3 8v13h13M12 7h5m-5 4h5',
  skip:'m4 5 8 7-8 7Z M16 5v14M21 5v14',
- smartSkip:'M4 6h7m-7 6h5m-5 6h7M17 3l1.5 5L23 10l-4.5 2-1.5 5-1.5-5L11 10l4.5-2Z',
+ smartSkip:'M4 6h7m-7 6h5m-5 6h7M17 3l1.5 5L22.5 10l-4.5 2-1.5 5-1.5-5L11 10l4.5-2Z',
  follow:'M12 3v18m-5-5 5 5 5-5M5 3h14',
  overview:'M3 3h7v7H3Z M14 3h7v7h-7Z M3 14h7v7H3Z M14 14h7v7h-7Z',
  time:'M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0',
@@ -78,6 +78,7 @@ function geometry(name, theme) {
  }
  return{family,width,cap,d};
 }
+export const iconNames = Object.freeze(Object.keys(paths));
 export function refreshThemeIcons(root=document) {
  const theme=document.documentElement.dataset.theme||'collage';
  root.querySelectorAll('[data-ui-icon]').forEach(node=>{

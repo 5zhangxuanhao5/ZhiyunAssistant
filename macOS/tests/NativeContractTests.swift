@@ -22,10 +22,10 @@ final class SyntheticCourseProtocol:URLProtocol {
     static var checks=0
     static func check(_ condition:Bool,_ name:String){precondition(condition,name);checks+=1}
     static func rejects(_ value:String,size:Int=100){do{_ = try requestedByteRange(value,size:size);fatalError("accepted invalid range: "+value)}catch{checks+=1}}
-    static func waitUntil(_ condition:()->Bool,seconds:Double=15)throws{
+    static func waitUntil(_ condition:()->Bool,seconds:Double=15,line:Int = #line)throws{
         let deadline=Date().addingTimeInterval(seconds)
         while !condition(),Date()<deadline{RunLoop.current.run(until:Date().addingTimeInterval(0.01))}
-        guard condition() else{throw appError("WebKit delegate smoke test timed out")}
+        guard condition() else{throw appError("WebKit delegate smoke test timed out at line \(line), after \(checks) checks")}
     }
     static func secureCookieFixture()->HTTPCookie{HTTPCookie(properties:[.name:"canonical-secure",.value:"fixture",.domain:".zju.edu.cn",.path:"/",.secure:"TRUE"])!}
     static func plainCookieFixture()->HTTPCookie{HTTPCookie(properties:[.name:"canonical-plain",.value:"fixture",.domain:"classroom.zju.edu.cn",.path:"/"])!}
@@ -88,6 +88,11 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(resolvedDeepSeekModel("deepseek-reasoner",hasImages:false)=="deepseek-v4-pro","legacy reasoning choice migrates to current Pro")
         check(resolvedDeepSeekModel("deepseek-v4-pro",hasImages:true)=="deepseek-flash","image requests use vision-capable Flash")
         check(resolvedDeepSeekModel("unknown",hasImages:false)==nil,"unknown models rejected")
+        check(aiHTTPFailure(200)==nil,"successful AI response has no failure")
+        check(aiHTTPFailure(401)?.contains("身份验证") == true && aiHTTPFailure(401)?.contains("额度") == false,"401 identifies authentication without blaming model or balance")
+        check(aiHTTPFailure(403)?.contains("访问权限") == true,"403 identifies service permission")
+        check(aiHTTPFailure(402)?.contains("额度不足") == true,"402 identifies service quota")
+        check(aiHTTPFailure(429)?.contains("429") == true && aiHTTPFailure(503)?.contains("暂时异常") == true,"rate limit and transient server errors remain distinguishable")
         var interactionAllowed=true,changes=[Bool]()
         let policyValue=try withKeychainInteractionPolicy(allowUI:false,get:{interactionAllowed},set:{interactionAllowed=$0;changes.append($0)},operation:{check(!interactionAllowed,"background keychain operation suppresses interaction");return 42})
         check(policyValue==42 && interactionAllowed && changes==[false,true],"successful keychain operation restores interaction policy")

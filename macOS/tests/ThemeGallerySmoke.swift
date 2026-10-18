@@ -42,12 +42,16 @@ import CryptoKit
   try server.start{app.origin=server.origin;view.load(URLRequest(url:URL(string:server.origin+"/fixture/index.html")!));ready=true}
   try smokeWait({ready});try waitJS(view,"document.querySelectorAll('.classroom-page .course-card').length===2 && !!window.__smoke")
   RunLoop.current.run(until:Date().addingTimeInterval(0.3))
+  _=try evaluate(view,"void import('./theme-icons.js').then(({iconNames,makeIcon})=>{const host=document.createElement('div');host.id='icon-geometry-review';host.style.cssText='position:fixed;left:-10000px;top:0;display:flex';for(const name of iconNames)host.append(makeIcon(name));document.body.append(host);window.__iconReviewReady=true})")
+  try waitJS(view,"window.__iconReviewReady===true")
   let review=temporary.appendingPathComponent("ui-review")
   for folder in ["agent","settings","study"]{try FileManager.default.createDirectory(at:review.appendingPathComponent(folder),withIntermediateDirectories:true)}
   var records=[[String:Any]](),hashes=Set<String>()
   let beforeRequests=(try evaluate(view,"window.__smoke.requests.length")) as? Int ?? -1
   for id in app.themeIdentifiers{
    app.applyTheme(id);try waitJS(view,"document.documentElement.dataset.theme==='"+id+"' && [...document.querySelectorAll('.theme-icon')].every(n=>n.complete&&n.naturalWidth>0)")
+   let iconFailures=try evaluate(view,"JSON.stringify([...document.querySelectorAll('#icon-geometry-review .ui-icon')].flatMap(n=>{const p=n.querySelector('path'),b=p.getBBox(),pad=Number(n.querySelector('svg').getAttribute('stroke-width'))/2;return b.x-pad<-.01||b.y-pad<-.01||b.x+b.width+pad>24.01||b.y+b.height+pad>24.01?[{name:n.dataset.uiIcon,x:b.x,y:b.y,width:b.width,height:b.height,pad}]:[]}))") as! String
+   guard iconFailures=="[]" else{throw appError("Icon geometry escapes viewBox: "+id+" "+iconFailures)}
    var decoded=false,decodeFailure:Error?
    view.callAsyncJavaScript("await Promise.all([...document.querySelectorAll('.theme-icon')].map(n=>n.decode()));return true",arguments:[:],in:nil,in:.page){result in if case .failure(let e)=result{decodeFailure=e};decoded=true}
    try smokeWait({decoded});if let error=decodeFailure{throw error}

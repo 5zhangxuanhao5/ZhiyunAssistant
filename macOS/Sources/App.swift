@@ -1146,6 +1146,19 @@ final class RemoteTransfer:NSObject,URLSessionDataDelegate {
         guard let url=request.url,trusted(url) else{completionHandler(nil);return};app.absorbCookies(response){self.app.cookieRequest(url,range:request.value(forHTTPHeaderField:"Range")){base in var next=base;next.httpMethod=request.httpMethod;completionHandler(next)}}
     }
 }
+// Status-specific messages never echo response bodies or authentication material.
+func aiHTTPFailure(_ status:Int)->String? {
+    switch status {
+    case 200:return nil
+    case 401:return "身份验证未通过，请在 AI 设置中重新保存所选服务的密钥（401）"
+    case 403:return "所选服务未授予访问权限（403），请核对账号或网关接入范围"
+    case 402:return "所选服务额度不足（402），请检查该服务的可用额度"
+    case 404:return "所选服务或模型不可用（404），请检查服务配置"
+    case 429:return "请求过于频繁或服务配额已达上限（429），请稍后重试"
+    case 500...599:return "AI 服务暂时异常（\(status)），请稍后重试"
+    default:return "AI 服务请求未完成（\(status)）"
+    }
+}
 final class AIStream:NSObject,URLSessionDataDelegate {
     var session:URLSession!,buffer=Data(),status=0,answer="",calls=[Int:[String:Any]](),usage=[String:Any]();let event:(String)->Void,done:([String:Any],String?)->Void
     init(_ request:URLRequest,event:@escaping(String)->Void,done:@escaping([String:Any],String?)->Void) {self.event=event;self.done=done;super.init();let c=URLSessionConfiguration.ephemeral;c.timeoutIntervalForRequest=120;session=URLSession(configuration:c,delegate:self,delegateQueue:nil);session.dataTask(with:request).resume()}
@@ -1154,7 +1167,7 @@ final class AIStream:NSObject,URLSessionDataDelegate {
         buffer.append(data);while let range=buffer.range(of:Data([10])) {let line=String(data:buffer[..<range.lowerBound],encoding:.utf8) ?? "";buffer.removeSubrange(..<range.upperBound);guard line.hasPrefix("data: "),let value=line.dropFirst(6).data(using:.utf8),let row=try? JSONSerialization.jsonObject(with:value) as? [String:Any] else {continue};if let u=row["usage"] as? [String:Any] {usage=u};guard let choices=row["choices"] as? [[String:Any]],let delta=choices.first?["delta"] as? [String:Any] else {continue};if let text=delta["content"] as? String {answer+=text;event(text)};if let tools=delta["tool_calls"] as? [[String:Any]] {for t in tools {let i=t["index"] as? Int ?? 0;var c=calls[i] ?? ["id":"","type":"function","function":["name":"","arguments":""]];if let id=t["id"] as? String {c["id"]=id};if let f=t["function"] as? [String:Any] {var fn=c["function"] as? [String:String] ?? [:];for k in ["name","arguments"] {if let v=f[k] as? String {fn[k]=(fn[k] ?? "")+v}};c["function"]=fn};calls[i]=c}}
         }
     }
-    func urlSession(_ session:URLSession,task:URLSessionTask,didCompleteWithError error:Error?) {done(["answer":answer,"calls":calls.keys.sorted().compactMap{calls[$0]},"usage":usage],error?.localizedDescription ?? (status==200 ? nil:"AI 服务返回 \(status)，请检查密钥、余额或模型"));session.finishTasksAndInvalidate()}
+    func urlSession(_ session:URLSession,task:URLSessionTask,didCompleteWithError error:Error?) {done(["answer":answer,"calls":calls.keys.sorted().compactMap{calls[$0]},"usage":usage],error?.localizedDescription ?? aiHTTPFailure(status));session.finishTasksAndInvalidate()}
 }
 let application=NSApplication.shared
 let delegate=App();application.delegate=delegate;application.run()

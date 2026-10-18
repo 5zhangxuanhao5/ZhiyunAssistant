@@ -969,7 +969,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         }
     }
     func startAI(_ id:String,_ params:[String:Any]){
-        guard let messages=params["messages"] as? [[String:Any]],messages.count<100 else{reply(id,nil,"问答内容无效");return}
+        guard let messages=params["messages"] as? [[String:Any]],messages.count<(params["purpose"] as? String=="agent" ? 300:100) else{reply(id,nil,"问答内容无效");return}
         let provider=params["provider"] as? String ?? "auto"
         guard ["auto","personal","campus"].contains(provider) else{reply(id,nil,"AI来源无效");return}
         let owner=account,generation=accountGeneration;pendingAI.insert(id)
@@ -1009,7 +1009,11 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         let hasImages=messages.contains{message in (message["content"] as? [[String:Any]])?.contains{part in part["type"] as? String=="image_url"} == true}
         let campus=params["provider"] as? String=="campus"
         guard let model=campus ? campusGatewayModel:resolvedDeepSeekModel(params["model"] as? String ?? "deepseek-flash",hasImages:hasImages) else{reply(id,nil,"模型不支持");return}
-        var req=URLRequest(url:URL(string:campus ? campusGatewayEndpoint:"https://api.deepseek.com/chat/completions")!); req.httpMethod="POST"; req.setValue("Bearer "+key,forHTTPHeaderField:"Authorization"); req.setValue("application/json",forHTTPHeaderField:"Content-Type"); var body:[String:Any]=["model":model,"messages":messages,"stream":true,"max_tokens":4096,"stream_options":["include_usage":true]];if !campus{body["thinking"]=["type":"disabled"]};if let tools=params["tools"] as? [[String:Any]],tools.count<=4 {body["tools"]=tools};req.httpBody=try? JSONSerialization.data(withJSONObject:body)
+        var req=URLRequest(url:URL(string:campus ? campusGatewayEndpoint:"https://api.deepseek.com/chat/completions")!); req.httpMethod="POST"; req.setValue("Bearer "+key,forHTTPHeaderField:"Authorization"); req.setValue("application/json",forHTTPHeaderField:"Content-Type"); let agent=params["purpose"] as? String=="agent"
+        let effort=params["reasoning_effort"] as? String ?? "high"
+        guard ["low","high","max"].contains(effort) else{reply(id,nil,"思考强度无效");return}
+        var body:[String:Any]=["model":model,"messages":messages,"stream":true,"max_tokens":agent ? (campus ? 8192:16384):4096,"stream_options":["include_usage":true]]
+        if !campus{body["thinking"]=["type":agent ? "enabled":"disabled"];if agent{body["reasoning_effort"]=effort}};if let tools=params["tools"] as? [[String:Any]],tools.count<=4 {body["tools"]=tools};req.httpBody=try? JSONSerialization.data(withJSONObject:body)
         #if NATIVE_CONTRACT_TESTS
         if let probe=testAIRequest{probe(req);reply(id,["answer":"synthetic","calls":[]]);return}
         #endif
@@ -1160,14 +1164,32 @@ func aiHTTPFailure(_ status:Int)->String? {
     }
 }
 final class AIStream:NSObject,URLSessionDataDelegate {
-    var session:URLSession!,buffer=Data(),status=0,answer="",calls=[Int:[String:Any]](),usage=[String:Any]();let event:(String)->Void,done:([String:Any],String?)->Void
-    init(_ request:URLRequest,event:@escaping(String)->Void,done:@escaping([String:Any],String?)->Void) {self.event=event;self.done=done;super.init();let c=URLSessionConfiguration.ephemeral;c.timeoutIntervalForRequest=120;session=URLSession(configuration:c,delegate:self,delegateQueue:nil);session.dataTask(with:request).resume()}
+    var session:URLSession!,buffer=Data(),status=0,answer="",reasoning="",finishReason:String?,calls=[Int:[String:Any]](),usage=[String:Any]();let event:(String)->Void,done:([String:Any],String?)->Void
+    init(_ request:URLRequest,start:Bool=true,event:@escaping(String)->Void,done:@escaping([String:Any],String?)->Void) {self.event=event;self.done=done;super.init();let c=URLSessionConfiguration.ephemeral;c.timeoutIntervalForRequest=120;session=URLSession(configuration:c,delegate:self,delegateQueue:nil);if start{session.dataTask(with:request).resume()}}
     func urlSession(_ session:URLSession,dataTask:URLSessionDataTask,didReceive response:URLResponse,completionHandler:@escaping(URLSession.ResponseDisposition)->Void){status=(response as? HTTPURLResponse)?.statusCode ?? 0;completionHandler(.allow)}
-    func urlSession(_ session:URLSession,dataTask:URLSessionDataTask,didReceive data:Data) {
-        buffer.append(data);while let range=buffer.range(of:Data([10])) {let line=String(data:buffer[..<range.lowerBound],encoding:.utf8) ?? "";buffer.removeSubrange(..<range.upperBound);guard line.hasPrefix("data: "),let value=line.dropFirst(6).data(using:.utf8),let row=try? JSONSerialization.jsonObject(with:value) as? [String:Any] else {continue};if let u=row["usage"] as? [String:Any] {usage=u};guard let choices=row["choices"] as? [[String:Any]],let delta=choices.first?["delta"] as? [String:Any] else {continue};if let text=delta["content"] as? String {answer+=text;event(text)};if let tools=delta["tool_calls"] as? [[String:Any]] {for t in tools {let i=t["index"] as? Int ?? 0;var c=calls[i] ?? ["id":"","type":"function","function":["name":"","arguments":""]];if let id=t["id"] as? String {c["id"]=id};if let f=t["function"] as? [String:Any] {var fn=c["function"] as? [String:String] ?? [:];for k in ["name","arguments"] {if let v=f[k] as? String {fn[k]=(fn[k] ?? "")+v}};c["function"]=fn};calls[i]=c}}
+    func consume(_ data:Data) {
+        buffer.append(data)
+        while let range=buffer.range(of:Data([10])) {
+            let line=String(data:buffer[..<range.lowerBound],encoding:.utf8) ?? "";buffer.removeSubrange(..<range.upperBound)
+            guard line.hasPrefix("data:"),let value=line.dropFirst(5).trimmingCharacters(in:.whitespacesAndNewlines).data(using:.utf8),let row=try? JSONSerialization.jsonObject(with:value) as? [String:Any] else{continue}
+            if let u=row["usage"] as? [String:Any]{usage=u}
+            guard let choices=row["choices"] as? [[String:Any]],let first=choices.first else{continue}
+            if let reason=first["finish_reason"] as? String{finishReason=reason}
+            guard let delta=first["delta"] as? [String:Any] else{continue}
+            // Required by DeepSeek on subsequent tool turns; never sent to the visible UI.
+            if let text=delta["reasoning_content"] as? String{reasoning+=text}
+            if let text=delta["content"] as? String{answer+=text;event(text)}
+            if let tools=delta["tool_calls"] as? [[String:Any]]{for t in tools{
+                let i=t["index"] as? Int ?? 0;var c=calls[i] ?? ["id":"","type":"function","function":["name":"","arguments":""]]
+                if let id=t["id"] as? String{c["id"]=id}
+                if let f=t["function"] as? [String:Any]{var fn=c["function"] as? [String:String] ?? [:];for k in ["name","arguments"]{if let v=f[k] as? String{fn[k]=(fn[k] ?? "")+v}};c["function"]=fn};calls[i]=c
+            }}
         }
     }
-    func urlSession(_ session:URLSession,task:URLSessionTask,didCompleteWithError error:Error?) {done(["answer":answer,"calls":calls.keys.sorted().compactMap{calls[$0]},"usage":usage],error?.localizedDescription ?? aiHTTPFailure(status));session.finishTasksAndInvalidate()}
+    func result()->[String:Any]{var value:[String:Any]=["answer":answer,"calls":calls.keys.sorted().compactMap{calls[$0]},"usage":usage,"reasoning_content":reasoning];if let reason=finishReason{value["finish_reason"]=reason};return value}
+    func urlSession(_ session:URLSession,dataTask:URLSessionDataTask,didReceive data:Data){consume(data)}
+    func urlSession(_ session:URLSession,task:URLSessionTask,didCompleteWithError error:Error?){if !buffer.isEmpty{consume(Data([10]))};done(result(),error?.localizedDescription ?? aiHTTPFailure(status));session.finishTasksAndInvalidate()}
 }
+
 let application=NSApplication.shared
 let delegate=App();application.delegate=delegate;application.run()

@@ -99,3 +99,28 @@
 :root:is([data-theme=field],[data-theme=film],[data-theme=marginalia],[data-theme=gallery]) .agent-empty{font-family:var(--theme-font,var(--body-font));font-weight:550}
 @media(max-width:670px){.agent-log{padding-inline:14px}.agent-head{padding-inline:12px}.agent-composer{margin-inline:11px}.global-agent[data-view=settings] .agent-log{padding-inline:12px}.agent-settings-group{padding:12px}}
 @media(prefers-reduced-motion:reduce){.global-agent *{scroll-behavior:auto!important;transition:none!important}}
+/* Floating assistant shares pane typography and surfaces; elevation is independent. */
+:root[data-theme] .global-agent{border:1px solid var(--soft-border);border-radius:var(--panel-radius);background:var(--theme-paper);z-index:20000;box-shadow:0 8px 28px color-mix(in srgb,var(--theme-ink) 14%,transparent)}
+:root[data-theme] .global-agent>.agent-head{position:relative;min-height:40px;padding:8px 12px;gap:8px;border-bottom:1px solid var(--soft-border);background:var(--theme-paper);color:var(--theme-ink)}
+:root[data-theme] .global-agent .agent-identity{display:flex;flex-direction:row;align-items:center;min-width:0}
+:root[data-theme] .global-agent .agent-head .pane-title{font-size:12px;font-weight:600;line-height:25px;letter-spacing:0;color:var(--theme-ink)}
+:root[data-theme] .global-agent .agent-head .pane-title:before{content:'';display:inline-block;width:4px;height:12px;margin-right:7px;border-radius:2px;background:var(--theme-brand)}
+.agent-handle{position:absolute;left:calc(50% - 15px);top:3px;width:30px;height:3px;border-radius:3px;background:color-mix(in srgb,var(--theme-dim) 45%,transparent);pointer-events:none}
+.global-agent .agent-status{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%)}
+:root[data-theme] .global-agent .agent-head button{min-height:26px;height:26px;padding:0 7px;font-size:11px;border-radius:var(--control-radius)}
+.global-agent .agent-tools{padding:6px 11px;gap:4px}
+.global-agent .agent-progress{flex:none;font-size:11px;color:var(--theme-dim);margin:9px 0 14px;line-height:1.7;border:0;background:transparent}
+.agent-progress>summary{display:flex;align-items:center;gap:7px;cursor:pointer;list-style:none;padding:3px 0;min-height:25px;user-select:none}
+.agent-progress>summary::-webkit-details-marker{display:none}
+.agent-progress>summary:after{content:'';width:5px;height:5px;border-right:1px solid currentColor;border-bottom:1px solid currentColor;transform:rotate(-45deg);margin-left:2px}
+.agent-progress[open]>summary:after{transform:rotate(45deg)}
+.agent-progress-mark{width:6px;height:6px;border-radius:50%;background:var(--theme-brand);flex:none}
+.agent-progress[data-state=done] .agent-progress-mark{background:var(--theme-dim);opacity:.65}
+.agent-progress-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.agent-progress-items{margin:7px 0 1px 3px;padding-left:10px;border-left:1px solid var(--theme-line)}
+.global-agent .agent-step{margin:0;padding:3px 0;line-height:1.7;background:transparent;border:0;border-radius:0;color:var(--theme-dim);font-size:11px}
+.global-agent .agent-step[data-ok=false]{color:#a65343}
+.global-agent[data-mode=pane]{z-index:auto;box-shadow:none}
+:root[data-theme] .global-agent .agent-head button{color:var(--theme-dim)}
+:root[data-theme=retro] .global-agent>.agent-head{background:#e9e6ef}
+:root[data-theme] .global-agent[data-mode=pane]{z-index:auto;border:0;border-radius:0;box-shadow:none}

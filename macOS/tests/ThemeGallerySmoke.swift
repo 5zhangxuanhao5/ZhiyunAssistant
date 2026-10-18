@@ -93,9 +93,12 @@ import CryptoKit
   _=try evaluate(view,"document.querySelector('.course-card .primary').click();void 0")
   try waitJS(view,"!!document.querySelector('#stage .parity-pane') && !!document.querySelector('.notes-editor')")
   _=try evaluate(view,"window.__themeLiveNodes=[...document.querySelectorAll('#stage .parity-pane')];window.__themeEditor=document.querySelector('.notes-editor');void 0")
+  app.event("toolbarAction","agent");try waitJS(view,"!!document.querySelector('.global-agent:not([hidden])')")
   for id in app.themeIdentifiers{
    app.applyTheme(id);try waitJS(view,"document.documentElement.dataset.theme==='"+id+"'")
    guard try evaluate(view,"window.__themeLiveNodes.every(n=>n.isConnected)&&window.__themeEditor===document.querySelector('.notes-editor')") as? Bool==true else{throw appError("Theme replaced live study nodes: "+id)}
+   let matching=try evaluate(view,"(()=>{const agent=document.querySelector('.global-agent'),pane=document.querySelector('.parity-pane[data-pane=transcript]'),a=getComputedStyle(agent),p=getComputedStyle(pane),title=getComputedStyle(agent.querySelector('.pane-title')),pt=getComputedStyle(pane.querySelector('.pane-title'));return agent.parentElement===document.body && Number(a.zIndex)>1000 && a.borderRadius===p.borderRadius && title.fontSize===pt.fontSize && getComputedStyle(agent.querySelector('.agent-head')).backgroundColor===getComputedStyle(pane.querySelector('.pane-header')).backgroundColor})()") as? Bool
+   guard matching==true else{throw appError("Floating assistant and pane surfaces differ: "+id)}
    try capture(view,review.appendingPathComponent("study/"+id+".png"),width:1200)
   }
   // The native toolbar dispatches a route event to the existing main WebView.

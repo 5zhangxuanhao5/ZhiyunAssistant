@@ -12,8 +12,8 @@ export class GlobalAssistant {
     if (this.root) return;
     const root = this.root = create('section', 'global-agent'); root.dataset.globalAgent = ''; root.setAttribute('aria-label', '应用助手');
     root.setAttribute('role', 'region'); root.hidden = true;
-    const head = create('header', 'agent-head'); this.dragHandle = head;
-    const title = create('strong', '', '应用助手'); title.prepend(makeIcon('agent'));
+    const head = create('header', 'agent-head pane-header'); this.dragHandle = head; const grip=create('span','agent-handle');grip.setAttribute('aria-hidden','true');head.append(grip);
+    const title = create('strong', 'pane-title', '应用助手');
     this.status = create('span', 'agent-status', '随时为你操作');
     const identity = create('div', 'agent-identity'); identity.append(title, this.status);
     head.append(identity, this.action('设置', () => this.settings()), this.action('收起', () => this.hide(), 'minimise'));
@@ -113,8 +113,8 @@ export class GlobalAssistant {
     }
     welcome.append(prompts); this.log.replaceChildren(welcome);
   }
-  renderHistory() { this.root.dataset.view = 'chat'; if (!this.history.length) return this.empty(); this.log.replaceChildren(); for (const turn of this.history) this.addTurn(turn.role, turn.content); this.scroll(); }
-  addTurn(role, text = '') { if (this.log.querySelector('.agent-empty')) this.log.replaceChildren(); this.root.dataset.view = 'chat'; const n = create('div', 'agent-turn ' + role); n.append(create('span', 'agent-speaker', role === 'user' ? '你' : '应用助手'), create('div', 'agent-message', text)); this.log.append(n); const message = n.querySelector('.agent-message'); if (role === 'assistant') this.format(message, text); return message; }
+  renderHistory() { this.root.dataset.view = 'chat'; if (!this.history.length) return this.empty(); this.log.replaceChildren(); for (const turn of this.history) this.addTurn(turn.role, turn.content, turn.activity); this.scroll(); }
+  addTurn(role, text = '', activity = null) { if (this.log.querySelector('.agent-empty')) this.log.replaceChildren(); this.root.dataset.view = 'chat'; const n = create('div', 'agent-turn ' + role); n.append(create('span', 'agent-speaker', role === 'user' ? '你' : '应用助手'), create('div', 'agent-message', text)); this.log.append(n); const message = n.querySelector('.agent-message'); if (role === 'assistant') { this.format(message, text); if(activity?.steps?.length){const progress=this.makeProgress(activity.steps,activity.status||'已完成');n.insertBefore(progress.node,message);} } return message; }
   format(node, text) {
     node.replaceChildren();
     // Text-only Markdown: no model-produced HTML, links, images or event handlers.
@@ -124,13 +124,34 @@ export class GlobalAssistant {
   }
   scroll() { this.log.scrollTop = this.log.scrollHeight; }
   notice(text) { if (!this.log) this.mount(); this.log.append(create('div', 'agent-notice', text)); this.scroll(); }
+  makeProgress(steps=[],status='') {
+    const node=create('details','agent-progress'),summary=create('summary'),mark=create('span','agent-progress-mark'),label=create('span','agent-progress-label'),items=create('div','agent-progress-items');
+    mark.setAttribute('aria-hidden','true');summary.append(mark,label);node.append(summary,items);
+    const result={node,summary,label,items,steps:[]};
+    for(const step of steps.slice(-120)){const safe={label:String(step.label||'操作').slice(0,100),ok:step.ok!==false,error:String(step.error||'').slice(0,200)};result.steps.push(safe);const row=create('div','agent-step',safe.label+(safe.error?'：'+safe.error:''));row.dataset.ok=String(safe.ok);items.append(row);}
+    node.dataset.state=status?'done':'running';label.textContent=status?status+' · '+steps.filter(s=>s.ok).length+' 项操作':'正在处理';return result;
+  }
+  startProgress() {this.progress=this.makeProgress();this.log.append(this.progress.node);}
+  finishProgress(status='已完成') {if(!this.progress)return;const p=this.progress;p.node.open=false;p.node.dataset.state='done';p.label.textContent=status+' · '+p.steps.filter(s=>s.ok).length+' 项操作';if(!p.steps.length)p.node.remove();}
+  activity(status='已完成') {return this.progress?.steps.length?{status,steps:this.progress.steps.map(s=>({...s}))}:undefined;}
+  stepLabel(action) {
+    const schema=this.options.registry.actions.get(action);
+    const labels={app_state:'查看当前状态',app_actions:'查找操作',app_interface:'查看界面',list_lessons:'查找课程',course_lessons:'读取课次',open_lesson:'打开课程',read_lesson:'读取课程转写',read_slides:'读取课件',note_write:'写入笔记',note_create:'创建笔记',layout:'调整布局',wait_for:'等待资源就绪'};
+    return labels[action]||(schema?.description.split('。')[0]||'执行操作').slice(0,36);
+  }
   event(event) {
-    if (event.type === 'delta') { if (!this.reply) this.reply = this.addTurn('assistant'); this.reply.textContent += event.text; this.scheduleScroll(); }
-    else if (event.type === 'step') {
-      this.reply = null; const schema = this.options.registry.actions.get(event.action);
-      this.step = create('div', 'agent-step', (schema?.description.split('。')[0] || ({ app_state: '读取应用状态', app_actions: '查询可用操作', app_interface: '查看当前界面' })[event.action] || event.action) + '…'); this.log.append(this.step); this.status.textContent = '正在操作'; this.scroll();
-    } else if (event.type === 'result' && this.step) { this.step.textContent = (event.ok ? '✓ ' : '未完成 · ') + this.step.textContent.replace(/…$/, '') + (event.error ? '：' + event.error : ''); this.step.dataset.ok = String(event.ok); }
-    else if (event.type === 'done') { if (!this.reply && event.text) this.reply = this.addTurn('assistant', event.text); else if (this.reply) this.format(this.reply, event.text); this.status.textContent = '已完成'; }
+    if (event.type === 'delta') { if (!this.reply) this.reply = this.addTurn('assistant'); const text=(this.reply.dataset.streamText||'')+event.text;this.reply.dataset.streamText=text;this.reply.textContent=text.length>180?text.slice(0,180)+'…':text; this.scheduleScroll(); }
+    else if(event.type==='step') {
+      // Intermediate model narration is replaced by the current action, not a second transcript.
+      if(this.reply){this.reply.closest('.agent-turn')?.remove();this.reply=null;}
+      if(!this.progress)this.startProgress();const label=this.stepLabel(event.action);
+      this.currentStep={label,ok:false};this.progress.steps.push(this.currentStep);this.step=create('div','agent-step',label+'…');this.progress.items.append(this.step);
+      this.progress.label.textContent=label+'…';this.status.textContent=label;this.scroll();
+    } else if(event.type==='result'&&this.step) {
+      Object.assign(this.currentStep,{ok:event.ok,error:event.error||''});this.step.textContent=this.currentStep.label+(event.error?'：'+event.error:'');this.step.dataset.ok=String(event.ok);
+    } else if(event.type==='done') {
+      this.finishProgress();if(!this.reply&&event.text)this.reply=this.addTurn('assistant',event.text);else if(this.reply)this.format(this.reply,event.text);this.status.textContent='已完成';
+    }
   }
   scheduleScroll() { if (this.scrollFrame) return; this.scrollFrame = window.requestAnimationFrame(() => { this.scrollFrame = 0; if (this.log.scrollHeight - this.log.scrollTop - this.log.clientHeight < 160) this.scroll(); }); }
   async submit() {
@@ -147,9 +168,9 @@ export class GlobalAssistant {
   async performSubmission() {
     const text = this.input.value.trim(), history = this.history.slice(), generation = this.generation;
     this.input.value = ''; this.input.style.height = '38px'; this.addTurn('user', text); this.history.push({ role: 'user', content: text }); this.reply = null;
-    this.busy(true); this.status.textContent = '正在思考'; this.scroll();
-    try { const answer = await this.runner.run(text, history); if (generation === this.generation) this.history.push({ role: 'assistant', content: answer }); }
-    catch (error) { if (generation === this.generation) { this.notice(error.message); this.history.push({ role: 'assistant', content: '任务未完成：' + error.message }); this.status.textContent = '未完成'; } }
+    this.progress=null;this.startProgress();this.busy(true); this.status.textContent = '正在处理'; this.scroll();
+    try { const answer = await this.runner.run(text, history); if (generation === this.generation) this.history.push({ role: 'assistant', content: answer, activity:this.activity() }); }
+    catch (error) { if (generation === this.generation) { this.finishProgress('未完成');this.notice(error.message); this.history.push({ role: 'assistant', content: '任务未完成：' + error.message,activity:this.activity('未完成') }); this.status.textContent = '未完成'; } }
     finally { if (generation === this.generation) { this.busy(false); await this.persist(); } }
   }
   busy(value) { this.sendButton.hidden = value; this.stopButton.hidden = !value; this.input.readOnly = value; }
@@ -157,7 +178,7 @@ export class GlobalAssistant {
     const campus = this.options.providerDescription().includes('校内'); this.serviceNote.hidden = !campus;
     if (campus && !this.showedCampusLimits) { this.serviceNote.open = false; this.showedCampusLimits = true; }
   }
-  stop() { this.runner.stop(); this.generation++; this.busy(false); this.status.textContent = '已停止'; this.notice('已停止后续操作；已完成的操作会保留。'); this.history.push({ role: 'assistant', content: '用户停止了任务，已完成的操作保留。' }); this.persist().catch(() => {}); }
+  stop() { this.finishProgress('已停止');this.runner.stop(); this.generation++; this.busy(false); this.status.textContent = '已停止'; this.notice('已停止后续操作；已完成的操作会保留。'); this.history.push({ role: 'assistant', content: '用户停止了任务，已完成的操作保留。',activity:this.activity('已停止') }); this.persist().catch(() => {}); }
   async persist() {
     if (this.loadedOwner !== this.options.owner()) return;
     const entry = { id: this.currentId, updatedAt: Date.now(), turns: this.history.slice(-100) };
@@ -188,26 +209,26 @@ export class GlobalAssistant {
     source.value = this.options.provider();
     const sourceHint = create('p', 'agent-provider-hint');
     const describe = () => { const description = this.options.providerDescription(); sourceHint.textContent = description + (description.includes('校内') ? '。课件先经 OCR 转为文字，图示关系可能遗漏。' : ''); }; describe();
-    source.onchange = () => this.options.setProvider(source.value).then(() => { this.updateServiceNote(); describe(); modelField.hidden = source.value === 'campus' || (source.value === 'auto' && !personalReady); }).catch(error => this.notice(error.message));
+    source.onchange = () => this.options.setProvider(source.value).then(() => { this.updateServiceNote(); describe(); modelField.hidden = source.value === 'campus' || (source.value === 'auto' && !personalReady); effortField.hidden=modelField.hidden; }).catch(error => this.notice(error.message));
     const model = create('select'); model.setAttribute('aria-label', '助手模型');
     for (const [value, text] of [['deepseek-flash', 'DeepSeek Flash'], ['deepseek-v4-pro', 'DeepSeek Pro']]) { const option = create('option', '', text); option.value = value; model.append(option); }
     model.value = this.options.model(); model.onchange = () => this.options.setModel(model.value);
-    const modelField = field('个人 API 模型', model, '校园网关使用学校指定的固定模型。'); modelField.hidden = source.value === 'campus' || (source.value === 'auto' && !personalReady);
-    connection.append(field('服务来源', source), sourceHint, modelField); this.log.append(connection);
+    const modelField = field('个人 API 模型', model, '个人 API 的应用助手支持思考模式；校内网关使用学校指定模型。'); modelField.hidden = source.value === 'campus' || (source.value === 'auto' && !personalReady);
+    const effort=create('select');effort.setAttribute('aria-label','助手思考强度');for(const [value,label] of [['low','快捷'],['high','均衡'],['max','深入']]){const option=create('option','',label);option.value=value;effort.append(option);}effort.value=this.options.effort?.()||'high';effort.onchange=()=>this.options.setEffort?.(effort.value);const effortField=field('思考强度',effort,'均衡适合日常操作；深入适合复杂任务，耗时和用量可能增加。');effortField.hidden=modelField.hidden;source.addEventListener('change',()=>{effortField.hidden=modelField.hidden;});connection.append(field('服务来源', source), sourceHint, modelField,effortField); this.log.append(connection);
     const credentials = section('个人 DeepSeek API'), badge = create('span', 'agent-config-badge', personalReady ? '已配置' : '未配置'); credentials.querySelector('h4').append(badge);
     const password = create('input'); password.type = 'password'; password.placeholder = personalReady ? '输入新密钥以更换' : 'sk-…'; password.autocomplete = 'off'; password.setAttribute('aria-label', 'DeepSeek API 密钥');
     credentials.append(field('API 密钥', password, '密钥仅保存在本机，输入后即可使用。'), this.action(personalReady ? '更换个人密钥' : '保存个人密钥', async () => { const key = password.value.trim(); if (!/^sk-[A-Za-z0-9_-]{16,200}$/.test(key)) throw new Error('请输入有效的 API 密钥'); await this.options.setKey(key); password.value = ''; this.renderHistory(); this.notice('已改用个人 API'); }, 'primary'));
     this.log.append(credentials);
     const advanced = create('details', 'agent-gateway-config'), heading = create('summary', '', '本机校园服务');
     const campus = create('input'); campus.type = 'password'; campus.autocomplete = 'off'; campus.placeholder = status.campusReady ? '已配置 · 输入新密钥以更换' : '校园网关密钥'; campus.setAttribute('aria-label', '校园网关密钥');
-    advanced.append(heading, create('p', 'agent-notice', '仅在浙大内网环境下可用。密钥仅存于本机，不随安装包分发。'), field('模型网关密钥', campus), this.action('保存到本机钥匙串', async () => { const key = campus.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('校园网关密钥格式无效'); await this.options.setCampusKey(key); campus.value = ''; await this.options.setProvider('auto'); this.renderHistory(); this.notice('校园网关已在本机预置。仅在浙大内网环境下可用。'); }));
+    advanced.append(heading, create('p', 'agent-notice', '仅在浙大内网环境下可用。密钥仅存于本机，不随安装包分发。'), field('模型网关密钥', campus), this.action('保存到本机钥匙串', async () => { const key = campus.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('校园网关密钥格式无效'); await this.options.setCampusKey(key); campus.value = ''; this.renderHistory(); this.notice('校园网关已在本机预置。仅在浙大内网环境下可用。'); }));
     const ocr = create('input'); ocr.type = 'password'; ocr.autocomplete = 'off'; ocr.placeholder = status.campusOCRReady ? '已配置 · 输入新密钥以更换' : '校园 OCR 密钥'; ocr.setAttribute('aria-label', '校园 OCR 密钥');
     advanced.append(field('课件 OCR 密钥', ocr, '识别文字、公式与版面；图表关系、模糊内容可能识别不完整。'), this.action('保存 OCR 密钥', async () => { const key = ocr.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('OCR 密钥格式无效'); await this.options.setCampusOCRKey(key); ocr.value = ''; this.renderHistory(); this.notice('校园 OCR 已在本机预置'); }));
     const footer = create('div', 'agent-settings-footer'); footer.append(this.action('返回对话', () => this.renderHistory()));
     this.log.append(advanced, create('p', 'agent-privacy-note', '只在你发起任务时，向所选服务发送完成任务所需的资料。'), footer); this.log.scrollTop = 0; this.root.scrollTop = 0;
   }
   reset() {
-    this.runner.stop(); this.generation++; clearTimeout(this.geometryTimer); this.history = []; this.messages = []; this.currentId = 'agent-' + Date.now(); this.loadedOwner = null; this.savedGeometry = null; this.preferredMode = 'floating';
+    this.runner.stop(); this.generation++; clearTimeout(this.geometryTimer); this.history = []; this.messages = []; this.currentId = 'agent-' + Date.now(); this.loadedOwner = null; this.savedGeometry = null; this.progress=null;this.reply=null; this.preferredMode = 'floating';
     if (this.root) { this.leavePane(); this.options.undock(); this.root.hidden = true; this.bubble.hidden = true; this.busy(false); this.empty(); }
   }
 }

@@ -426,6 +426,26 @@ final class SyntheticCourseProtocol:URLProtocol {
         _ = try bridgeCall("ai",["messages":aiMessage]);check(aiRequests.last?.url?.host=="api.deepseek.com","auto prefers configured personal API")
         _ = try bridgeCall("ai",["messages":aiMessage,"provider":"campus"]);check(aiRequests.last?.url?.host=="modelgateway.zju.edu.cn","explicit campus selection overrides personal API")
         do{_ = try bridgeCall("ai",["messages":aiMessage,"provider":"https://untrusted.example"]);fatalError("arbitrary AI endpoint accepted")}catch{check(aiRequests.count==3,"unregistered AI endpoint never starts network access")}
+        _ = try bridgeCall("ai",["messages":aiMessage,"provider":"personal","purpose":"agent","reasoning_effort":"high"])
+        let agentBody=try JSONSerialization.jsonObject(with:aiRequests.last!.httpBody!) as! [String:Any]
+        check((agentBody["thinking"] as? [String:String])?["type"]=="enabled" && agentBody["reasoning_effort"] as? String=="high","personal agent enables documented thinking and effort")
+        check(agentBody["max_tokens"] as? Int==16384,"agent has room for reasoning and complete tool arguments")
+        _ = try bridgeCall("ai",["messages":aiMessage,"provider":"campus","purpose":"agent","reasoning_effort":"high"])
+        let campusAgentBody=try JSONSerialization.jsonObject(with:aiRequests.last!.httpBody!) as! [String:Any]
+        check(campusAgentBody["thinking"]==nil && campusAgentBody["reasoning_effort"]==nil && campusAgentBody["model"] as? String==campusGatewayModel,"local gateway keeps its own protocol without unsupported personal parameters")
+        let countBeforeInvalid=aiRequests.count
+        do{_ = try bridgeCall("ai",["messages":aiMessage,"purpose":"agent","reasoning_effort":"arbitrary"]);fatalError("invalid reasoning effort accepted")}catch{check(aiRequests.count==countBeforeInvalid,"invalid effort is rejected before external request")}
+        let longerTask=Array(repeating:["role":"user","content":"synthetic step"],count:105)
+        _ = try bridgeCall("ai",["messages":longerTask,"provider":"personal","purpose":"agent"])
+        check((try JSONSerialization.jsonObject(with:aiRequests.last!.httpBody!) as! [String:Any])["messages"] is [[String:Any]],"long valid agent tool history is accepted beyond ordinary chat limit")
+        var visibleDeltas=[String]()
+        let stream=AIStream(URLRequest(url:URL(string:"https://synthetic.invalid")!),start:false,event:{visibleDeltas.append($0)},done:{_,_ in})
+        let reasoningRows=["data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"private reasoning\"}}]}\r\n","data:{\"choices\":[{\"delta\":{\"content\":\"Visible result\",\"tool_calls\":[{\"index\":0,\"id\":\"test-call\",\"function\":{\"name\":\"app_do\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n"]
+        for row in reasoningRows{let bytes=Data(row.utf8);stream.consume(bytes.prefix(7));stream.consume(bytes.dropFirst(7))}
+        let streamResult=stream.result()
+        check(streamResult["reasoning_content"] as? String=="private reasoning" && visibleDeltas==["Visible result"],"SSE preserves reasoning across fragmented CRLF chunks without revealing it to UI")
+        check(streamResult["finish_reason"] as? String=="tool_calls" && (streamResult["calls"] as? [[String:Any]])?.count==1,"SSE keeps finish reason and tool calls for a complete agent round")
+        stream.session.invalidateAndCancel()
         _ = try bridgeCall("campusGateway",["key":"synthetic-campus-provision-12345"]);check(providerKeys[campusGatewayCredential]==Data("synthetic-campus-provision-12345".utf8),"local campus provisioning saves only to credential backend")
         let structuredOCR: [String:Any] = ["errorCode":0,"result":["layoutParsingResults":[["markdown":["text":"# Formula\n$x=2$"],"outputImages":["layout":"discarded-image-bytes"]]]]]
         check(try campusLayoutText(JSONSerialization.data(withJSONObject:structuredOCR))=="# Formula\n$x=2$","layout OCR preserves Markdown and formula while excluding image payloads")

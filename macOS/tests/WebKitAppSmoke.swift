@@ -131,6 +131,7 @@ final class SmokeServer {
       await until(()=>q('#pageTitle')?.textContent==='我的课堂','initial classroom');
       await until(()=>window.fixtureToolbar?.name==='本机测试'&&window.fixtureToolbar.loggedIn,'synthetic native toolbar identity');assert(window.fixtureToolbar.name==='本机测试'&&window.fixtureToolbar.loggedIn,'synthetic identity synchronized to native toolbar');assert(!q('#appHeader')&&!q('#identity')&&!q('#myClassHome'),'browser header does not reserve a duplicate native title bar');
       click('近两周');await until(()=>q('.course-card'),'recent course card');
+      const footerLines=qa('.nav-footer .quote-line');assert(footerLines.length===2&&footerLines.every(n=>getComputedStyle(n).whiteSpace==='nowrap'&&n.scrollWidth<=n.clientWidth+1),'collage footer preserves complete phrases without orphan final characters');
       const card=q('.course-card'),star=card.querySelector('[title="收藏"]'),later=card.querySelector('[title="稍后再看"]');star.click();later.click();await sleep(30);
       assert(star.getAttribute('aria-pressed')==='true'&&later.classList.contains('active'),'lesson collection buttons persist selected state');const confirmations=window.__smoke.confirms.length;star.click();await until(()=>star.getAttribute('aria-pressed')==='false','cancel same-card favourite');assert(window.__smoke.confirms.length===confirmations+1,'cancelling same-card favourite asks once');star.click();await until(()=>star.getAttribute('aria-pressed')==='true','restore favourite');
       click('课程收藏',q('#navigation'));await until(()=>q('#pageTitle').textContent==='课程收藏','collection navigation');assert(q('.course-card'),'favourite collection renders course');
@@ -138,6 +139,9 @@ final class SmokeServer {
       await until(()=>qa('#stage > .pane').length===6,'all six study panes');
       assert(qa('#stage > .pane').every(n=>n.clientWidth>0&&n.clientHeight>0),'six panes have measurable layout');
       for(const width of [640,1320]){window.__smoke.resizeWidth=width;await until(()=>innerWidth===width,'background window resizes to '+width);await sleep(50);const tools=q('#studyTools'),controls=[...tools.children].filter(n=>getComputedStyle(n).display!=='none');assert(controls.length>5,'study tools retained at '+width);const centers=controls.map(n=>{const r=n.getBoundingClientRect();return r.top+r.height/2});assert(Math.max(...centers)-Math.min(...centers)<3&&tools.scrollHeight<=tools.clientHeight+1,'study tools stay aligned in one horizontal row at '+width)}
+      assert(qa('#studyTools button[data-feature]').every(n=>n.querySelectorAll('.ui-icon').length===1),'all study features have one consistent semantic icon');
+      click('设置');await until(()=>q('.learning-settings .common-list'),'learning settings');
+      const settingsList=q('.common-list'),settingsBody=q('#modalBody');assert(settingsList.clientWidth>=settingsBody.clientWidth-45&&settingsList.scrollWidth<=settingsList.clientWidth+1,'learning settings list uses full available width');click('完成',modal());await until(()=>modal().hidden,'settings closed');
       await until(()=>q('#slidesBody img')&&q('#transcriptBody').textContent.includes('synthetic'),'slide and transcript content');
       await until(()=>q('#slidesBody img')?.naturalWidth>0,'rendered slide bitmap');assert(q('#slidesBody img').naturalWidth>0,'slide image decoded and mounted');
       await until(()=>q('#videoBody video')?.readyState>=1,'stable screenshot test player');q('#videoBody video').pause();await sleep(40);

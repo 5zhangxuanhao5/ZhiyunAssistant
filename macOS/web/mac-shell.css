@@ -102,10 +102,12 @@ main {
   margin: 16px 0 25px;
 }
 .common-list {
-  max-width: 700px;
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
   display: grid;
   gap: 9px;
-  margin: 16px 30px 20px 0;
+  margin: 16px 0 20px;
 }
 .common-row {
   display: flex;
@@ -396,3 +398,12 @@ body:has(.video-fullscreen) #stage {
 .common-row.dragging {
   clip-path: inset(0 round 12px);
 }
+
+/* The settings list uses the whole sheet at every window width. */
+.modal-shell.learning-settings{max-width:none;width:100%;min-width:0}
+.learning-settings #modalBody{min-width:0}
+.learning-settings .common-row{min-width:0}
+.learning-settings .common-row label{min-width:0}
+.learning-settings .drag-grip{flex-shrink:0;margin-left:16px}
+#studyTools [data-feature]{display:inline-flex;align-items:center;gap:6px}
+#studyTools [data-feature] .ui-icon{flex-shrink:0}

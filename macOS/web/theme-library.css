@@ -117,3 +117,10 @@ html[data-theme=film] .study-mode .pane[data-pane=slides]{border:5px solid #5a4b
 @media(max-width:670px){.classroom-page[data-composition=film] .intro-art{display:none}}
 
 .welcome{max-width:880px;text-align:left}.welcome .api-form{align-items:stretch}
+
+/* Balance CJK copy by phrases; avoid isolated final characters/punctuation. */
+.classroom-side-note h3{text-wrap:balance;word-break:normal;line-break:strict;overflow-wrap:normal}
+.classroom-page[data-composition=paper] .classroom-side-note h3{font-size:clamp(21px,2.05vw,28px);line-height:1.65}
+.nav-footer{word-break:normal;line-break:strict;text-wrap:balance}
+
+.nav-footer .quote-line{display:block;white-space:nowrap}

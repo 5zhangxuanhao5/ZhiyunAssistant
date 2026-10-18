@@ -31,8 +31,8 @@ func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=fals
             var status=SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary)
             if status==errSecItemNotFound{
                 var add=query;add[kSecValueData as String]=data;add[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-                add[kSecAttrLabel as String]=name=="cookies" ? "智云助手 · 智云课堂会话":name=="identity" ? "智云助手 · 账号信息":"智云助手 · DeepSeek API密钥"
-                add[kSecAttrDescription as String]=name=="cookies" ? "恢复课堂登录会话，不保存校园密码":name=="identity" ? "恢复账号和本机学习入口":"用于课程问答和本页速览"
+                add[kSecAttrLabel as String]=(name=="cookies" || name==persistedSessionCredential) ? "智云助手 · 智云课堂会话":name=="identity" ? "智云助手 · 账号信息":"智云助手 · DeepSeek API密钥"
+                add[kSecAttrDescription as String]=(name=="cookies" || name==persistedSessionCredential) ? "恢复课堂登录会话，不保存校园密码":name=="identity" ? "恢复账号和本机学习入口":"用于课程问答和本页速览"
                 status=SecItemAdd(add as CFDictionary,nil)
             }
             guard status==errSecSuccess else{onError?(status);return nil};return data
@@ -65,6 +65,7 @@ final class KeychainMemoryCache {
 // Cookie rows are deliberately explicit: JSON cannot encode HTTPCookie's Date/URL
 // properties directly. Session cookies remain session cookies when restored; keeping
 // their encrypted snapshot never treats the account identity as proof of access.
+let persistedSessionCredential = "session-cookies-v2"
 func logoutMarker(in root:URL)->URL{root.appendingPathComponent("session-logged-out")}
 func writeLogoutMarker(in root:URL)throws{
     try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true);try Data("1".utf8).write(to:logoutMarker(in:root),options:.atomic)
@@ -145,8 +146,9 @@ func rewritePlaylist(_ text:String,base:URL,proxy:(String)->String?)->String{
     return text.components(separatedBy:"\n").map{line -> String in let trimmed=line.trimmingCharacters(in:.whitespacesAndNewlines);if !trimmed.isEmpty && !trimmed.hasPrefix("#"){return address(trimmed)};var output=line;for match in expression?.matches(in:line,range:NSRange(line.startIndex...,in:line)).reversed() ?? []{if let range=Range(match.range(at:1),in:output){output.replaceSubrange(range,with:address(String(output[range])))}};return output}.joined(separator:"\n")
 }
 func resolvedDeepSeekModel(_ requested:String,hasImages:Bool)->String?{
-    let value=requested=="deepseek-pro" ? "deepseek-v4-pro":requested
-    guard ["deepseek-flash","deepseek-v4-pro","deepseek-chat","deepseek-reasoner"].contains(value) else{return nil}
+    let aliases=["deepseek-pro":"deepseek-v4-pro","deepseek-reasoner":"deepseek-v4-pro","deepseek-chat":"deepseek-flash","deepseek-v4-flash":"deepseek-flash","deepseek-v4-flash-vision-exp":"deepseek-flash"]
+    let value=aliases[requested] ?? requested
+    guard ["deepseek-flash","deepseek-v4-pro"].contains(value) else{return nil}
     return hasImages ? "deepseek-flash":value
 }
 func noteAssetRelativePath(_ value:String)->String?{
@@ -262,6 +264,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     var loggingOut=false, lastWebRecovery=Date.distantPast
     var sessionNeedsResume=false
     private var latestCookieSnapshot:Data?
+    private var loginCompletionPending=false,loginVisitedAuthentication=false
     private var cookieRestoreStarted=false,cookieRestoreComplete=false,cookieRestoreCallbacks=[()->Void](),credentialUIAllowed=false
     private var accountGeneration=UUID()
     private var pendingAI=Set<String>(),cancelledAI=Set<String>()
@@ -422,7 +425,13 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func webView(_ view: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy)->Void) {
         guard let u=navigationAction.request.url else { decisionHandler(.cancel); return }
         if view === web { decisionHandler(u.absoluteString.hasPrefix(origin + "/" + token + "/") || u.scheme == "about" ? .allow : .cancel) }
-        else { decisionHandler(trusted(u) || u.scheme == "about" ? .allow : .cancel) }
+        else {
+            if view === loginWeb,let host=u.host,trusted(u){
+                if host != "classroom.zju.edu.cn"{loginVisitedAuthentication=true}
+                else if loginVisitedAuthentication && !u.path.lowercased().contains("login"){login?.orderOut(nil)}
+            }
+            decisionHandler(trusted(u) || u.scheme == "about" ? .allow : .cancel)
+        }
     }
     func webView(_ view: WKWebView, didFinish navigation: WKNavigation!) {
         if view === sessionWeb {
@@ -435,7 +444,26 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }
             return
         }
-        if view === loginWeb && !loggingOut { persistCookies(); if view.url?.host == "classroom.zju.edu.cn", !((view.url?.path ?? "").contains("login")) { DispatchQueue.main.asyncAfter(deadline:.now()+0.3) { self.event("login",["ready":true]) } } }
+        if view === loginWeb && !loggingOut {
+            persistCookies()
+            if view.url?.host == "classroom.zju.edu.cn",!((view.url?.path ?? "").lowercased().contains("login")) {
+                completeOfficialLoginIfReady(view)
+            }
+        }
+    }
+    func completeOfficialLoginIfReady(_ view:WKWebView,attempt:Int=0){
+        guard view === loginWeb,!loggingOut,!loginCompletionPending,view.url?.host=="classroom.zju.edu.cn",!(view.url?.path.lowercased().contains("login") ?? true) else{return}
+        if loginVisitedAuthentication{login?.orderOut(nil)}
+        store.httpCookieStore.getAllCookies{cookies in
+            guard view === self.loginWeb,!self.loggingOut,!self.loginCompletionPending else{return}
+            if campusBearer(cookies) != nil{
+                self.loginCompletionPending=true;self.login?.orderOut(nil);self.event("login",["ready":true])
+            }else if attempt<15{
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.2){self.completeOfficialLoginIfReady(view,attempt:attempt+1)}
+            }else if self.loginVisitedAuthentication{
+                self.event("login",["ready":true])
+            }
+        }
     }
     func webView(_ view:WKWebView,didFail navigation:WKNavigation!,withError error:Error){if view === sessionWeb{finishSession(false,generation:sessionGeneration)}}
     func webView(_ view:WKWebView,didFailProvisionalNavigation navigation:WKNavigation!,withError error:Error){if view === sessionWeb{finishSession(false,generation:sessionGeneration)}}
@@ -527,7 +555,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let group=DispatchGroup();for cookie in cookies{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}}
             group.notify(queue:.main){self.storageQueue.async{
                 let error={(status:OSStatus) in self.diagnostic("Session keychain removal failed: "+String(status))}
-                _=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error);self.credentialCache.invalidate();self.latestCookieSnapshot=nil;try? self.fm.removeItem(at:self.profileIdentityURL())
+                _=self.sessionKeychain(persistedSessionCredential,remove:true,onError:error);_=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error);self.credentialCache.invalidate();self.latestCookieSnapshot=nil;try? self.fm.removeItem(at:self.profileIdentityURL())
                 DispatchQueue.main.async{self.account="guest";self.reply(id,true)}
             }}
         }
@@ -537,20 +565,32 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         let finish={self.cookieRestoreComplete=true;let callbacks=self.cookieRestoreCallbacks;self.cookieRestoreCallbacks.removeAll();callbacks.forEach{$0()}}
         store.httpCookieStore.getAllCookies{existing in
             if self.hasLogoutMarker(){let group=DispatchGroup();for cookie in existing{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}};group.notify(queue:.main){self.sessionNeedsResume=false;finish()};return}
-            if !self.hasLogoutMarker(),campusBearer(existing) != nil{self.sessionNeedsResume=false;finish();return}
-            self.storageQueue.async{let data=self.hasLogoutMarker() ? Data():(self.sessionKeychain("cookies") ?? Data());self.latestCookieSnapshot=data.isEmpty ? nil:data;DispatchQueue.main.async{self.restoreCookies(from:data){finish()}}}
+            if !self.hasLogoutMarker(),campusBearer(existing) != nil{self.sessionNeedsResume=false;self.persistCookies{finish()};return}
+            self.storageQueue.async{
+                let current=self.hasLogoutMarker() ? nil:self.sessionKeychain(persistedSessionCredential)
+                let data=current ?? (self.hasLogoutMarker() ? Data():(self.sessionKeychain("cookies") ?? Data()))
+                self.latestCookieSnapshot=current;DispatchQueue.main.async{self.restoreCookies(from:data){finish()}}
+            }
         }
     }
     func restoreCookies(from data:Data,done:@escaping()->Void){
-        let cookies=hasLogoutMarker() ? []:decodedCookies(data);sessionNeedsResume = !cookies.isEmpty;installCookies(cookies){self.cookieRestoreComplete=true;done()}
+        let cookies=hasLogoutMarker() ? []:decodedCookies(data);sessionNeedsResume = !cookies.isEmpty && campusBearer(cookies)==nil;installCookies(cookies){self.cookieRestoreComplete=true;done()}
     }
     func persistCookies(_ done:(()->Void)?=nil){
+        #if NATIVE_CONTRACT_TESTS
+        if testSkipCookiePersistence{done?();return}
+        #endif
         guard !loggingOut,!hasLogoutMarker() else{done?();return}
-        // The persistent WKWebsiteDataStore owns disk persistence. Keep a bounded
-        // memory copy for in-process recovery; do not rewrite the legacy Keychain.
+        // WebKit may discard session-only cookies at process exit. Preserve their
+        // original attributes in a protected credential, never in a plaintext file.
+        let generation=accountGeneration
         store.httpCookieStore.getAllCookies{cookies in
-            guard !self.loggingOut,let data=try? encodedCookies(cookies) else{done?();return}
-            self.latestCookieSnapshot=data;done?()
+            guard !self.loggingOut,generation==self.accountGeneration,let data=try? encodedCookies(cookies),!cookies.isEmpty else{done?();return}
+            self.storageQueue.async{
+                guard !self.loggingOut,generation==self.accountGeneration,!self.hasLogoutMarker() else{DispatchQueue.main.async{done?()};return}
+                if self.latestCookieSnapshot != data, self.sessionKeychain(persistedSessionCredential,data) != nil{self.latestCookieSnapshot=data}
+                DispatchQueue.main.async{done?()}
+            }
         }
     }
     func cookieRequest(_ url:URL,body:String="",range:String?=nil,done:@escaping(URLRequest)->Void){
@@ -586,7 +626,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         let callbacks=sessionCallbacks;sessionCallbacks.removeAll();if ready{persistCookies()};callbacks.forEach{$0(ready && !loggingOut)}
     }
     func requiresSessionRecovery(_ done:@escaping(Bool)->Void){
-        storageQueue.async{let protected=self.credentialCache.requiresAuthorization(["cookies"])
+        storageQueue.async{let protected=self.credentialCache.requiresAuthorization([persistedSessionCredential,"cookies"])
             DispatchQueue.main.async{
                 guard protected else{done(false);return}
                 // Persistent storage permission is not online course permission. A
@@ -668,13 +708,13 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         case "setAppearanceTheme":
             guard let theme=p["theme"] as? String,themeIdentifiers.contains(theme) else{reply(id,nil,"主题无效");return};applyTheme(theme);reply(id,theme)
         case "login":
-            loggingOut=false;credentialUIAllowed=false
+            loggingOut=false;credentialUIAllowed=false;loginCompletionPending=false;loginVisitedAuthentication=false
             if let login=login { login.makeKeyAndOrderFront(nil); reply(id,true); return }
             let config=WKWebViewConfiguration(); config.websiteDataStore=store
             let view=WKWebView(frame:.zero,configuration:config); view.navigationDelegate=self;view.uiDelegate=self; loginWeb=view
             let w=NSWindow(contentRect:NSRect(x:0,y:0,width:980,height:730),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false); w.isReleasedWhenClosed=false; w.title="登录智云课堂 · 浙江大学官方认证"; w.contentView=view; w.delegate=self; w.center(); w.makeKeyAndOrderFront(nil); login=w
             view.load(URLRequest(url:URL(string:"https://classroom.zju.edu.cn/")!)); reply(id,true)
-        case "loginDone": sessionNeedsResume=false;sessionLastAttempt = .distantPast;persistCookies{self.credentialUIAllowed=false;self.login?.close();self.reply(id,true)}
+        case "loginDone": login?.orderOut(nil);sessionNeedsResume=false;sessionLastAttempt = .distantPast;persistCookies{self.credentialUIAllowed=false;self.login?.close();self.reply(id,true)}
         case "logout":
             // Persist the explicit intent first. Even a refused Keychain deletion must
             // not resurrect the prior account or cookies on the next launch.
@@ -820,9 +860,20 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }
             DispatchQueue.main.async{
                 guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
-                self.resumeOfficialSession(force:true){ready in
-                    guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
-                    self.reply(id,["ready":ready,"authorizationRequired":false,"officialLoginRequired":!ready])
+                self.storageQueue.async{
+                    let data=self.hasLogoutMarker() ? nil:self.sessionKeychain(persistedSessionCredential,allowUI:true)
+                    DispatchQueue.main.async{
+                        guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
+                        let resume={self.resumeOfficialSession(force:true){ready in
+                            guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
+                            self.reply(id,["ready":ready,"authorizationRequired":false,"officialLoginRequired":!ready])
+                        }}
+                        if let data=data,!data.isEmpty{
+                            self.restoreCookies(from:data){
+                                if campusBearer(decodedCookies(data)) != nil{self.reply(id,["ready":true,"authorizationRequired":false])}else{resume()}
+                            }
+                        }else{resume()}
+                    }
                 }
             }
         }

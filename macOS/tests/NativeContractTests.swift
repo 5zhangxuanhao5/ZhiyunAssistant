@@ -29,7 +29,34 @@ final class SyntheticCourseProtocol:URLProtocol {
     }
     static func secureCookieFixture()->HTTPCookie{HTTPCookie(properties:[.name:"canonical-secure",.value:"fixture",.domain:".zju.edu.cn",.path:"/",.secure:"TRUE"])!}
     static func plainCookieFixture()->HTTPCookie{HTTPCookie(properties:[.name:"canonical-plain",.value:"fixture",.domain:"classroom.zju.edu.cn",.path:"/"])!}
+    static func coldProcess(_ mode:String,root:URL)throws{
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        let app=App();app.root=root
+        let credential=root.appendingPathComponent("synthetic-credential.bin")
+        app.testKeychainOperation={name,data,remove,allowUI,onError in
+            guard name==persistedSessionCredential else{return nil}
+            if remove{try? FileManager.default.removeItem(at:credential);return nil}
+            if let data=data{try? data.write(to:credential,options:.atomic);return data}
+            return try? Data(contentsOf:credential)
+        }
+        if mode=="--cold-session-seed"{
+            try app.saveIdentity("{\"id\":\"separate-process-fixture\",\"name\":\"Synthetic\"}")
+            let cookie=HTTPCookie(properties:[.name:"_token",.value:"{i:0;s:6:\"_token\";i:1;s:18:\"cold-process-token\";}",.domain:"classroom.zju.edu.cn",.path:"/",.secure:"TRUE",HTTPCookiePropertyKey(rawValue:"HttpOnly"):"TRUE"])!
+            var done=false;app.installCookies([cookie]){app.persistCookies{done=true}};try waitUntil({done})
+            guard FileManager.default.fileExists(atPath:credential.path) else{throw appError("Cold seed did not persist")}
+        }else{
+            if mode=="--cold-session-logout"{try writeLogoutMarker(in:root)}
+            var done=false;app.restoreCookies{done=true};try waitUntil({done});done=false
+            var request:URLRequest?;app.cookieRequest(URL(string:"https://classroom.zju.edu.cn/courseapi/cold-test")!){request=$0;done=true};try waitUntil({done})
+            let bearer=request?.value(forHTTPHeaderField:"Authorization")
+            if mode=="--cold-session-restore"{
+                guard bearer=="Bearer cold-process-token",!app.sessionNeedsResume else{throw appError("Cold process did not restore session")}
+                var identity="";app.storageQueue.sync{identity=app.storedIdentity()};guard identity.contains("separate-process-fixture") else{throw appError("Cold profile missing")}
+            }else{guard bearer==nil else{throw appError("Logout marker was ignored")}}
+        }
+    }
     static func main()throws{
+        if CommandLine.arguments.count==3,CommandLine.arguments[1].hasPrefix("--cold-session-"){try coldProcess(CommandLine.arguments[1],root:URL(fileURLWithPath:CommandLine.arguments[2],isDirectory:true));return}
         let full=try requestedByteRange(nil,size:100);check(full.start==0 && full.end==99 && !full.partial,"full file")
         let empty=try requestedByteRange(nil,size:0);check(empty.start==0 && !empty.partial,"empty file")
         let bounded=try requestedByteRange("bytes=10-29",size:100);check(bounded.start==10 && bounded.end==29 && bounded.partial,"bounded byte range")
@@ -57,6 +84,8 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(targets.contains("https://cmc.zju.edu.cn/course/part%2F1.ts"),"HLS segment escaped path retained")
         check(resolvedDeepSeekModel("deepseek-v4-pro",hasImages:false)=="deepseek-v4-pro","official Pro model name")
         check(resolvedDeepSeekModel("deepseek-pro",hasImages:false)=="deepseek-v4-pro","legacy Pro preference migrates")
+        for alias in ["deepseek-chat","deepseek-v4-flash","deepseek-v4-flash-vision-exp"]{check(resolvedDeepSeekModel(alias,hasImages:false)=="deepseek-flash","retired Flash/chat alias migrates to current Flash")}
+        check(resolvedDeepSeekModel("deepseek-reasoner",hasImages:false)=="deepseek-v4-pro","legacy reasoning choice migrates to current Pro")
         check(resolvedDeepSeekModel("deepseek-v4-pro",hasImages:true)=="deepseek-flash","image requests use vision-capable Flash")
         check(resolvedDeepSeekModel("unknown",hasImages:false)==nil,"unknown models rejected")
         var interactionAllowed=true,changes=[Bool]()
@@ -173,8 +202,40 @@ final class SyntheticCourseProtocol:URLProtocol {
         requestReady=false;restored.cookieRequest(URL(string:"https://media.chinamcloud.com/video.mp4")!){restoredRequest=$0;requestReady=true};try waitUntil({requestReady});check(restoredRequest?.value(forHTTPHeaderField:"Authorization")==nil,"media CDN never receives campus Bearer")
         let cookieResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Set-Cookie":"just-written=ready; Path=/; Secure; HttpOnly"])!
         requestReady=false;restored.absorbCookies(cookieResponse){restored.cookieRequest(URL(string:"https://classroom.zju.edu.cn/courseapi/test")!){restoredRequest=$0;requestReady=true}};try waitUntil({requestReady});check(restoredRequest?.value(forHTTPHeaderField:"Cookie")?.contains("just-written=ready")==true,"Set-Cookie is installed before dependent API request")
-        var handshakes=0,resumed=0;restored.testSessionBootstrap={done in handshakes+=1;DispatchQueue.main.asyncAfter(deadline:.now()+0.02){done(true)}};restored.resumeOfficialSession{if $0{resumed+=1}};restored.resumeOfficialSession{if $0{resumed+=1}};try waitUntil({resumed==2});check(handshakes==1,"concurrent cold-session requests share one official handshake")
+        var handshakes=0,resumed=0;restored.sessionNeedsResume=true;restored.testSessionBootstrap={done in handshakes+=1;DispatchQueue.main.asyncAfter(deadline:.now()+0.02){done(true)}};restored.resumeOfficialSession{if $0{resumed+=1}};restored.resumeOfficialSession{if $0{resumed+=1}};try waitUntil({resumed==2});check(handshakes==1,"concurrent cold-session requests share one official handshake")
         check(restored.account=="guest","session restore never manufactures an account identity")
+        // A brand new App and empty WK store restore the credential persisted by the
+        // previous instance. No shared in-process cookie jar or user Keychain is used.
+        var durableCredentials=[String:Data](),durableWrites=0
+        let durableBackend:KeychainMemoryCache.Backend={name,data,remove,allowUI,onError in
+            check(!allowUI,"ordinary session persistence never prompts")
+            if remove{durableCredentials.removeValue(forKey:name);return nil}
+            if let data=data{durableWrites+=1;durableCredentials[name]=data;return data}
+            return durableCredentials[name]
+        }
+        let firstLaunch=App();firstLaunch.root=isolated.appendingPathComponent("durable-profile");firstLaunch.testKeychainOperation=durableBackend
+        try firstLaunch.saveIdentity("{\"id\":\"cold-fixture\",\"name\":\"Fixture\"}")
+        var savedSession=false
+        firstLaunch.installCookies([bearerCookie,secureCookie]){firstLaunch.persistCookies{savedSession=true}}
+        try waitUntil({savedSession});check(durableCredentials[persistedSessionCredential] != nil,"session-only cookies are durably stored before completion")
+        savedSession=false;firstLaunch.persistCookies{savedSession=true};try waitUntil({savedSession});check(durableWrites==1,"identical cookie snapshot is written once")
+        let nextLaunch=App();nextLaunch.root=firstLaunch.root;nextLaunch.testKeychainOperation=durableBackend
+        var coldReady=false;nextLaunch.restoreCookies{coldReady=true};try waitUntil({coldReady})
+        var coldRequest:URLRequest?;coldReady=false;nextLaunch.cookieRequest(URL(string:"https://classroom.zju.edu.cn/courseapi/cold-test")!){coldRequest=$0;coldReady=true};try waitUntil({coldReady})
+        check(coldRequest?.value(forHTTPHeaderField:"Authorization")=="Bearer synthetic-jwt","new process restores bearer without another official login")
+        check(!nextLaunch.sessionNeedsResume,"valid saved bearer avoids unnecessary startup authentication roundtrip")
+        var coldIdentity="";nextLaunch.storageQueue.sync{coldIdentity=nextLaunch.storedIdentity()};check(coldIdentity.contains("cold-fixture"),"new process restores matching local profile")
+        try writeLogoutMarker(in:nextLaunch.root)
+        let signedOut=App();signedOut.root=nextLaunch.root;signedOut.testKeychainOperation=durableBackend
+        coldReady=false;signedOut.restoreCookies{coldReady=true};try waitUntil({coldReady});coldReady=false;signedOut.cookieRequest(URL(string:"https://classroom.zju.edu.cn/")!){coldRequest=$0;coldReady=true};try waitUntil({coldReady})
+        check(coldRequest?.value(forHTTPHeaderField:"Authorization")==nil,"explicit logout prevents durable snapshot resurrection")
+        let processProfile=isolated.appendingPathComponent("separate-process-profile")
+        for mode in ["--cold-session-seed","--cold-session-restore","--cold-session-logout"]{
+            let child=Process();child.executableURL=URL(fileURLWithPath:CommandLine.arguments[0]);child.arguments=[mode,processProfile.path];child.standardOutput=FileHandle.nullDevice;child.standardError=FileHandle.nullDevice;try child.run()
+            try waitUntil({!child.isRunning},seconds:30);check(child.terminationStatus==0,"separate process "+mode+" passes")
+        }
+
+
         let loginResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/login")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"text/html"])!
         let forbidden=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/courseapi/test")!,statusCode:403,httpVersion:"HTTP/1.1",headerFields:[:])!
         check(authenticationExpired(loginResponse,Data("<!doctype html>".utf8)),"HTML login page is recognized as expired session")
@@ -305,7 +366,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         var interactiveSessionAccess=0;app.testKeychainOperation={_,_,_,allowUI,onError in if allowUI{interactiveSessionAccess+=1};onError(errSecInteractionNotAllowed);return nil}
         app.sessionNeedsResume=false;app.testSessionBootstrap={done in done(false)}
         let sessionRecovery=try bridgeCall("authorizeCredentials",["purpose":"session"]) as! [String:Any]
-        check(sessionRecovery["authorizationRequired"] as? Bool==false && interactiveSessionAccess==0,"official session recovery never asks for a Keychain password")
+        check(sessionRecovery["authorizationRequired"] as? Bool==false && interactiveSessionAccess==1,"only an explicit protected session recovery authorizes a credential read")
         let impossible=isolated.appendingPathComponent("not-a-directory");try Data("blocked".utf8).write(to:impossible)
         do{try writeLogoutMarker(in:impossible);fatalError("marker write accepted invalid directory")}catch{checks+=1}
         // Actual loopback service and hidden WK page render while a synthetic
@@ -315,12 +376,12 @@ final class SyntheticCourseProtocol:URLProtocol {
         let bootApp=App();bootApp.root=isolated.appendingPathComponent("visible-before-credentials");bootApp.testSkipCookiePersistence=true
         let bootConfig=WKWebViewConfiguration();bootConfig.websiteDataStore=bootApp.store;bootApp.web=WKWebView(frame:NSRect(x:0,y:0,width:500,height:300),configuration:bootConfig);bootApp.web.navigationDelegate=bootApp
         let credentialLatch=DispatchSemaphore(value:0);var bootReadStarted=false,bootReads=0,bootRestored=0
-        bootApp.testKeychainOperation={name,data,remove,allowUI,onError in bootReads+=1;bootReadStarted=true;_ = credentialLatch.wait(timeout:.now()+10);return nil}
+        bootApp.testKeychainOperation={name,data,remove,allowUI,onError in bootReads+=1;bootReadStarted=true;if bootReads==1{_ = credentialLatch.wait(timeout:.now()+10)};return nil}
         bootApp.startServer();bootApp.restoreCookies{bootRestored+=1};bootApp.restoreCookies{bootRestored+=1}
         try waitUntil({bootReadStarted && !bootApp.web.isLoading && bootApp.web.url != nil})
         var renderedText:String?,rendered=false;bootApp.web.evaluateJavaScript("document.body.textContent"){value,_ in renderedText=value as? String;rendered=true};try waitUntil({rendered})
         check(renderedText=="Preparing classroom" && bootRestored==0,"startup WebKit interface loads before credential approval finishes")
-        credentialLatch.signal();try waitUntil({bootRestored==2});check(bootReads==1,"startup cookie restoration is singleflight for concurrent callers")
+        credentialLatch.signal();try waitUntil({bootRestored==2});check(bootReads==2,"startup current and legacy cookie reads are each singleflight for concurrent callers")
         bootApp.listener.cancel();bootApp.web.navigationDelegate=nil;bootApp.web.stopLoading()
         window.contentView=nil;view.uiDelegate=nil;view.navigationDelegate=nil;window.close()
         print("Native bridge contract checks passed: \(checks)")

@@ -405,7 +405,11 @@ function nav() {
     el('div',{class:'nav-brand'},[el('img',{class:'theme-icon',src:themeIcon(document.documentElement.dataset.theme),alt:''}),el('strong',{text:'智云助手'})]),
     el('span',{class:'nav-caption',text:'我的学习空间'}),home,
     ...items.map(([id, t]) => {const b=button(t,()=>go(id),page===id?"active":"");b.prepend(designIcon(id));b.title=t;return b;}),
-    el('div',{class:'nav-footer'},[el('span',{text:themeFor(document.documentElement.dataset.theme).quote})]),
+    el('div',{class:'nav-footer'},[
+      document.documentElement.dataset.theme === 'collage'
+        ? el('span',{},[el('span',{class:'quote-line',text:'一页一页，'}),el('span',{class:'quote-line',text:'拼成自己的知识。'})])
+        : el('span',{text:themeFor(document.documentElement.dataset.theme).quote})
+    ]),
   );
   native.call("toolbar", {
     name: account?.name || "",
@@ -444,7 +448,7 @@ function privacy() {
     el("div", { class: "layout-help" }, [
       el("h3", { text: "数据保存在你的 Mac" }),
       el("p", {
-        text: "课程、笔记、进度、收藏和离线资源只存储在本机。校园账号密码由浙江大学官方认证页面处理，本应用不保存密码。登录会话由本机 WebKit 网站数据保存和恢复；会话失效时使用学校官方认证。DeepSeek 密钥保存在 macOS 钥匙串。",
+        text: "课程、笔记、进度、收藏和离线资源只存储在本机。校园账号密码由浙江大学官方认证页面处理，本应用不保存密码。登录会话通过本机 WebKit 与钥匙串中的受保护快照保存和恢复；会话失效时使用学校官方认证。DeepSeek 密钥保存在 macOS 钥匙串。",
       }),
       el("p", {
         text: "只有启用 AI 时，所选课程上下文和你的问题才会发送给 DeepSeek。API 费用由你的账户承担。AI 回答可能有误，请结合课堂原文判断。普通缓存清理不删除笔记和离线下载。",
@@ -524,7 +528,7 @@ function welcome(options = {}) {
           }
         }
       }, "primary");
-      actions.append(restore, el("p", { class: "hint", text: "使用学校官方认证恢复，不需要输入 Mac 密码或授权钥匙串。" }));
+      actions.append(restore, el("p", { class: "hint", text: "恢复本机保存的课堂会话；会话过期时再进入学校官方认证。" }));
     }
     actions.append(button("登录智云课堂", () => native.call("login"), required ? "" : "primary"));
   };
@@ -609,7 +613,11 @@ native.on("login", () =>
 async function loadData() {
   courses = (await saved("courses.json", true)) || [];
   prefs = { ...prefs, ...(await saved("prefs.json")) };
-  if (prefs.model === "deepseek-pro") prefs.model = "deepseek-v4-pro";
+  const modelAliases = {"deepseek-pro":"deepseek-v4-pro","deepseek-reasoner":"deepseek-v4-pro","deepseek-chat":"deepseek-flash","deepseek-v4-flash":"deepseek-flash","deepseek-v4-flash-vision-exp":"deepseek-flash"};
+  if (modelAliases[prefs.model]) {
+    prefs.model = modelAliases[prefs.model];
+    await save("prefs.json", prefs);
+  }
   if (!prefs.commonOrder)
     prefs.commonOrder = [
       "transcript",
@@ -1837,11 +1845,7 @@ function renderTools() {
     "summary",
   ];
   tools.replaceChildren(
-    button(
-      (prefs.panes.includes("slides") ? "✓ " : "") + "课件",
-      () => togglePane("slides"),
-      prefs.panes.includes("slides") ? "active" : "",
-    ),
+    featureButton("slides"),
     ...order
       .filter((id) => id !== "slides")
       .map(featureButton)
@@ -4117,7 +4121,7 @@ function apiSetup(key) {
       input,
       select(
         [
-          ["deepseek-flash", "DeepSeek Flash"],
+          ["deepseek-flash", "DeepSeek Flash · 最新版"],
           ["deepseek-v4-pro", "DeepSeek Pro"],
         ],
         prefs.model || "deepseek-flash",
@@ -5824,6 +5828,15 @@ function choicesFromPanes() {
   };
 }
 function featureButton(id) {
+  const node = featureButtonContent(id);
+  if (node) {
+    node.querySelectorAll(".ui-icon").forEach(icon => icon.remove());
+    node.prepend(makeIcon(id));
+    node.dataset.feature = id;
+  }
+  return node;
+}
+function featureButtonContent(id) {
   if (paneNames[id])
     return button(
       (prefs.panes.includes(id) ? "✓ " : "") + paneNames[id],
@@ -5932,6 +5945,7 @@ function chooseSkipMode() {
 }
 function showSettings() {
   openModal("学习设置");
+  $(".modal-shell").classList.add("learning-settings");
   const common = prefs.commonOrder || [];
   const labels = {
     ...paneNames,

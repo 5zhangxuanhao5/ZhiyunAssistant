@@ -5,6 +5,7 @@ import Security
 import CryptoKit
 import UniformTypeIdentifiers
 import ImageIO
+import Vision
 
 func appError(_ message:String, code:Int=1)->NSError { NSError(domain:"智云助手",code:code,userInfo:[NSLocalizedDescriptionKey:message]) }
 
@@ -31,7 +32,7 @@ func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=fals
             var status=SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary)
             if status==errSecItemNotFound{
                 var add=query;add[kSecValueData as String]=data;add[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-                add[kSecAttrLabel as String]=(name=="cookies" || name==persistedSessionCredential) ? "智云助手 · 智云课堂会话":name=="identity" ? "智云助手 · 账号信息":"智云助手 · DeepSeek API密钥"
+                add[kSecAttrLabel as String]=(name=="cookies" || name==persistedSessionCredential) ? "智云助手 · 智云课堂会话":name=="identity" ? "智云助手 · 账号信息":name==campusGatewayCredential ? "智云助手 · 浙大校园网关":name==campusOCRCredential ? "智云助手 · 校园课件OCR":"智云助手 · DeepSeek API密钥"
                 add[kSecAttrDescription as String]=(name=="cookies" || name==persistedSessionCredential) ? "恢复课堂登录会话，不保存校园密码":name=="identity" ? "恢复账号和本机学习入口":"用于课程问答和本页速览"
                 status=SecItemAdd(add as CFDictionary,nil)
             }
@@ -66,6 +67,20 @@ final class KeychainMemoryCache {
 // properties directly. Session cookies remain session cookies when restored; keeping
 // their encrypted snapshot never treats the account identity as proof of access.
 let persistedSessionCredential = "session-cookies-v2"
+let campusGatewayCredential = "campus-model-gateway-v1"
+let campusGatewayEndpoint = "https://modelgateway.zju.edu.cn/v1/chat/completions"
+let campusGatewayModel = "deepseek-v4-flash-780k-local"
+let campusOCRCredential = "campus-layout-ocr-v1"
+let campusOCREndpoint = "https://mcp.zju.edu.cn/api/protal/proxy/system/layout-parsing"
+func campusLayoutText(_ data:Data)throws->String{
+    guard data.count<32*1024*1024,let body=try JSONSerialization.jsonObject(with:data) as? [String:Any],(body["errorCode"] as? Int ?? -1)==0,let result=body["result"] as? [String:Any],let pages=result["layoutParsingResults"] as? [[String:Any]] else{throw appError("校园OCR未返回有效的识别结果")}
+    let text=pages.prefix(12).compactMap{page -> String? in
+        if let markdown=page["markdown"] as? [String:Any],let text=markdown["text"] as? String,!text.isEmpty{return text}
+        guard let pruned=page["prunedResult"] as? [String:Any],let blocks=pruned["parsing_res_list"] as? [[String:Any]] else{return nil}
+        return blocks.sorted{($0["block_order"] as? Int ?? 0)<($1["block_order"] as? Int ?? 0)}.compactMap{$0["block_content"] as? String}.joined(separator:"\n")
+    }.joined(separator:"\n\n")
+    guard !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw appError("校园OCR未识别出文字或公式")};return String(text.prefix(30000))
+}
 func logoutMarker(in root:URL)->URL{root.appendingPathComponent("session-logged-out")}
 func writeLogoutMarker(in root:URL)throws{
     try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true);try Data("1".utf8).write(to:logoutMarker(in:root),options:.atomic)
@@ -291,6 +306,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     var testSessionBootstrap:((@escaping(Bool)->Void)->Void)?
     var testSessionKeychain:((String,Data?,Bool)->Data?)?
     var testKeychainOperation:KeychainMemoryCache.Backend?
+    var testAIRequest:((URLRequest)->Void)?
     #endif
     lazy var root: URL = { let path=fm.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("智云助手 Mac"); try? fm.createDirectory(at:path,withIntermediateDirectories:true); return path }()
     var queue=DispatchQueue(label:"cn.suike.mac.http",qos:.userInitiated)
@@ -345,7 +361,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func toolbarIdentifiers()->[NSToolbarItem.Identifier]{
         var values=[NSToolbarItem.Identifier("brand"),.flexibleSpace]
         if toolbarLoggedIn{if !toolbarName.isEmpty{values.append(NSToolbarItem.Identifier("name"))};values.append(NSToolbarItem.Identifier("home"))}
-        values.append(NSToolbarItem.Identifier("theme"));values.append(NSToolbarItem.Identifier("privacy"));if toolbarLoggedIn{values.append(NSToolbarItem.Identifier("logout"))};return values
+        values.append(NSToolbarItem.Identifier("agent"));values.append(NSToolbarItem.Identifier("theme"));values.append(NSToolbarItem.Identifier("privacy"));if toolbarLoggedIn{values.append(NSToolbarItem.Identifier("logout"))};return values
     }
     func toolbarAllowedItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier]{toolbarIdentifiers()}
     func toolbarDefaultItemIdentifiers(_ toolbar:NSToolbar)->[NSToolbarItem.Identifier]{toolbarIdentifiers()}
@@ -357,8 +373,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             label.lineBreakMode = .byTruncatingTail;label.setAccessibilityLabel(key=="brand" ? "智云助手":text);label.sizeToFit();if key=="name"{label.frame.size.width=min(160,label.frame.width)}
             if key=="brand" {let image=NSImageView();image.image=themeImage(selectedTheme);image.imageScaling = .scaleProportionallyUpOrDown;image.translatesAutoresizingMaskIntoConstraints=false;NSLayoutConstraint.activate([image.widthAnchor.constraint(equalToConstant:22),image.heightAnchor.constraint(equalToConstant:22)]);themeBrandImage=image;let stack=NSStackView(views:[image,label]);stack.orientation = .horizontal;stack.spacing=7;item.view=stack}else{item.view=label};item.label=text;return item
         }
-        guard ["home","theme","privacy","logout"].contains(key) else{return nil}
-        let title=key=="home" ? "我的课堂":key=="theme" ? "主题":key=="privacy" ? "隐私":"退出登录",button=NSButton(title:title,target:self,action:#selector(toolbarClicked(_:)))
+        guard ["home","agent","theme","privacy","logout"].contains(key) else{return nil}
+        let title=key=="home" ? "我的课堂":key=="agent" ? "应用助手":key=="theme" ? "主题":key=="privacy" ? "隐私":"退出登录",button=NSButton(title:title,target:self,action:#selector(toolbarClicked(_:)))
         button.bezelStyle = .rounded;button.isBordered=false;button.controlSize = .small;button.font = .systemFont(ofSize:12);button.identifier=NSUserInterfaceItemIdentifier(key);button.setAccessibilityLabel(title);button.sizeToFit()
         item.view=button;item.label=title;item.toolTip=title;return item
     }
@@ -368,7 +384,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard let toolbar=mainToolbar else{return};while !toolbar.items.isEmpty{toolbar.removeItem(at:0)}
         for (index,key) in toolbarIdentifiers().enumerated(){toolbar.insertItem(withItemIdentifier:key,at:index)}
     }
-    @objc func toolbarClicked(_ sender:NSButton){guard let action=sender.identifier?.rawValue,["home","theme","privacy","logout"].contains(action) else{return};event("toolbarAction",action)}
+    @objc func toolbarClicked(_ sender:NSButton){guard let action=sender.identifier?.rawValue,["home","agent","theme","privacy","logout"].contains(action) else{return};event("toolbarAction",action)}
     func setupMenu() {
         let menu=NSMenu(); let appItem=NSMenuItem(); menu.addItem(appItem); let am=NSMenu(); appItem.submenu=am
         am.addItem(withTitle:"关于智云助手",action:#selector(about),keyEquivalent:""); am.addItem(.separator()); am.addItem(withTitle:"退出智云助手",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q")
@@ -420,7 +436,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard let view=web else{DispatchQueue.main.async(execute:scriptDone);return}
         view.callAsyncJavaScript("if (typeof window.zhiyunFlush === 'function') { await window.zhiyunFlush(); } return true;",arguments:[:],in:nil,in:.page){_ in scriptDone()}
     }
-    func applicationWillTerminate(_ notification: Notification) { if let monitor=mouseDragMonitor{NSEvent.removeMonitor(monitor)};sessionWeb?.stopLoading();sessionDeadline?.cancel(); downloads.values.forEach { $0.cancel() }; requests.values.forEach{$0.cancel()}; streams.values.forEach { $0.session.invalidateAndCancel() };remoteTransfers.values.forEach{$0.cancel()}; listener?.cancel() }
+    func applicationWillTerminate(_ notification: Notification) { if let monitor=mouseDragMonitor{NSEvent.removeMonitor(monitor)};sessionWeb?.stopLoading();sessionDeadline?.cancel(); downloads.values.forEach { $0.cancel() }; requests.values.forEach{$0.cancel()}; streams.values.forEach { $0.session.invalidateAndCancel() };ocrOperations.values.forEach{$0.invalidateAndCancel()};remoteTransfers.values.forEach{$0.cancel()}; listener?.cancel() }
     func windowWillClose(_ notification: Notification) { if notification.object as? NSWindow === login { credentialUIAllowed=false;persistCookies();login=nil;loginWeb=nil } }
     func webView(_ view: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy)->Void) {
         guard let u=navigationAction.request.url else { decisionHandler(.cancel); return }
@@ -550,7 +566,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func performLogout(_ id:String){
         loggingOut=true;accountGeneration=UUID();credentialUIAllowed=false;cancelledAI.formUnion(pendingAI);finishSession(false,generation:sessionGeneration);sessionNeedsResume=false;clearPreparedImages();updateToolbar(name:"",loggedIn:false)
         for operation in pendingRequests{cancelledRequests.insert(operation)};for operation in pendingDownloads.keys{cancelledDownloads.insert(operation)}
-        requests.values.forEach{$0.cancel()};requests.removeAll();downloads.values.forEach{$0.cancel()};streams.values.forEach{$0.session.invalidateAndCancel()};login?.close()
+        requests.values.forEach{$0.cancel()};requests.removeAll();downloads.values.forEach{$0.cancel()};streams.values.forEach{$0.session.invalidateAndCancel()};ocrOperations.values.forEach{$0.invalidateAndCancel()};login?.close()
         store.httpCookieStore.getAllCookies{cookies in
             let group=DispatchGroup();for cookie in cookies{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}}
             group.notify(queue:.main){self.storageQueue.async{
@@ -739,6 +755,29 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 DispatchQueue.main.async{self.requiresSessionRecovery{session in self.reply(id,["authorizationRequired":session || api,"sessionAuthorizationRequired":session,"apiAuthorizationRequired":api])}}
             }
         case "authorizeCredentials": authorizeCredentials(id,purpose:p["purpose"] as? String ?? ((p["scope"] as? String)=="secret" ? "api":"session"))
+        case "aiStatus":
+            let owner=account,generation=accountGeneration
+            storageQueue.async{
+                let personal=self.sessionKeychain(owner+"-deepseek")?.isEmpty==false,campus=self.sessionKeychain(campusGatewayCredential)?.isEmpty==false,required=self.credentialCache.requiresAuthorization([campusGatewayCredential]),ocr=self.sessionKeychain(campusOCRCredential)?.isEmpty==false
+                DispatchQueue.main.async{guard owner==self.account,generation==self.accountGeneration else{self.reply(id,nil,"账号已切换");return};self.reply(id,["personalReady":personal,"campusReady":campus,"campusOCRReady":ocr,"campusAuthorizationRequired":required])}
+            }
+        case "recognizeSlide":
+            guard let data=p["image"] as? String else{reply(id,nil,"缺少课件图片");return}
+            DispatchQueue.global(qos:.userInitiated).async{
+                do{
+                    let image=try decodedNoteImage(data),request=VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate;request.usesLanguageCorrection=true;request.recognitionLanguages=["zh-Hans","en-US"]
+                    try VNImageRequestHandler(data:image.data,options:[:]).perform([request])
+                    let rows=(request.results ?? []).sorted{a,b in abs(a.boundingBox.midY-b.boundingBox.midY)>0.015 ? a.boundingBox.midY>b.boundingBox.midY:a.boundingBox.minX<b.boundingBox.minX}
+                    let text=rows.compactMap{$0.topCandidates(1).first?.string}.joined(separator:"\n")
+                    self.reply(id,["text":String(text.prefix(30000)),"method":"local-ocr","limitations":"校内模型不支持直接看图；以下为本机识别的文字，不包含可靠的图形关系分析。"])
+                }catch{self.reply(id,nil,"课件文字识别失败，请重试或切换支持图片的个人API")}
+            }
+        case "campusOCR": startCampusOCR(id,p)
+        case "campusGateway", "campusOCRKey":
+            guard let key=p["key"] as? String,key.count>=16,key.count<=256,key.range(of:"^[A-Za-z0-9_-]+$",options:.regularExpression) != nil else{reply(id,nil,"校园网关密钥格式无效");return}
+            let credential=action=="campusOCRKey" ? campusOCRCredential:campusGatewayCredential
+            storageQueue.async{guard self.sessionKeychain(credential,Data(key.utf8),allowUI:true) != nil else{self.reply(id,nil,"无法保存校园服务密钥");return};self.reply(id,["ready":true])}
         case "secret":
             let name=account+"-deepseek",owner=account,generation=accountGeneration
             storageQueue.async{
@@ -847,15 +886,15 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 }
             }
         case "ai": startAI(id,p)
-        case "cancelAI": if let key=p["id"] as? String { if pendingAI.contains(key){cancelledAI.insert(key)};streams[key]?.session.invalidateAndCancel() };reply(id,true)
+        case "cancelAI": if let key=p["id"] as? String { if pendingAI.contains(key){cancelledAI.insert(key)};streams[key]?.session.invalidateAndCancel();ocrOperations[key]?.invalidateAndCancel() };reply(id,true)
         default: reply(id,nil,"未知操作")
         }
     }
     func authorizeCredentials(_ id:String,purpose:String){
-        guard ["session","api"].contains(purpose) else{reply(id,nil,"恢复目标无效");return};let owner=account,generation=accountGeneration
+        guard ["session","api","campus","campusOCR"].contains(purpose) else{reply(id,nil,"恢复目标无效");return};let owner=account,generation=accountGeneration
         storageQueue.async{
-            if purpose=="api"{
-                let name=owner+"-deepseek",data=self.sessionKeychain(name,allowUI:true),required=self.credentialCache.requiresAuthorization([name])
+            if purpose != "session"{
+                let name=purpose=="campus" ? campusGatewayCredential:purpose=="campusOCR" ? campusOCRCredential:owner+"-deepseek",data=self.sessionKeychain(name,allowUI:true),required=self.credentialCache.requiresAuthorization([name])
                 DispatchQueue.main.async{guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return};self.reply(id,["ready":data?.isEmpty==false,"authorizationRequired":required])};return
             }
             DispatchQueue.main.async{
@@ -880,20 +919,50 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     }
     func startAI(_ id:String,_ params:[String:Any]){
         guard let messages=params["messages"] as? [[String:Any]],messages.count<100 else{reply(id,nil,"问答内容无效");return}
+        let provider=params["provider"] as? String ?? "auto"
+        guard ["auto","personal","campus"].contains(provider) else{reply(id,nil,"AI来源无效");return}
         let owner=account,generation=accountGeneration;pendingAI.insert(id)
-        storageQueue.async{let key=String(data:self.sessionKeychain(owner+"-deepseek") ?? Data(),encoding:.utf8) ?? "",required=self.credentialCache.requiresAuthorization([owner+"-deepseek"])
+        storageQueue.async{
+            let personal=provider=="campus" ? "":String(data:self.sessionKeychain(owner+"-deepseek") ?? Data(),encoding:.utf8) ?? ""
+            let campus=provider=="campus" || provider=="auto" && personal.isEmpty
+            let name=campus ? campusGatewayCredential:owner+"-deepseek",key=campus ? String(data:self.sessionKeychain(name) ?? Data(),encoding:.utf8) ?? "":personal,required=self.credentialCache.requiresAuthorization([name])
             DispatchQueue.main.async{
                 self.pendingAI.remove(id);guard !self.loggingOut,owner==self.account,generation==self.accountGeneration,self.cancelledAI.remove(id)==nil else{self.reply(id,nil,"请求已取消");return}
-                guard !key.isEmpty else{self.reply(id,nil,required ? "请在API设置中恢复已保存的密钥":"请先设置 DeepSeek API 密钥");return}
-                self.startAIWithKey(id,params:params,messages:messages,key:key)
+                guard !key.isEmpty else{self.reply(id,nil,required ? "请在API设置中恢复已保存的密钥":campus ? "本机尚未预置校园网关密钥，可在API设置中接入个人API":"请先设置 DeepSeek API 密钥");return}
+                var options=params;options["provider"]=campus ? "campus":"personal"
+                self.startAIWithKey(id,params:options,messages:messages,key:key)
+            }
+        }
+    }
+    var ocrOperations=[String:URLSession]()
+    func startCampusOCR(_ id:String,_ params:[String:Any]){
+        guard let image=params["image"] as? String,let decoded=try? decodedNoteImage(image) else{reply(id,nil,"OCR图片无效");return}
+        let owner=account,generation=accountGeneration;pendingAI.insert(id)
+        storageQueue.async{
+            let key=String(data:self.sessionKeychain(campusOCRCredential) ?? Data(),encoding:.utf8) ?? ""
+            DispatchQueue.main.async{
+                self.pendingAI.remove(id);guard owner==self.account,generation==self.accountGeneration,self.cancelledAI.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"OCR已取消");return}
+                guard !key.isEmpty else{self.reply(id,nil,"本机校园OCR尚未配置或需要主动恢复密钥");return}
+                var request=URLRequest(url:URL(string:campusOCREndpoint)!);request.httpMethod="POST";request.setValue("Bearer "+key,forHTTPHeaderField:"Authorization");request.setValue("application/json",forHTTPHeaderField:"Content-Type");request.httpBody=try? JSONSerialization.data(withJSONObject:["file":decoded.data.base64EncodedString(),"fileType":1])
+                let config=URLSessionConfiguration.ephemeral;config.httpCookieStorage=nil;config.urlCache=nil;config.timeoutIntervalForRequest=25;config.timeoutIntervalForResource=45
+                let session=URLSession(configuration:config);self.ocrOperations[id]=session
+                session.dataTask(with:request){data,response,error in
+                    session.finishTasksAndInvalidate()
+                    let text:Result<String,Error>=Result{guard error==nil,(response as? HTTPURLResponse)?.statusCode==200,let data=data else{throw appError("校园OCR暂时不可用，将尝试本机识别")};return try campusLayoutText(data)}
+                    DispatchQueue.main.async{self.ocrOperations.removeValue(forKey:id);guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"账号已切换");return};switch text{case .success(let text):self.reply(id,["text":text,"method":"campus-layout-ocr"]);case .failure(let error):self.reply(id,nil,error.localizedDescription)}}
+                }.resume()
             }
         }
     }
     private func startAIWithKey(_ id:String,params:[String:Any],messages:[[String:Any]],key:String){
         let hasImages=messages.contains{message in (message["content"] as? [[String:Any]])?.contains{part in part["type"] as? String=="image_url"} == true}
-        guard let model=resolvedDeepSeekModel(params["model"] as? String ?? "deepseek-flash",hasImages:hasImages) else{reply(id,nil,"模型不支持");return}
-        var req=URLRequest(url:URL(string:"https://api.deepseek.com/chat/completions")!); req.httpMethod="POST"; req.setValue("Bearer "+key,forHTTPHeaderField:"Authorization"); req.setValue("application/json",forHTTPHeaderField:"Content-Type"); var body:[String:Any]=["model":model,"messages":messages,"stream":true,"max_tokens":4096,"thinking":["type":"disabled"],"stream_options":["include_usage":true]];if let tools=params["tools"] as? [[String:Any]],tools.count<=4 {body["tools"]=tools};req.httpBody=try? JSONSerialization.data(withJSONObject:body)
-        let stream=AIStream(req,event:{ value in self.event("ai",["id":id,"delta":value]) },done:{ value,error in DispatchQueue.main.async { self.streams.removeValue(forKey:id); self.reply(id,value,error) } }); streams[id]=stream
+        let campus=params["provider"] as? String=="campus"
+        guard let model=campus ? campusGatewayModel:resolvedDeepSeekModel(params["model"] as? String ?? "deepseek-flash",hasImages:hasImages) else{reply(id,nil,"模型不支持");return}
+        var req=URLRequest(url:URL(string:campus ? campusGatewayEndpoint:"https://api.deepseek.com/chat/completions")!); req.httpMethod="POST"; req.setValue("Bearer "+key,forHTTPHeaderField:"Authorization"); req.setValue("application/json",forHTTPHeaderField:"Content-Type"); var body:[String:Any]=["model":model,"messages":messages,"stream":true,"max_tokens":4096,"stream_options":["include_usage":true]];if !campus{body["thinking"]=["type":"disabled"]};if let tools=params["tools"] as? [[String:Any]],tools.count<=4 {body["tools"]=tools};req.httpBody=try? JSONSerialization.data(withJSONObject:body)
+        #if NATIVE_CONTRACT_TESTS
+        if let probe=testAIRequest{probe(req);reply(id,["answer":"synthetic","calls":[]]);return}
+        #endif
+        let stream=AIStream(req,event:{ value in self.event("ai",["id":id,"delta":value]) },done:{ value,error in DispatchQueue.main.async { self.streams.removeValue(forKey:id); self.reply(id,value,error.map{campus ? "校园网关："+$0+"。仅在浙大内网环境下可用":$0}) } }); streams[id]=stream
     }
     var streams=[String:AIStream]()
     func serverFailure(_ message:String){

@@ -149,11 +149,11 @@ final class SyntheticCourseProtocol:URLProtocol {
         // Actual native toolbar appears in the title bar, independently of HTML.
         var toolbarSynced=false;view.callAsyncJavaScript("return await window.callBridge('toolbar',{name:'测试姓名',loggedIn:true});",arguments:[:],in:nil,in:.page){_ in toolbarSynced=true};try waitUntil({toolbarSynced})
         let loggedItems=app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}
-        check(loggedItems==["brand","NSToolbarFlexibleSpaceItem","name","home","theme","privacy","logout"],"signed-in native title bar contains identity, theme and account actions")
+        check(loggedItems==["brand","NSToolbarFlexibleSpaceItem","name","home","agent","theme","privacy","logout"],"signed-in native title bar contains identity, theme and account actions")
         check((app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue=="name"})?.view as? NSTextField)?.stringValue=="测试姓名","native title bar displays synced user name")
         for key in ["home","theme","privacy","logout"]{(app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue==key})!.view as! NSButton).performClick(nil)}
         var toolbarValues:String?,readToolbar=false;view.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,80));return JSON.stringify(window.toolbarEvents.map(event=>event.value));",arguments:[:],in:nil,in:.page){result in if case .success(let value)=result{toolbarValues=value as? String};readToolbar=true};try waitUntil({readToolbar});check(toolbarValues=="[\"home\",\"theme\",\"privacy\",\"logout\"]","real native toolbar buttons emit string action contract")
-        app.updateToolbar(name:"",loggedIn:false);check(app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}==["brand","NSToolbarFlexibleSpaceItem","theme","privacy"],"signed-out title bar offers theme and privacy")
+        app.updateToolbar(name:"",loggedIn:false);check(app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}==["brand","NSToolbarFlexibleSpaceItem","agent","theme","privacy"],"signed-out title bar offers theme and privacy")
         check(!window.isVisible,"toolbar synchronization preserves hidden window")
         let themeSuite="zhiyun-theme-test-"+UUID().uuidString
         // Use a suite separate from the installed app; switching never touches user preferences.
@@ -259,7 +259,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         func bridgeCall(_ action:String,_ params:[String:Any]=[:])throws->Any?{
             var finished=false,value:Any?,error:Error?
             view.callAsyncJavaScript("return await window.callBridge(action,params);",arguments:["action":action,"params":params],in:nil,in:.page){result in switch result{case .success(let output):value=output;case .failure(let failure):error=failure};finished=true}
-            try waitUntil({finished});if let error=error{throw error};return value
+            try waitUntil({finished},seconds:action=="recognizeSlide" ? 60:15);if let error=error{throw error};return value
         }
         let retryResult=try bridgeCall("request",["url":"https://classroom.zju.edu.cn/contract-401"]) as! [String:Any]
         check(retryResult["status"] as? Int==200 && SyntheticCourseProtocol.hits["/contract-401"]==2 && retryHandshakes==1,"safe GET retries once after official session refresh")
@@ -383,6 +383,30 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(renderedText=="Preparing classroom" && bootRestored==0,"startup WebKit interface loads before credential approval finishes")
         credentialLatch.signal();try waitUntil({bootRestored==2});check(bootReads==2,"startup current and legacy cookie reads are each singleflight for concurrent callers")
         bootApp.listener.cancel();bootApp.web.navigationDelegate=nil;bootApp.web.stopLoading()
+        var providerKeys=[campusGatewayCredential:Data("campus-synthetic-key".utf8)],aiRequests=[URLRequest]()
+        app.storageQueue.sync{app.credentialCache.invalidate()}
+        app.testKeychainOperation={name,data,remove,allowUI,onError in if remove{providerKeys.removeValue(forKey:name);return nil};if let data=data{providerKeys[name]=data};return providerKeys[name]}
+        app.testAIRequest={aiRequests.append($0)}
+        let gatewayStatus=try bridgeCall("aiStatus") as! [String:Any]
+        check(gatewayStatus["campusReady"] as? Bool==true && gatewayStatus["personalReady"] as? Bool==false,"gateway status reports readiness without revealing credentials")
+        let aiMessage:[[String:Any]]=[["role":"user","content":"Synthetic connection test"]]
+        _ = try bridgeCall("ai",["messages":aiMessage]);check(aiRequests.last?.url?.absoluteString==campusGatewayEndpoint,"missing personal key defaults to fixed campus gateway")
+        let gatewayBody=try JSONSerialization.jsonObject(with:aiRequests.last!.httpBody!) as! [String:Any]
+        check(gatewayBody["model"] as? String==campusGatewayModel && gatewayBody["thinking"]==nil,"campus gateway uses its exact model without unsupported thinking option")
+        check(aiRequests.last?.value(forHTTPHeaderField:"Authorization")=="Bearer campus-synthetic-key","gateway uses its separate protected credential")
+        providerKeys[app.account+"-deepseek"]=Data("personal-synthetic-key".utf8);app.storageQueue.sync{app.credentialCache.invalidate()}
+        _ = try bridgeCall("ai",["messages":aiMessage]);check(aiRequests.last?.url?.host=="api.deepseek.com","auto prefers configured personal API")
+        _ = try bridgeCall("ai",["messages":aiMessage,"provider":"campus"]);check(aiRequests.last?.url?.host=="modelgateway.zju.edu.cn","explicit campus selection overrides personal API")
+        do{_ = try bridgeCall("ai",["messages":aiMessage,"provider":"https://untrusted.example"]);fatalError("arbitrary AI endpoint accepted")}catch{check(aiRequests.count==3,"unregistered AI endpoint never starts network access")}
+        _ = try bridgeCall("campusGateway",["key":"synthetic-campus-provision-12345"]);check(providerKeys[campusGatewayCredential]==Data("synthetic-campus-provision-12345".utf8),"local campus provisioning saves only to credential backend")
+        let structuredOCR: [String:Any] = ["errorCode":0,"result":["layoutParsingResults":[["markdown":["text":"# Formula\n$x=2$"],"outputImages":["layout":"discarded-image-bytes"]]]]]
+        check(try campusLayoutText(JSONSerialization.data(withJSONObject:structuredOCR))=="# Formula\n$x=2$","layout OCR preserves Markdown and formula while excluding image payloads")
+        do{_ = try campusLayoutText(Data("{\"errorCode\":1}".utf8));fatalError("OCR error accepted")}catch{checks+=1}
+        let ocrImage=NSImage(size:NSSize(width:700,height:160));ocrImage.lockFocus();NSColor.white.setFill();NSRect(x:0,y:0,width:700,height:160).fill();NSAttributedString(string:"SYNTHETIC 42",attributes:[.font:NSFont.systemFont(ofSize:50),.foregroundColor:NSColor.black]).draw(at:NSPoint(x:30,y:50));ocrImage.unlockFocus()
+        let ocrPNG=NSBitmapImageRep(data:ocrImage.tiffRepresentation!)!.representation(using:.png,properties:[:])!
+        let ocrResult=try bridgeCall("recognizeSlide",["image":"data:image/png;base64,"+ocrPNG.base64EncodedString()]) as! [String:Any]
+        check((ocrResult["text"] as? String)?.contains("SYNTHETIC")==true && ocrResult["method"] as? String=="local-ocr","native on-device OCR reads synthetic slide without multimodal API")
+        app.testAIRequest=nil
         window.contentView=nil;view.uiDelegate=nil;view.navigationDelegate=nil;window.close()
         print("Native bridge contract checks passed: \(checks)")
     }

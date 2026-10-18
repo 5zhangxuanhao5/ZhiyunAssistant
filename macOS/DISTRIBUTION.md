@@ -1,6 +1,6 @@
 # macOS 预览版本分发
 
-Mac 1.6.1（构建 10）为 universal 应用，最低 macOS 13。GitHub 提供 DMG、应用 ZIP、独立源码 ZIP 和 SHA256SUMS.txt。
+Mac 1.7.0（构建 11）为 universal 应用，最低 macOS 13。GitHub 提供 DMG、应用 ZIP、独立源码 ZIP 和 SHA256SUMS.txt。
 
 使用 ad-hoc 签名，并在构建后执行 `codesign --verify --deep --strict`。当前没有 Developer ID 发行证书和 Apple 公证记录，不以此包宣称已完成 Mac App Store 或正式公证分发。
 
@@ -11,3 +11,5 @@ Mac 1.6.1（构建 10）为 universal 应用，最低 macOS 13。GitHub 提供 D
 安装时通过 DMG 把应用拖入 Applications。更新前正常退出旧应用，覆盖安装后再次打开；旧版本本机资料会保留。若系统安全检查阻止打开，核对 SHA256 后在系统“隐私与安全”使用系统提供的允许选项，勿整体关闭 Gatekeeper。
 
 正式发行签名和公证需要开发者自己的 Apple Developer 身份，不能将私人证书或密钥提交到仓库。
+
+校内模型网关和校园 OCR 的地址与模型名为公开配置；本机预置的服务密钥只保存在系统钥匙串，不包含在源码、安装包或 GitHub 产物中。其他设备需自行合法预置或连接个人 API。

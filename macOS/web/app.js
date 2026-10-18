@@ -1,7 +1,11 @@
 import "./themes.js";
+import { AppActions } from "./agent-runtime.js";
+import { AgentInterface } from "./agent-interface.js";
+import { GlobalAssistant } from "./agent-ui.js";
+import { AIConnection, CAMPUS_NOTICE, CAMPUS_LIMITS } from "./ai-connection.js";
 import {makeIcon,decorateAction,refreshThemeIcons} from "./theme-icons.js";
 import {mountThemePicker} from "./theme-picker.js";
-import {themeFor,themeIcon} from "./theme-catalog.js";
+import {THEMES,themeFor,themeIcon} from "./theme-catalog.js";
 import {makeClassroomIntro,composeClassroom} from "./theme-home.js";
 import { MacZhiyun } from "./mac-api.js";
 import {
@@ -24,6 +28,7 @@ import {
   captureScrollAnchor,
   restoreScrollAnchor,
   slideGridShape,
+  normalizePane,
 } from "./parity-interactions.js";
 import { currentSpokenLineIndex } from "./models/TranscriptPlayback.js";
 import {
@@ -168,7 +173,32 @@ const paneNames = {
   notes: "课堂笔记",
   question: "课程问答",
   summary: "本页速览",
+  agent: "应用助手",
 };
+let globalAssistant = null;
+const aiConnection = new AIConnection(native, () => prefs);
+let campusNoticeShown = false;
+async function refreshAIAvailability() {
+  const owner = account?.id;
+  const ready = await aiConnection.refresh();
+  if (owner === account?.id) apiReady = ready;
+  return owner === account?.id && ready;
+}
+function aiProviderChoices(paneKey) {
+  const wrap = el("div", { class: "ai-provider-choices" });
+  const picker = select([["auto", "自动 · 优先个人 API"], ["campus", "浙大校内网关"], ["personal", "个人 DeepSeek API"]], aiConnection.provider(), value => {
+    prefs.aiProvider = value; campusNoticeShown = false;
+    save("prefs.json", prefs).catch(error => toast(error.message));
+    if (aiConnection.effective() === "campus") toast(CAMPUS_NOTICE);
+    hint.textContent = aiConnection.description() + (aiConnection.effective() === "campus" ? "。" + CAMPUS_LIMITS : "");
+    refreshAIAvailability().then(ready => { syncAIOptions(); if (ready && paneKey && panes[paneKey]) showAIContent(paneKey); }).catch(error => toast(error.message));
+  });
+  picker.setAttribute("aria-label", "AI服务来源");
+  const hint = el("p", { class: "hint", text: aiConnection.description() + (aiConnection.effective() === "campus" ? "。" + CAMPUS_LIMITS : "") });
+  wrap.append(picker, hint);
+  return wrap;
+}
+function notifyCampusAI() { if (aiConnection.effective() === "campus" && !campusNoticeShown) { campusNoticeShown = true; toast(CAMPUS_NOTICE); } }
 function el(tag, attrs = {}, children = []) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -430,7 +460,8 @@ native.on("appearanceTheme", (value) => {
   layoutControl?.refresh({preserve:true});
 });
 native.on("toolbarAction", (action) => {
-  if(action==="theme")go("themes").catch(error=>toast(error.message));
+  if(action==="agent")getGlobalAssistant().toggle().catch(error=>toast(error.message));
+  else if(action==="theme")go("themes").catch(error=>toast(error.message));
   else if (action === "privacy") privacy();
   else if (action === "home" && account)
     go(lastClassPage, null, false).catch((error) => toast(error.message));
@@ -452,7 +483,7 @@ function privacy() {
         text: "课程、笔记、进度、收藏和离线资源只存储在本机。校园账号密码由浙江大学官方认证页面处理，本应用不保存密码。登录会话通过本机 WebKit 与钥匙串中的受保护快照保存和恢复；会话失效时使用学校官方认证。DeepSeek 密钥保存在 macOS 钥匙串。",
       }),
       el("p", {
-        text: "只有启用 AI 时，所选课程上下文和你的问题才会发送给 DeepSeek。API 费用由你的账户承担。AI 回答可能有误，请结合课堂原文判断。普通缓存清理不删除笔记和离线下载。",
+        text: "只有启用 AI 时，所选课程上下文和你的问题才会发送到所选 AI 服务（浙大校内网关或个人 DeepSeek API）。应用助手会按你的指令读取必要的页面状态并操作本应用，过程可随时停止。API 费用由你的账户承担。AI 回答可能有误，请结合课堂原文判断。普通缓存清理不删除笔记和离线下载。",
       }),
       el("p", {
         text: "本工具独立开发，不代表学校或智云课堂运营方；只访问账号允许的课程。断网不会自动退出登录。",
@@ -468,6 +499,7 @@ async function logout() {
   )
     return;
   offlineDownloads?.api.cancel();
+  globalAssistant?.reset();
   await offlineDownloads?.dispose();
   offlineDownloads = null;
   library = [];
@@ -612,6 +644,7 @@ native.on("login", () =>
   refreshAccount().catch((error) => toast(error.message)),
 );
 async function loadData() {
+  globalAssistant?.reset();
   courses = (await saved("courses.json", true)) || [];
   prefs = { ...prefs, ...(await saved("prefs.json")) };
   const modelAliases = {"deepseek-pro":"deepseek-v4-pro","deepseek-reasoner":"deepseek-v4-pro","deepseek-chat":"deepseek-flash","deepseek-v4-flash":"deepseek-flash","deepseek-v4-flash-vision-exp":"deepseek-flash"};
@@ -661,7 +694,7 @@ async function loadData() {
       save("permissions.json", [...permissionMap.values()]);
     },
   });
-  apiReady = !!(await native.call("secret"));
+  await refreshAIAvailability();
 }
 async function boot() {
   if (!account && page !== "study") welcome({ restoring: true });
@@ -1700,6 +1733,7 @@ async function enter(
   }
 }
 function leaveStudy() {
+  globalAssistant?.leavePane();
   if (page !== "study") return;
   saveNote();
   clearTimeout(noteSaveTimer);
@@ -1799,9 +1833,10 @@ function showStudy() {
   );
   renderTools();
   for (const key of prefs.panes) createPane(key);
+  globalAssistant?.routeChanged();
   layoutControl = new PaneLayoutController({
     stage: $("#stage"),
-    getIds: () => prefs.panes,
+    getIds: () => panes.agent ? [...prefs.panes, "agent"] : prefs.panes,
     getPanes: () => panes,
     getSavedLayouts: () => layouts,
     names: paneNames,
@@ -1823,7 +1858,7 @@ function showStudy() {
     },
     onToast: toast,
   });
-  if (!prefs.panes.length)
+  if (!prefs.panes.length && !panes.agent)
     $("#stage").append(
       el("div", { class: "empty", id: "noPanes", text: "请打开功能" }),
     );
@@ -1848,9 +1883,10 @@ function renderTools() {
   tools.replaceChildren(
     featureButton("slides"),
     ...order
-      .filter((id) => id !== "slides")
+      .filter((id) => id !== "slides" && id !== "agent")
       .map(featureButton)
       .filter(Boolean),
+    featureButton("agent"),
   );
   if (prefs.panes.length === 1 && prefs.panes[0] === "slides")
     tools.append(
@@ -1891,6 +1927,7 @@ function renderTools() {
   });
 }
 function togglePane(key) {
+  if (key === "agent") return getGlobalAssistant().toggle();
   if (prefs.panes.includes(key)) {
     prefs.panes = prefs.panes.filter((x) => x !== key);
     if (key === "summary") summaryAll = false;
@@ -1923,7 +1960,7 @@ function togglePane(key) {
   renderTools();
   positionPanes();
   renderStudyContent();
-  if (!prefs.panes.length)
+  if (!prefs.panes.length && !panes.agent)
     $("#stage").append(
       el("div", { class: "empty", id: "noPanes", text: "请打开功能" }),
     );
@@ -1959,6 +1996,7 @@ function createPane(key) {
   pane.querySelectorAll(".edge").forEach((n) => (n.onpointerdown = null));
   $("#stage").append(pane);
   panes[key] = pane;
+  if (key === "agent") head.querySelector(".mini").append(button("AI设置", () => getGlobalAssistant().settings()), button("浮动", () => getGlobalAssistant().setMode("floating")), button("收起", () => getGlobalAssistant().hide()));
   if (key === "slides") {
     head.querySelector(".mini").append(
       iconButton("previous","上一页",()=>pageMove(-1)),
@@ -4092,6 +4130,7 @@ function apiSetup(key) {
     account?.id === owner && lessonToken === generation && apiSetup.views.get(body) === token;
   const resumeAPI = () => {
     apiReady = true;
+    aiConnection.status.personalReady = true;
     for (const id of ["question", "summary"]) {
       const target = panes[id];
       if (target?.dataset.apiRecovery === "true" || target === pane) {
@@ -4114,10 +4153,11 @@ function apiSetup(key) {
       autocomplete: "off",
     });
     body.replaceChildren(el("div", { class: "api-form" }, [
+      aiProviderChoices(key),
       el("h3", { text: apiReady ? "API设置" : "连接 AI 助手" }),
       el("p", {
         class: "hint",
-        text: "在 DeepSeek 开放平台创建 API 密钥。你的问题与所选课程上下文会发送给 DeepSeek，费用由你的 API 账户承担。密钥仅保存在 macOS 钥匙串。",
+        text: "未接入个人 API 时默认使用本机预置的浙大校内网关，仅在浙大内网环境下可用。个人 API 可从 DeepSeek 开放平台获取，费用由个人 API 账户承担。密钥保存在 macOS 钥匙串。",
       }),
       input,
       select(
@@ -4141,6 +4181,9 @@ function apiSetup(key) {
           await native.call("secret", { text: input.value.trim() });
           if (!active()) return;
           apiReady = true;
+          prefs.aiProvider = "personal";
+          aiConnection.status.personalReady = true;
+          await save("prefs.json", prefs);
           delete pane.dataset.apiEditing;
           syncAIOptions();
           toast("已保存");
@@ -4409,7 +4452,9 @@ function buildContext(question = "", scope = "until") {
 }
 async function streamAI(messages, onDelta, tools = null, model = null) {
   let unsubscribe;
+  notifyCampusAI();
   const promise = native.call("ai", {
+    ...aiConnection.request(),
     messages,
     model: model || prefs.model || "deepseek-flash",
     tools,
@@ -5241,6 +5286,7 @@ async function showCache() {
     button("清理全部缓存", async () => {
       if (confirm("清理普通缓存？课堂笔记、收藏、学习进度和离线课程会保留。")) {
         await native.call("cache", { clear: true });
+        globalAssistant?.reset();
         imageJobs.clear();
         visionCache.clear();
         summaries = {};
@@ -5257,7 +5303,7 @@ async function showCache() {
     timeline: ["课程时间线", "课程课件索引、转写和视频源信息。"],
     vision: ["课件识别", "AI 已经读取过的课件图片内容，复用可减少费用。"],
     summary: ["本页速览", "生成过的速览和阅读位置。"],
-    question: ["课程问答", "每节课的历史问答对话。"],
+    question: ["AI 对话记录", "每节课的课程问答，以及应用助手的历史对话。"],
     skip: ["无效片段识别", "已分析过的无实质讲解片段。"],
     images: ["课件图片", "已查看的原图，与离线下载独立保存。"],
   };
@@ -5280,7 +5326,7 @@ async function showCache() {
           async () => {
             if (confirm("清理" + name + "缓存？")) {
               await native.call("cache", { clear: true, category });
-              if (category === "question") chats = {};
+              if (category === "question") { chats = {}; globalAssistant?.reset(); }
               if (category === "summary") summaries = {};
               if (category === "vision") visionCache.clear();
               showCache();
@@ -5334,6 +5380,7 @@ let selectCount = 0,
   selectionPane = "",
   selectionAt = 0;
 document.addEventListener("keydown", (e) => {
+  if (e.target.closest?.("[data-global-agent]")) return;
   if (e.isComposing || e.defaultPrevented) return;
   if (e.key === "Escape") {
     if (panes.video?.classList.contains("video-fullscreen")) {
@@ -5501,14 +5548,14 @@ async function readPages(pages) {
 const visionPending = new Map();
 async function readSlideOnce(slide, generation) {
   const identity = slide.url || slide.local;
-  if (visionCache.has(identity)) return visionCache.get(identity);
+  if (visionCache.has(identity) && !(visionCache.get(identity)?.method === "local-ocr" && aiConnection.status.campusOCRReady)) return visionCache.get(identity);
   if (visionPending.has(identity)) return visionPending.get(identity);
   const task = (async () => {
     const cacheKey =
       "vision-" + slide.id.replace(/[^a-zA-Z0-9_-]/g, "_") + ".json";
     let reading = await saved(cacheKey, true);
     if (generation !== lessonToken) throw new Error("已取消");
-    if (reading?.url === identity) {
+    if (reading?.url === identity && !(reading.method === "local-ocr" && aiConnection.status.campusOCRReady)) {
       visionCache.set(identity, reading);
       return reading;
     }
@@ -5529,7 +5576,20 @@ async function readSlideOnce(slide, generation) {
     canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
     canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
     let text = "";
-    await streamAI(
+    let readingMethod = "vision";
+    if (aiConnection.effective() === "campus") {
+      const imageData = canvas.toDataURL("image/jpeg", 0.8);
+      let recognized;
+      if (aiConnection.status.campusOCRReady) {
+        const operation = native.call("campusOCR", { image: imageData });
+        aiOperations.add(operation.id);
+        try { recognized = await operation; } catch { if (generation !== lessonToken) throw new Error("已取消"); } finally { aiOperations.delete(operation.id); }
+      }
+      if (!recognized) recognized = await native.call("recognizeSlide", { image: imageData });
+      if (generation !== lessonToken) throw new Error("已取消");
+      readingMethod = recognized?.method || "local-ocr";
+      text = "[课件 OCR · " + (readingMethod === "campus-layout-ocr" ? "校园版面识别" : "本机文字识别") + "；可能存在遗漏或误识，不能据此认定完整理解图示关系]\n" + (recognized?.text || "未识别出可读文字，请参考课堂转写，或使用支持图片的个人 API。");
+    } else await streamAI(
       [
         {
           role: "user",
@@ -5550,7 +5610,7 @@ async function readSlideOnce(slide, generation) {
       "deepseek-flash",
     );
     if (generation !== lessonToken) throw new Error("已取消");
-    reading = { url: identity, text };
+    reading = { url: identity, text, method: readingMethod };
     visionCache.set(identity, reading);
     if (visionCache.size > 96)
       visionCache.delete(visionCache.keys().next().value);
@@ -5838,6 +5898,7 @@ function featureButton(id) {
   return node;
 }
 function featureButtonContent(id) {
+  if (id === "agent") return button("应用助手", () => getGlobalAssistant().toggle(), globalAssistant?.root && !globalAssistant.root.hidden ? "active" : "");
   if (paneNames[id])
     return button(
       (prefs.panes.includes(id) ? "✓ " : "") + paneNames[id],
@@ -6392,6 +6453,9 @@ function syncAIOptions() {
   for (const id of ["summary", "question"]) {
     const pane = panes[id];
     if (!pane) continue;
+    let serviceNote = pane.querySelector(".ai-service-note");
+    if (!serviceNote) { serviceNote = el("details", { class: "ai-service-note" }, [el("summary", { text: "校内 AI · 使用局限" }), el("p", { text: CAMPUS_NOTICE + "。" + CAMPUS_LIMITS })]); pane.insertBefore(serviceNote, pane.querySelector(".pane-content")); }
+    serviceNote.hidden = !apiReady || aiConnection.effective() !== "campus";
     pane
       .querySelectorAll(".summary-options,.question-options")
       .forEach((n) => (n.hidden = !apiReady));
@@ -6448,10 +6512,98 @@ function displayedPageGroups() {
   return available.slice(start, start + count);
 }
 
+function getGlobalAssistant() {
+  if (globalAssistant) return globalAssistant;
+  const registry = new AppActions(), ui = new AgentInterface(document);
+  const str = (description, maxLength = 4000) => ({ type: "string", description, maxLength });
+  const num = (description, minimum = 0, maximum = 1e10) => ({ type: "number", description, minimum, maximum });
+  const bool = { type: "boolean" }, choice = values => ({ type: "string", enum: values });
+  let extraCourses = [], extraOwner = account?.id;
+  const needAccount = () => { if (!account) throw new Error("请先登录智云课堂"); };
+  const needLesson = () => { needAccount(); if (page !== "study" || !lesson) throw new Error("请先进入一节课"); };
+  const known = () => {
+    if (extraOwner !== account?.id) { extraOwner = account?.id; extraCourses = []; }
+    return [...new Map([...courses, ...(allHistory?.courses || []), ...plazaRows, ...(currentGroup?.rows || []), ...library.map(r => r.course), ...extraCourses, ...(lesson ? [lesson] : [])].filter(c => c?.courseId && c?.subId).map(c => [courseKey(c), c])).values()];
+  };
+  const describe = c => ({ key: courseKey(c), courseId: c.courseId, title: c.title, teacher: c.teacher || "", date: date(c), start: clockTime(c.start), startEpoch: c.start, duration: Math.max(0, c.end - c.start), access: states[courseKey(c)] || "unknown", favourite: collections.hasLesson("favourite", c), later: collections.hasLesson("later", c) });
+  const find = key => { needAccount(); const c = known().find(c => courseKey(c) === key); if (!c) throw new Error("未找到课次，请先查询课程列表或这门课的课次"); return c; };
+  const state = () => ({ loggedIn: !!account, page, title: $("#pageTitle")?.textContent, modal: $("#modal").hidden ? null : $("#modalTitle").textContent, lesson: page === "study" && lesson ? describe(lesson) : null, study: page === "study" ? { at: mediaTime(), page: index + 1, pages: groups.length, panes: prefs.panes, following, options: { crop: prefs.crop, duplicates: prefs.duplicates, skip: prefs.skip }, video: video ? { paused: video.paused, rate: video.playbackRate, ready: video.readyState >= 2 } : null, notes: notes.map(n => ({ id: n.id, name: n.name })), activeNote: noteId } : null, downloads: library.slice(0, 20).map(r => ({ key: r.key, title: r.course?.title, state: r.state, bytes: r.bytes, total: r.total })), historyComplete: !!allHistory?.complete, knownLessons: known().length });
+  registry.register("navigate", "打开应用页面。home=我的课堂，today/recent/all=今日/近两周/所有课程，favourite/later/offline/noteManager/themes/cache/plaza 对应收藏/稍后再看/离线/笔记管理/主题/缓存/课程广场。", { page: choice(["home", "today", "recent", "all", "favourite", "later", "offline", "noteManager", "themes", "cache", "plaza"]), }, ["page"], async ({ page: target }, guard) => { if (target !== "themes") needAccount(); guard(); await go(target === "home" ? lastClassPage : target); return state(); });
+  registry.register("back", "返回上一级页面。", {}, [], async () => { await back(); return state(); });
+  registry.register("refresh_courses", "刷新当前账号的课表和权限。历史课次请先打开所有课程页同步；不会访问无权课程。", {}, [], async (_, guard) => { needAccount(); await refreshCourses(); guard(); return { count: courses.length, historyComplete: !!allHistory?.complete }; });
+  registry.register("list_lessons", "查询本机已同步的课次，支持课程/教师关键词与日期；可分页。未同步的历史记录请打开所有课程页。", { query: str("课程名或教师，可留空", 100), date: str("YYYY-MM-DD，可留空", 10), offset: num("分页偏移", 0, 1e6), limit: num("每页条数", 1, 60) }, [], ({ query = "", date: d = "", offset = 0, limit = 30 }) => { needAccount(); const rows = known().filter(c => (!query || (c.title + " " + c.teacher).includes(query)) && (!d || date(c) === d)).sort((a, b) => b.start - a.start); return { total: rows.length, historyComplete: !!allHistory?.complete, lessons: rows.slice(offset, offset + limit).map(describe) }; });
+  registry.register("search_courses", "搜索课程广场，返回课程而非课次；之后用 course_lessons 取具体课次。", { query: str("课程名或教师", 100), kind: choice(["course", "teacher"]), page: num("结果页，从1开始", 1, 500) }, ["query", "kind"], async ({ query, kind, page: p = 1 }, guard) => { needAccount(); const result = await api.searchCourses(account, kind === "course" ? query : "", kind === "teacher" ? query : "", p); guard(); extraCourses.push(...result.list); return { total: result.total, courses: result.list.map(c => ({ courseId: c.courseId, title: c.title, teacher: c.teacher, term: c.term })) }; });
+  registry.register("course_lessons", "读取一门已查到的课程的各次上课记录，获取可用于进入学习/下载的 key。", { courseId: str("查询结果中的课程标识", 200) }, ["courseId"], async ({ courseId }, guard) => { needAccount(); known(); const c = [...known(), ...extraCourses, ...searchHits].find(c => String(c.courseId) === courseId); if (!c) throw new Error("先搜索该课程"); const result = await api.chapters(c); guard(); extraCourses.push(...result); return { lessons: result.slice(0, 100).map(describe), total: result.length }; });
+  registry.register("open_lesson", "进入指定课次学习。应用会按真实账号权限检查，不能跳过权限。", { key: str("课次key", 300), at: num("可选：进入后定位到的秒数") }, ["key"], async ({ key, at: time }, guard) => { const c = find(key); guard(); await enter(c); guard(); if (page !== "study" || courseKey(lesson) !== key) throw new Error("未能进入课程，请检查界面提示和权限"); if (time != null) seek(time, "agent"); return state(); });
+  registry.register("read_lesson", "读取当前课的有序时间线和转写，不发送图片；按起止秒数及 offset 分页。", { from: num("起始秒数"), to: num("结束秒数"), offset: num("转写偏移", 0, 1e6), limit: num("转写条数", 1, 120) }, [], ({ from = 0, to = 1e10, offset = 0, limit = 80 }) => { needLesson(); const rows = lines.filter(l => l.t >= from && l.t <= to); return { course: describe(lesson), currentTime: mediaTime(), total: rows.length, lines: rows.slice(offset, offset + limit).map(l => ({ t: l.t, end: l.end, text: l.text })), pages: groups.map((g, i) => ({ page: i + 1, t: g.slide.t, end: groups[i + 1]?.slide.t ?? lesson.end - lesson.start })).filter(g => g.end >= from && g.t <= to).slice(0, 100) }; });
+  registry.register("read_slides", "按需识别当前课的指定课件，每次最多6页；复用已有识别缓存以节约费用。", { pages: { type: "array", items: num("页码", 1, 10000), maxItems: 6 } }, ["pages"], async ({ pages }) => { needLesson(); if (pages.some(p => !Number.isInteger(p) || p > groups.length)) throw new Error("页码不存在"); return readPages(pages); });
+  registry.register("seek", "跳到当前课指定秒数，同时联动视频、课件和转写。", { seconds: num("秒数") }, ["seconds"], ({ seconds }) => { needLesson(); seek(seconds, "agent"); return state(); });
+  registry.register("slide_page", "切换当前课的课件页码，保留正常的手动浏览逻辑。", { page: num("页码，从1开始", 1, 10000) }, ["page"], ({ page: p }) => { needLesson(); if (!Number.isInteger(p) || p > groups.length) throw new Error("页码不存在"); pageMove(p - 1 - index); return state(); });
+  registry.register("follow_current", "让课件和转写回到视频当前进度，或直播最新位置并继续跟随。", {}, [], () => { needLesson(); followNow(); return state(); });
+  registry.register("set_pane", "打开/关闭学习功能区。agent 可将应用助手收为功能区。", { pane: choice(Object.keys(paneNames)), open: bool }, ["pane", "open"], async ({ pane: id, open }) => { needLesson(); if (id === "agent") { if (open) await getGlobalAssistant().setMode("pane"); else getGlobalAssistant().hide(); } else if (prefs.panes.includes(id) !== open) togglePane(id); return state(); });
+  registry.register("set_study_option", "设置去黑边、合并连续重复课件、跳过无转写、单独课件页数。", { option: choice(["crop", "duplicates", "skip", "count"]), value: { type: "number", minimum: 0, maximum: 4, description: "开关0/1；count为1-4" } }, ["option", "value"], async ({ option, value }) => { needLesson(); if (option === "count" && (!Number.isInteger(value) || value < 1)) throw new Error("页数应为1-4"); if (option !== "count" && ![0, 1].includes(value)) throw new Error("开关应为0或1"); prefs[option] = option === "count" ? value : !!value; if (option === "duplicates") regroup(); await save("prefs.json", prefs); renderStudyContent(); renderTools(); return state(); });
+  registry.register("show_learning_tool", "打开概览、学习设置、功能区布局、时间/页码选择或本节下载选项。", { tool: choice(["overview", "settings", "layout", "time", "page", "download"]) }, ["tool"], ({ tool }) => { needLesson(); ({ overview: () => overview(false), settings: showSettings, layout: showLayout, time: timeJump, page: pageJump, download: () => lessonDownload(lesson) })[tool](); return { ok: true }; });
+  registry.register("video_control", "控制当前视频的播放、暂停、倍速或全屏；打开视频后需等待资源就绪。", { command: choice(["play", "pause", "speed", "fullscreen", "exit_fullscreen"]), rate: num("播放速度", 0.1, 16) }, ["command"], async ({ command, rate }) => { needLesson(); if (!panes.video) togglePane("video"); if (!video) throw new Error("视频仍在加载，请稍后读取状态"); if (command === "play") await video.play(); else if (command === "pause") video.pause(); else if (command === "speed") { if (rate == null) throw new Error("请指定倍速"); video.playbackRate = rate; } else panes.video.classList.toggle("video-fullscreen", command === "fullscreen"); return state(); });
+  registry.register("set_collection", "收藏或稍后再看课次/整门课，可设置为选中或取消。整门课使用当前已知课次。", { key: str("课次key", 300), kind: choice(["favourite", "later"]), selected: bool, wholeCourse: bool }, ["key", "kind", "selected"], ({ key, kind, selected, wholeCourse = false }) => { const c = find(key); const before = wholeCourse ? collections.hasCourse(kind, c.courseId) : collections.hasLesson(kind, c); if (before !== selected) { if (wholeCourse) collections.toggleCourse(kind, c, known().filter(r => r.courseId === c.courseId)); else collections.toggleLesson(kind, c); } if (["favourite", "later"].includes(page)) showCollections(); else if (["today", "recent", "all", "chapters"].includes(page)) showCourses(); return { selected: wholeCourse ? collections.hasCourse(kind, c.courseId) : collections.hasLesson(kind, c), course: describe(c) }; });
+  registry.register("notes_list", "读取本节课的笔记名与正文，用 id 标识具体笔记。", {}, [], () => { needLesson(); return notes.map(n => { const div = el("div"); div.innerHTML = sanitizeNote(n.html || ""); return { id: n.id, name: n.name, text: div.textContent.slice(0, 12000) }; }); });
+  registry.register("note_create", "在当前课新建并打开笔记，可指定名称。", { name: str("笔记名", 100) }, [], async ({ name }, guard) => { needLesson(); if (!panes.notes) togglePane("notes"); const generation = lessonToken; await saveNote(); guard(); if (generation !== lessonToken) throw new Error("课程已切换"); newNote(); if (name) activeNote().name = name; await saveNotes(); guard(); renderNotes(); syncNoteSelector(); return { id: noteId, name: activeNote()?.name }; });
+  registry.register("note_write", "往指定笔记写入纯文字，可在原光标插入、末尾追加或替换全部正文。替换需用户确认。", { id: str("笔记id，省略为当前笔记", 200), text: str("要写入的正文", 12000), mode: choice(["insert", "append", "replace"]) }, ["text"], async ({ id, text, mode = "insert" }, guard) => { needLesson(); if (!panes.notes) togglePane("notes"); await saveNote(); guard(); if (id && !notes.some(n => n.id === id)) throw new Error("笔记不存在"); if (id && noteId !== id) { noteId = id; renderNotes(); } if (!activeNote()) newNote(); renderNotes(); if (!notesEditor) throw new Error("笔记编辑器未就绪"); if (mode === "replace") { if (!confirm("应用助手将替换“" + activeNote().name + "”的全部正文，是否继续？")) throw new Error("用户取消了替换"); guard(); notesEditor.element.replaceChildren(notesEditor.makeBlock("mine")); notesEditor.refreshGaps(); }
+    if (mode !== "insert") { const last = notesEditor.addOwnBlock(null); notesEditor.caret(last, true); }
+    const place = notesEditor.insertionPlace(); place.range.deleteContents(); const textNode = document.createTextNode(text); place.range.insertNode(textNode); place.range.setStartAfter(textNode); place.range.collapse(true); notesEditor.range = place.range.cloneRange(); notesEditor.restoreSelection(); notesEditor.commit(); await saveNote(); return { id: noteId, name: activeNote().name, insertedCharacters: text.length }; });
+  registry.register("note_rename", "重命名本节课的指定笔记。", { id: str("笔记id", 200), name: str("新名称", 100) }, ["id", "name"], async ({ id, name }) => { needLesson(); const n = notes.find(n => n.id === id); if (!n || !name.trim()) throw new Error("笔记或名称无效"); n.name = name.trim(); await saveNotes(); syncNoteSelector(); return { id, name: n.name }; });
+  registry.register("note_insert_slide", "把当前课的一页课件原图插入当前笔记，保留时间引用。", { page: num("页码", 1, 10000) }, ["page"], async ({ page: p }) => { needLesson(); const g = groups[p - 1]; if (!Number.isInteger(p) || !g) throw new Error("页码不存在"); await insertNote("slide", "第" + p + "页课件", g.slide.t, g.slide.local || resource(g.slide.url)); return { ok: true, noteId }; });
+  registry.register("note_export", "打开当前笔记的导出选项；由用户选择格式和保存位置。", {}, [], () => { needLesson(); exportNote(); return { message: "已打开导出选项" }; });
+  registry.register("download_lesson", "下载指定有权限课次，可分别选择课件、转写、视频。应用会重新验证权限。", { key: str("课次key", 300), slides: bool, transcript: bool, video: bool }, ["key", "slides", "transcript", "video"], async ({ key, ...options }, guard) => { const c = find(key); if (!Object.values(options).some(Boolean)) throw new Error("至少选择一种资源"); guard(); await offlineDownloads.enqueue(c, options); return { key, state: offlineDownloads.find(key)?.state }; });
+  registry.register("download_control", "管理下载队列：暂停/继续/重试失败/调整顺序/保存可用内容/删除。删除需要确认。", { key: str("下载课次key", 300), command: choice(["pause", "resume", "retry", "first", "last", "preserve", "delete"]) }, ["key", "command"], async ({ key, command }, guard) => { needAccount(); if (!offlineDownloads?.find(key)) throw new Error("下载记录不存在"); guard(); if (command === "delete") { if (!confirm("删除这节课的离线资源？")) throw new Error("用户取消了删除"); guard(); await offlineDownloads.remove(key); } else if (["first", "last"].includes(command)) offlineDownloads.move(key, command); else await offlineDownloads[command](key); return { key, state: offlineDownloads.find(key)?.state || "deleted" }; });
+  registry.register("download_queue", "读取全部下载状态（分页），或设置同时下载的课次数1-4。", { offset: num("偏移", 0, 1e6), concurrency: num("可选：并行课次数", 1, 4) }, [], ({ offset = 0, concurrency }) => { needAccount(); if (concurrency != null) { if (!Number.isInteger(concurrency)) throw new Error("并行数必须为整数"); offlineDownloads.maxConcurrent = concurrency; } return { concurrency: offlineDownloads?.maxConcurrent, total: library.length, rows: library.slice(offset, offset + 40).map(r => ({ key: r.key, title: r.course?.title, date: date(r.course), state: r.state, bytes: r.bytes, total: r.total, missing: r.missing })) }; });
+  registry.register("set_theme", "设置应用主题。可先 list=true 查询可用主题。", { theme: str("主题标识", 100), list: bool }, [], async ({ theme, list }) => { if (list || !theme) return { themes: THEMES.map(t => ({ id: t.id, name: t.name })) }; if (!THEMES.some(t => t.id === theme)) throw new Error("主题不存在"); await native.call("setAppearanceTheme", { theme }); return { theme }; });
+  registry.register("interface_action", "操作刚读取过的页面控件：点击/填写/选择/滚动。不可操作登录密码或 API 密钥；控件ID每次使用后失效。", { id: str("app_interface返回的ID", 80), operation: choice(["click", "fill", "select", "scroll"]), value: str("输入内容或选项值"), amount: num("滚动像素，可负数", -10000, 10000) }, ["id", "operation"], args => ui.interact(args));
+  registry.register("layout", "读取、调整、保存或锁定功能区布局。rects使用0-1相对坐标，z为图层顺序，尺寸下限0.12；未列出的区域保留。", { command: choice(["read", "adjust", "save", "lock", "unlock", "auto", "rows", "columns"]), rects: { type: "array", maxItems: 7, items: { type: "object", properties: { id: choice(Object.keys(paneNames)), x: num("横向位置", -1, 1), y: num("纵向位置", 0, 1), w: num("宽度", 0.12, 1), h: num("高度", 0.12, 1), z: num("图层", 0, 100) }, required: ["id", "x", "y", "w", "h", "z"] } } }, ["command"], async ({ command, rects }) => {
+    needLesson(); if (!layoutControl) throw new Error("布局尚未就绪");
+    if (["adjust", "auto", "rows", "columns"].includes(command) && layoutControl.locked) throw new Error("布局已锁定，请先解锁");
+    if (command === "adjust") { if (!rects?.length || rects.some(r => !layoutControl.ids().includes(r.id)) || new Set(rects.map(r => r.id)).size !== rects.length) throw new Error("请指定当前已打开且不重复的功能区"); layoutControl.rects = layoutControl.rects.map(r => normalizePane(rects.find(v => v.id === r.id) || r)); layoutControl.temporary.set(layoutControl.key, layoutControl.rects.map(r => ({ ...r }))); layoutControl.apply(); renderSlides(); renderTranscript(); }
+    else if (command === "save") await layoutControl.saveCurrent();
+    else if (["lock", "unlock"].includes(command)) layoutControl.setLocked(command === "lock");
+    else if (["auto", "rows", "columns"].includes(command)) layoutControl.preset(command);
+    return { locked: layoutControl.locked, rects: layoutControl.rects.map(r => ({ ...r })) };
+  });
+  registry.register("set_ai_provider", "切换已配置的AI来源，或设置个人API模型。校内模式会显示内网与OCR局限说明；不能用此操作填写密钥。", { provider: choice(["auto", "campus", "personal"]), model: choice(["deepseek-flash", "deepseek-v4-pro"]) }, ["provider"], async ({ provider, model }, guard) => {
+    await refreshAIAvailability(); guard();
+    if (provider === "personal" && !aiConnection.status.personalReady || provider === "campus" && !aiConnection.status.campusReady) throw new Error("该来源尚未配置，请在AI设置中完成连接");
+    prefs.aiProvider = provider; if (model) prefs.agentModel = model; await save("prefs.json", prefs); guard();
+    campusNoticeShown = false; apiReady = aiConnection.available(); notifyCampusAI(); syncAIOptions(); getGlobalAssistant().updateServiceNote();
+    return { provider, ready: apiReady, description: aiConnection.description(), limitations: aiConnection.effective() === "campus" ? CAMPUS_LIMITS : "" };
+  });
+  globalAssistant = new GlobalAssistant({ registry, state, inspect: () => ui.snapshot(), owner: () => String(account?.id || "guest") + ":" + String(account?.tenantId || ""), read: saved, write: save,
+    ready: refreshAIAvailability,
+    provider: () => aiConnection.provider(), providerStatus: () => aiConnection.status, providerDescription: () => aiConnection.description(),
+    setProvider: async provider => { prefs.aiProvider = provider; campusNoticeShown = false; if (aiConnection.effective() === "campus") toast(CAMPUS_NOTICE); await save("prefs.json", prefs); await refreshAIAvailability(); syncAIOptions(); },
+    setCampusKey: async key => { await native.call("campusGateway", { key }); await refreshAIAvailability(); for (const id of ["question", "summary"]) if (panes[id] && apiReady) showAIContent(id); },
+    setCampusOCRKey: async key => { await native.call("campusOCRKey", { key }); await refreshAIAvailability(); },
+    recoverCampusOCRKey: async () => { const result = await native.call("authorizeCredentials", { purpose: "campusOCR" }); if (!result?.ready) throw new Error("校园OCR密钥尚未恢复"); await refreshAIAvailability(); },
+    recoverCampusKey: async () => { const result = await native.call("authorizeCredentials", { purpose: "campus" }); if (!result?.ready) throw new Error("校园网关密钥尚未恢复"); await refreshAIAvailability(); },
+    model: () => prefs.agentModel || prefs.model || "deepseek-flash", setModel: async model => { prefs.agentModel = model; await save("prefs.json", prefs); },
+    setKey: async text => { await native.call("secret", { text }); prefs.aiProvider = "personal"; await save("prefs.json", prefs); apiReady = true; aiConnection.status.personalReady = true; }, recoverKey: async () => { const result = await native.call("authorizeCredentials", { purpose: "api" }); if (!result?.ready) throw new Error("密钥尚未恢复"); apiReady = true; },
+    stream: async (messages, delta, tools, setCancel) => {
+      notifyCampusAI();
+      const operation = native.call("ai", { ...aiConnection.request(), messages, tools, model: prefs.agentModel || prefs.model || "deepseek-flash" });
+      setCancel(() => native.call("cancelAI", { id: operation.id }).catch(() => {}));
+      const off = native.on("ai", event => { if (event.id === operation.id) delta(event.delta); });
+      try { const result = await operation; if (result.usage) { const usage = (await saved("ai-usage.json")) || { prompt: 0, hit: 0, output: 0 }; usage.prompt += result.usage.prompt_tokens || 0; usage.hit += result.usage.prompt_cache_hit_tokens || 0; usage.output += result.usage.completion_tokens || 0; await save("ai-usage.json", usage); } return result; } finally { off(); }
+    },
+    canDock: () => page === "study" && !!$("#stage"),
+    dock: root => { if (!panes.agent) createPane("agent"); $("#agentBody").append(root); $("#noPanes")?.remove(); positionPanes(); },
+    detach: root => document.body.append(root),
+    undock: () => { if (!panes.agent) return; const root = panes.agent.querySelector("[data-global-agent]"); if (root) document.body.append(root); paneDisposers.get("agent")?.(); paneDisposers.delete("agent"); panes.agent.remove(); delete panes.agent; positionPanes(); },
+  });
+  return globalAssistant;
+}
+
 window.zhiyunFlush = async () => {
   clearTimeout(noteSaveTimer);
   clearTimeout(renderSummary.saveTimer);
   const writes = [saveNote()];
+  if (globalAssistant?.loadedOwner != null) writes.push(globalAssistant.persist());
   if (page === "study" && lesson) {
     writes.push(
       save("progress-" + courseKey(lesson) + ".json", {

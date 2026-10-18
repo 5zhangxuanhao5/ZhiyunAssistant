@@ -2,7 +2,7 @@
  * Importable without a DOM: exported geometry/selection functions are pure.
  * DOM controllers never fetch course content, persist account data or activate a window.
  */
-export const PANE_IDS = Object.freeze(['video', 'slides', 'transcript', 'notes', 'question', 'summary']);
+export const PANE_IDS = Object.freeze(['video', 'slides', 'transcript', 'notes', 'question', 'summary', 'agent']);
 export const RESIZE_EDGES = Object.freeze(['n', 's', 'w', 'e', 'nw', 'ne', 'sw', 'se']);
 export const RETURN_SCROLL_SPACE = 44;
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Number.isFinite(v) ? v : lo));
@@ -32,7 +32,7 @@ export function defaultPanes(ids, narrow = false, preset = 'auto') {
   if (ids.length === 2 && ids.includes('slides') && ids.includes('transcript')) return [
     { id: 'slides', x: 0, y: 0, w: 1, h: .62, z: 0 }, { id: 'transcript', x: 0, y: .62, w: 1, h: .38, z: 1 }
   ];
-  const dock = ids.filter(id => ['notes', 'question', 'summary'].includes(id)), study = ids.filter(id => !dock.includes(id));
+  const dock = ids.filter(id => ['notes', 'question', 'summary', 'agent'].includes(id)), study = ids.filter(id => !dock.includes(id));
   const width = dock.length && study.length ? .62 : 1, output = [];
   if (study.includes('video')) {
     const rest = study.filter(id => id !== 'video');

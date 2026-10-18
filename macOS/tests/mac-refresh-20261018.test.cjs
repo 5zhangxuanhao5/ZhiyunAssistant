@@ -3,7 +3,7 @@ const assert=require('node:assert/strict');
 const {runtime}=require('./runtime-helper.cjs');
 test('every study feature uses one matching icon including active buttons',async t=>{
  const r=runtime({extraTestingNames:['renderTools','showSettings','loadData']});const a=(await r.load('app.js')).testing;a.setup();t.after(()=>{a.cleanup();r.win.close()});await a.enter(r.current);
- const all=['slides','transcript','video','notes','question','summary','crop','duplicates','skip','smartSkip','follow','overview','time','page','download','layout'];
+ const all=['slides','transcript','video','notes','question','summary','agent','crop','duplicates','skip','smartSkip','follow','overview','time','page','download','layout'];
  a.put({prefs:{commonOrder:all}});a.renderTools();
  for(const id of all){const b=r.win.document.querySelector('#studyTools [data-feature="'+id+'"]');assert.ok(b,id);assert.equal(b.querySelectorAll('.ui-icon').length,1,id);assert.equal(b.querySelector('.ui-icon').dataset.uiIcon,id)}
  a.showSettings();assert.ok(r.win.document.querySelector('.modal-shell.learning-settings'));assert.equal(r.win.document.querySelectorAll('.common-row').length,all.length);

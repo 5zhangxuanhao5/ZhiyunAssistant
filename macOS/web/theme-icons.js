@@ -1,5 +1,6 @@
 // One semantic icon vocabulary, with geometry and finish selected by the theme.
 const paths = {
+ agent:'M4 4h16v13H9l-5 4Z M8 9h8m-8 4h5',
  crop:'M7 3v14h14M3 7h14v14',
  duplicates:'M8 3h13v13H8Z M3 8v13h13M12 7h5m-5 4h5',
  skip:'m4 5 8 7-8 7Z M16 5v14M21 5v14',

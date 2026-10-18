@@ -18,3 +18,10 @@ test('saved retired model choices migrate once to current documented identifiers
   r.data.set('prefs.json',JSON.stringify({model:old}));await a.loadData();assert.equal(a.state().prefs.model,current);assert.equal(JSON.parse(r.data.get('prefs.json')).model,current);
  }
 });
+
+test('an expired recovered session proceeds to official authentication without logging out',async t=>{
+ const r=runtime({extraTestingNames:['updateSessionRecovery','restoreSignedInSession']});const a=(await r.load('app.js')).testing;a.setup();t.after(()=>{a.cleanup();r.win.close()});
+ const original=r.win.native.call.bind(r.win.native);r.win.native.call=(action,params)=>action==='authorizeCredentials'?Promise.resolve({ready:true,authorizationRequired:false}):original(action,params);
+ a.api.account=async()=>{throw new Error('登录失效，请重新登录')};a.updateSessionRecovery(true);await a.restoreSignedInSession();
+ assert.equal(r.calls.filter(([action])=>action==='login').length,1);assert.equal(r.calls.filter(([action])=>action==='logout').length,0);
+});

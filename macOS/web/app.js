@@ -366,7 +366,8 @@ async function restoreSignedInSession() {
   } catch (error) {
     if (current()) {
       sessionRecoveryRequired = true;
-      toast(error.message);
+      if (sessionAuthenticationError(error)) await native.call("login");
+      else toast(error.message);
     }
   } finally {
     if (operation === sessionRecoveryOperation) {

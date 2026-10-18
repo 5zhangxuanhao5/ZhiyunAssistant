@@ -1,5 +1,12 @@
 // One semantic icon vocabulary, with geometry and finish selected by the theme.
 const paths = {
+ settings:'M9 3h6l.6 3 2.4 1.4 2.8-1 3 5.2-2.2 2v2.8l2.2 2-3 5.2-2.8-1L15.6 24H9l-.6-3-2.4-1.4-2.8 1-3-5.2 2.2-2v-2.8l-2.2-2 3-5.2 2.8 1L8.4 3Z M15.5 12a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0',
+ history:'M3 11a9 9 0 1 1 2.7 7.4M3 4v7h7M12 7v5l3 2',
+ send:'m3 4 19 8-19 8 3-8Zm3 8h16',
+ key:'M14 5a5 5 0 1 1-3 9L4 21H1v-3l7-7a5 5 0 0 1 6-6Z M16 8h.1',
+ expand:'M14 3h7v7M21 3l-8 8M10 21H3v-7m0 7 8-8',
+ stop:'M6 6h12v12H6Z',
+
  agent:'M4 4h16v13H9l-5 4Z M8 9h8m-8 4h5',
  crop:'M7 3v14h14M3 7h14v14',
  duplicates:'M8 3h13v13H8Z M3 8v13h13M12 7h5m-5 4h5',

@@ -13,3 +13,6 @@ cp "$test_dir/theme-picker-validated.png" "$project_dir/build/theme-picker-valid
 
 mkdir -p "$project_dir/build/theme-calendars"
 cp "$test_dir/theme-calendars/"*.png "$project_dir/build/theme-calendars/"
+
+mkdir -p "$project_dir/build/ui-review"
+cp -R "$test_dir/ui-review/" "$project_dir/build/ui-review/"

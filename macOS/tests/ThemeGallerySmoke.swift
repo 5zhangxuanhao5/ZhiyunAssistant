@@ -5,6 +5,20 @@ import CryptoKit
  static func main(){do{try run()}catch{fputs(error.localizedDescription+"\n",stderr);exit(1)}}
  static func evaluate(_ view:WKWebView,_ js:String)throws->Any?{try smokeEvaluate(view,js)}
  static func waitJS(_ view:WKWebView,_ js:String,seconds:Double=20)throws{do{try smokeWait({(try? evaluate(view,js)) as? Bool == true},seconds:seconds)}catch{let state=(try? evaluate(view,"JSON.stringify({title:document.querySelector('#pageTitle')?.textContent,errors:window.__smoke?.errors,status:document.querySelector('#selectedTheme')?.textContent,messages:window.__actualThemeMessages})")) as? String ?? "none";throw appError("Theme wait failed: "+js+" state: "+state)}}
+ static func capture(_ view:WKWebView,_ path:URL,rect:CGRect?=nil,width:CGFloat=600)throws{
+  var captured=false,png:Data?,failure:Error?;let options=WKSnapshotConfiguration();options.afterScreenUpdates=true
+  // Full snapshots avoid WebKit's partial-rect scroll-layer offset. Crop pixels afterwards.
+  options.snapshotWidth=NSNumber(value:Double(rect==nil ? width:view.bounds.width))
+  view.takeSnapshot(with:options){image,error in
+   if let image=image,let tiff=image.tiffRepresentation,let bitmap=NSBitmapImageRep(data:tiff){
+    if let rect=rect,let cg=bitmap.cgImage{
+     let scale=CGFloat(cg.width)/view.bounds.width
+     if let crop=cg.cropping(to:CGRect(x:rect.minX*scale,y:rect.minY*scale,width:rect.width*scale,height:rect.height*scale)){png=NSBitmapImageRep(cgImage:crop).representation(using:.png,properties:[:])}
+    }else{png=bitmap.representation(using:.png,properties:[:])}
+   }else{failure=error};captured=true
+  }
+  try smokeWait({captured});if let error=failure{throw error};guard let png=png else{throw appError("Review capture unavailable")};try png.write(to:path)
+ }
  static func run()throws{
   guard CommandLine.arguments.count==4 else{throw appError("Usage: theme-gallery <web-root> <isolated-test-folder> <screenshot-folder>")}
   let root=URL(fileURLWithPath:CommandLine.arguments[1]),temporary=URL(fileURLWithPath:CommandLine.arguments[2]),output=URL(fileURLWithPath:CommandLine.arguments[3])
@@ -28,6 +42,8 @@ import CryptoKit
   try server.start{app.origin=server.origin;view.load(URLRequest(url:URL(string:server.origin+"/fixture/index.html")!));ready=true}
   try smokeWait({ready});try waitJS(view,"document.querySelectorAll('.classroom-page .course-card').length===2 && !!window.__smoke")
   RunLoop.current.run(until:Date().addingTimeInterval(0.3))
+  let review=temporary.appendingPathComponent("ui-review")
+  for folder in ["agent","settings","study"]{try FileManager.default.createDirectory(at:review.appendingPathComponent(folder),withIntermediateDirectories:true)}
   var records=[[String:Any]](),hashes=Set<String>()
   let beforeRequests=(try evaluate(view,"window.__smoke.requests.length")) as? Int ?? -1
   for id in app.themeIdentifiers{
@@ -44,6 +60,25 @@ import CryptoKit
    try smokeWait({done});if let error=failure{throw error};guard let data=result else{throw appError("No screenshot: "+id)}
    let hash=SHA256.hash(data:data).map{String(format:"%02x",$0)}.joined();guard hashes.insert(hash).inserted else{throw appError("Duplicate theme screenshot: "+id)}
    try data.write(to:output.appendingPathComponent(id+".png"));records.append(["id":id,"sha256":hash,"bytes":data.count,"metrics":metrics]);print("Captured actual homepage: "+id)
+   app.event("toolbarAction","agent")
+   try waitJS(view,"!!document.querySelector('.global-agent:not([hidden]) .agent-empty')")
+   guard try evaluate(view,"document.querySelectorAll('.agent-suggestion').length===3 && !window.__smoke.aiCalls") as? Bool==true else{throw appError("Assistant examples must not execute or make model requests")}
+   let assistantRectText=try evaluate(view,"JSON.stringify((()=>{const r=document.querySelector('.global-agent').getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}})())") as! String
+   let assistantRect=try JSONSerialization.jsonObject(with:Data(assistantRectText.utf8)) as! [String:Double]
+   let rect=CGRect(x:assistantRect["x"]!,y:assistantRect["y"]!,width:assistantRect["width"]!,height:assistantRect["height"]!)
+   guard try evaluate(view,"(()=>{const log=document.querySelector('.agent-log'),last=document.querySelector('.agent-suggestions button:last-child');return last.getBoundingClientRect().bottom<=log.getBoundingClientRect().bottom})()") as? Bool==true else{throw appError("Assistant examples clipped behind composer: "+id)}
+   try capture(view,review.appendingPathComponent("agent/"+id+".png"),rect:rect,width:390)
+   _=try evaluate(view,"document.querySelector('.agent-head button[title=设置]').click();void 0")
+   try waitJS(view,"document.querySelector('.global-agent')?.dataset.view==='settings' && !!document.querySelector('.agent-settings-group')")
+   guard try evaluate(view,"(()=>{const log=document.querySelector('.agent-log'),root=document.querySelector('.global-agent');return log.scrollWidth<=log.clientWidth+1 && root.scrollTop===0 && root.querySelector('.agent-head').getBoundingClientRect().top>=root.getBoundingClientRect().top && [...root.querySelectorAll('input,select')].filter(n=>n.getClientRects().length>0).every(n=>{const r=n.getBoundingClientRect(),b=root.getBoundingClientRect();return r.left>=b.left&&r.right<=b.right}) && ![...root.querySelectorAll('button')].some(n=>n.textContent.includes('恢复')&&n.textContent.includes('密钥'))})()") as? Bool==true else{let detail=try evaluate(view,"JSON.stringify((()=>{const r=document.querySelector('.global-agent'),l=r.querySelector('.agent-log'),h=r.querySelector('.agent-head');return{scroll:r.scrollTop,rootTop:r.getBoundingClientRect().top,headTop:h.getBoundingClientRect().top,logWidth:l.clientWidth,logScrollWidth:l.scrollWidth,inputs:[...r.querySelectorAll('input,select')].map(n=>({hidden:!n.getClientRects().length,x:n.getBoundingClientRect().x,right:n.getBoundingClientRect().right}))}})())") as? String ?? "";throw appError("Settings control overflow or interactive credential recovery entry: "+id+" "+detail)}
+   if id=="collage"{
+    try capture(view,review.appendingPathComponent("settings-full.png"),width:1200)
+    let geometry=try evaluate(view,"JSON.stringify((()=>{const r=document.querySelector('.global-agent'),h=r.querySelector('.agent-head'),l=r.querySelector('.agent-log');const box=n=>{const b=n.getBoundingClientRect();return{x:b.x,y:b.y,width:b.width,height:b.height,display:getComputedStyle(n).display,position:getComputedStyle(n).position}};return{root:box(r),head:box(h),log:box(l),rootScroll:r.scrollTop,bodyScroll:document.scrollingElement.scrollTop,viewport:{width:innerWidth,height:innerHeight}}})())") as! String
+    try Data(geometry.utf8).write(to:review.appendingPathComponent("geometry.json"))
+   }
+   try capture(view,review.appendingPathComponent("settings/"+id+".png"),rect:rect,width:390)
+   _=try evaluate(view,"document.querySelector('.agent-settings-footer button').click();document.querySelector('.agent-head button[title=收起]').click();void 0")
+   try waitJS(view,"document.querySelector('.global-agent').hidden")
    window.setContentSize(NSSize(width:640,height:820));view.setFrameSize(NSSize(width:640,height:820));RunLoop.current.run(until:Date().addingTimeInterval(0.05))
    let compact=try evaluate(view,"document.documentElement.scrollWidth<=innerWidth+1 && [...document.querySelectorAll('.classroom-page .course-card h3')].every(n=>n.getBoundingClientRect().right<=innerWidth+1)") as? Bool
    guard compact==true else{throw appError("Compact theme overflow: "+id)}
@@ -57,6 +92,7 @@ import CryptoKit
   for id in app.themeIdentifiers{
    app.applyTheme(id);try waitJS(view,"document.documentElement.dataset.theme==='"+id+"'")
    guard try evaluate(view,"window.__themeLiveNodes.every(n=>n.isConnected)&&window.__themeEditor===document.querySelector('.notes-editor')") as? Bool==true else{throw appError("Theme replaced live study nodes: "+id)}
+   try capture(view,review.appendingPathComponent("study/"+id+".png"),width:1200)
   }
   // The native toolbar dispatches a route event to the existing main WebView.
   app.event("toolbarAction","theme");let picker=view
@@ -115,7 +151,7 @@ import CryptoKit
    _=try evaluate(view,"[...document.querySelectorAll('#modalToolbar button')].find(n=>n.textContent==='按课程').click();void 0")
   }
   let errors=try evaluate(view,"window.__smoke.errors") as? [String] ?? [];guard errors.isEmpty else{throw appError("Page errors: "+errors.joined(separator:"; "))}
-  let manifest:[String:Any]=["status":"passed","themes":records,"themeCount":records.count,"compactWidth":640,"captureViewport":[1200,820],"source":"Actual production index.html and modules rendered by macOS WKWebView with synthetic course data","pickerChoicesVerified":20,"preservedStudyNodeChecks":20,"themePageInMainWindow":true,"twoClickSelectionReturnsToStudy":true,"datePickerOnlyInDateMode":true,"dateGroupingThemeChecks":20,"batchDateVisibilityThemeChecks":20,"unexpectedCourseRequests":afterRequests-beforeRequests,"foregroundWindows":false]
+  let manifest:[String:Any]=["status":"passed","themes":records,"themeCount":records.count,"compactWidth":640,"captureViewport":[1200,820],"source":"Actual production index.html and modules rendered by macOS WKWebView with synthetic course data","pickerChoicesVerified":20,"preservedStudyNodeChecks":20,"themePageInMainWindow":true,"twoClickSelectionReturnsToStudy":true,"datePickerOnlyInDateMode":true,"dateGroupingThemeChecks":20,"batchDateVisibilityThemeChecks":20,"unexpectedCourseRequests":afterRequests-beforeRequests,"foregroundWindows":false,"assistantThemesReviewed":20,"assistantSettingsThemesReviewed":20,"studyThemesReviewed":20]
   try JSONSerialization.data(withJSONObject:manifest,options:[.prettyPrinted,.sortedKeys]).write(to:temporary.appendingPathComponent("theme-validation.json"))
   window.contentView=nil;window.close();server.listener.cancel();print("Twenty themes, real screenshots, picker selection and live study preservation passed")
  }

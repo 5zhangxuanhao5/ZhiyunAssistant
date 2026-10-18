@@ -13,9 +13,10 @@ export class GlobalAssistant {
     const root = this.root = create('section', 'global-agent'); root.dataset.globalAgent = ''; root.setAttribute('aria-label', '应用助手');
     root.setAttribute('role', 'region'); root.hidden = true;
     const head = create('header', 'agent-head'); this.dragHandle = head;
-    const title = create('strong', '', '应用助手'); title.prepend(makeIcon('question'));
+    const title = create('strong', '', '应用助手'); title.prepend(makeIcon('agent'));
     this.status = create('span', 'agent-status', '随时为你操作');
-    head.append(title, this.status, this.action('设置', () => this.settings()), this.action('收起', () => this.hide(), 'minimise'));
+    const identity = create('div', 'agent-identity'); identity.append(title, this.status);
+    head.append(identity, this.action('设置', () => this.settings()), this.action('收起', () => this.hide(), 'minimise'));
     const tools = create('div', 'agent-tools');
     this.dockButton = this.action('收为功能区', () => this.setMode(this.mode === 'pane' ? 'floating' : 'pane'));
     tools.append(this.action('新对话', () => this.newConversation()), this.action('历史', () => this.showHistory()), this.dockButton);
@@ -27,12 +28,14 @@ export class GlobalAssistant {
     this.sendButton = this.action('发送', () => this.submit(), 'primary'); this.stopButton = this.action('停止', () => this.stop()); this.stopButton.hidden = true;
     this.composer.append(this.input, this.sendButton, this.stopButton);
     const hint = create('div', 'agent-footnote', 'Enter 发送 · Shift＋Enter 换行');
-    this.serviceNote = create('details', 'agent-service-note'); this.serviceNote.append(create('summary', '', '校内 AI · 使用局限'), create('p', '', CAMPUS_NOTICE + '。' + CAMPUS_LIMITS)); this.serviceNote.hidden = true;
+    this.serviceNote = create('details', 'agent-service-note'); this.serviceNote.append(create('summary', '', '校内 AI · 仅限内网，图表识别可能遗漏'), create('p', '', CAMPUS_NOTICE + '。' + CAMPUS_LIMITS)); this.serviceNote.hidden = true;
     root.append(head, tools, this.serviceNote, this.log, this.composer, hint);
     this.input.addEventListener('input', () => { this.input.style.height = '38px'; this.input.style.height = Math.min(130, this.input.scrollHeight) + 'px'; });
     this.input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); this.submit(); } });
     root.addEventListener('keydown', e => e.stopPropagation());
-    this.bubble = this.action('应用助手', () => this.show(), 'agent-bubble'); this.bubble.dataset.globalAgent = ''; this.bubble.hidden = true; this.bubble.prepend(makeIcon('question'));
+    // Only the log scrolls; WebKit focus/anchoring must not scroll the outer window.
+    root.addEventListener('scroll', () => { if (root.scrollTop || root.scrollLeft) { root.scrollTop = 0; root.scrollLeft = 0; } }, { passive:true });
+    this.bubble = this.action('应用助手', () => this.show(), 'agent-bubble'); this.bubble.dataset.globalAgent = ''; this.bubble.hidden = true;
     document.body.append(root, this.bubble);
     head.addEventListener('pointerdown', e => {
       if (e.button !== 0 || this.mode === 'pane' || e.target.closest('button')) return;
@@ -46,7 +49,12 @@ export class GlobalAssistant {
     window.addEventListener('resize', () => this.clamp());
     this.empty();
   }
-  action(label, fn, cls = '') { const n = create('button', cls, label); n.type = 'button'; n.title = label; n.addEventListener('click', e => { e.stopPropagation(); Promise.resolve().then(fn).catch(error => this.notice(error.message)); }); return n; }
+  labelAction(node, label) {
+    const icons = { '设置':'settings', '收起':'minus', '新对话':'plus', '历史':'history', '收为功能区':'layout', '浮动显示':'expand', '发送':'send', '停止':'stop', '应用助手':'agent', '返回对话':'back', '保存个人密钥':'key', '更换个人密钥':'key', '保存到本机钥匙串':'check', '保存 OCR 密钥':'check' };
+    node.replaceChildren(); if (icons[label]) node.append(makeIcon(icons[label]));
+    node.append(create('span', 'agent-action-label', label)); node.title = label; node.setAttribute('aria-label', label);
+  }
+  action(label, fn, cls = '') { const n = create('button', cls); n.type = 'button'; this.labelAction(n, label); n.addEventListener('click', e => { e.stopPropagation(); Promise.resolve().then(fn).catch(error => this.notice(error.message)); }); return n; }
   async ensureOwner() {
     const owner = this.options.owner(); if (this.loadedOwner === owner) return;
     this.reset(); this.loadedOwner = owner; const generation = this.generation;
@@ -72,16 +80,16 @@ export class GlobalAssistant {
     this.mount(); if (mode === 'pane' && !this.options.canDock()) { this.notice('进入学习后可以收为功能区'); return; }
     this.root.hidden = false; this.bubble.hidden = true; this.preferredMode = mode; this.mode = mode; this.root.dataset.mode = mode;
     if (mode === 'pane') this.options.dock(this.root); else { this.options.undock(); this.options.detach(this.root); this.clamp(); }
-    this.dockButton.textContent = mode === 'pane' ? '浮动显示' : '收为功能区';
+    this.labelAction(this.dockButton, mode === 'pane' ? '浮动显示' : '收为功能区');
     await this.persistDisplay();
   }
   routeChanged() {
     if (!this.root || this.root.hidden) return;
-    if (this.preferredMode === 'pane' && this.options.canDock()) { this.mode = 'pane'; this.root.dataset.mode = 'pane'; this.options.dock(this.root); this.dockButton.textContent = '浮动显示'; }
+    if (this.preferredMode === 'pane' && this.options.canDock()) { this.mode = 'pane'; this.root.dataset.mode = 'pane'; this.options.dock(this.root); this.labelAction(this.dockButton, '浮动显示'); }
   }
   leavePane() {
     if (!this.root || this.mode !== 'pane') return;
-    document.body.append(this.root); this.mode = 'floating'; this.root.dataset.mode = 'floating'; this.dockButton.textContent = '收为功能区'; this.clamp();
+    document.body.append(this.root); this.mode = 'floating'; this.root.dataset.mode = 'floating'; this.labelAction(this.dockButton, '收为功能区'); this.clamp();
   }
   clamp() {
     if (!this.root || this.mode === 'pane') return;
@@ -95,9 +103,18 @@ export class GlobalAssistant {
     clearTimeout(this.geometryTimer); this.geometryTimer = setTimeout(() => this.persistDisplay().catch(() => {}), 250);
   }
   persistDisplay() { return this.options.write('agent-display.json', { mode: this.preferredMode || 'floating', geometry: this.savedGeometry }); }
-  empty() { this.log.replaceChildren(create('div', 'agent-empty', '把事情交给我')); this.log.append(create('p', 'agent-empty-detail', '例如：打开最近一节课，显示视频和笔记；把这一段整理成笔记；下载今天的课件。')); }
-  renderHistory() { if (!this.history.length) return this.empty(); this.log.replaceChildren(); for (const turn of this.history) this.addTurn(turn.role, turn.content); this.scroll(); }
-  addTurn(role, text = '') { if (this.log.querySelector('.agent-empty')) this.log.replaceChildren(); const n = create('div', 'agent-turn ' + role); n.append(create('span', 'agent-speaker', role === 'user' ? '你' : '应用助手'), create('div', 'agent-message', text)); this.log.append(n); const message = n.querySelector('.agent-message'); if (role === 'assistant') this.format(message, text); return message; }
+  empty() {
+    this.root.dataset.view = 'chat';
+    const welcome = create('div', 'agent-welcome'), mark = create('div', 'agent-welcome-mark'); mark.append(makeIcon('agent'));
+    welcome.append(mark, create('div', 'agent-empty', '从一个想法开始'), create('p', 'agent-empty-detail', '找课程、整理笔记，或处理学习资料。直接告诉我就好。'));
+    const prompts = create('div', 'agent-suggestions');
+    for (const [label, text, icon] of [['继续最近课程', '打开最近一节已结束的课程。', 'book'], ['整理课堂笔记', '把当前课程这一页的重点整理到课堂笔记。', 'notes'], ['下载本节课件', '下载当前这节课的课件，保留在本机。', 'download']]) {
+      const action = this.action(label, () => { this.input.value = text; this.input.dispatchEvent(new this.input.ownerDocument.defaultView.Event('input')); this.input.focus(); }, 'agent-suggestion'); action.prepend(makeIcon(icon)); prompts.append(action);
+    }
+    welcome.append(prompts); this.log.replaceChildren(welcome);
+  }
+  renderHistory() { this.root.dataset.view = 'chat'; if (!this.history.length) return this.empty(); this.log.replaceChildren(); for (const turn of this.history) this.addTurn(turn.role, turn.content); this.scroll(); }
+  addTurn(role, text = '') { if (this.log.querySelector('.agent-empty')) this.log.replaceChildren(); this.root.dataset.view = 'chat'; const n = create('div', 'agent-turn ' + role); n.append(create('span', 'agent-speaker', role === 'user' ? '你' : '应用助手'), create('div', 'agent-message', text)); this.log.append(n); const message = n.querySelector('.agent-message'); if (role === 'assistant') this.format(message, text); return message; }
   format(node, text) {
     node.replaceChildren();
     // Text-only Markdown: no model-produced HTML, links, images or event handlers.
@@ -138,7 +155,7 @@ export class GlobalAssistant {
   busy(value) { this.sendButton.hidden = value; this.stopButton.hidden = !value; this.input.readOnly = value; }
   updateServiceNote() {
     const campus = this.options.providerDescription().includes('校内'); this.serviceNote.hidden = !campus;
-    if (campus && !this.showedCampusLimits) { this.serviceNote.open = true; this.showedCampusLimits = true; }
+    if (campus && !this.showedCampusLimits) { this.serviceNote.open = false; this.showedCampusLimits = true; }
   }
   stop() { this.runner.stop(); this.generation++; this.busy(false); this.status.textContent = '已停止'; this.notice('已停止后续操作；已完成的操作会保留。'); this.history.push({ role: 'assistant', content: '用户停止了任务，已完成的操作保留。' }); this.persist().catch(() => {}); }
   async persist() {
@@ -150,31 +167,44 @@ export class GlobalAssistant {
   async newConversation() { if (this.runner.running) this.stop(); await this.persist(); this.currentId = 'agent-' + Date.now(); this.history = []; this.reply = null; this.empty(); this.status.textContent = '随时为你操作'; await this.persist(); }
   showHistory() {
     if (this.runner.running) { this.notice('请先停止当前任务'); return; }
-    this.log.replaceChildren(create('h3', '', '历史对话'));
+    this.root.dataset.view = 'history'; this.log.replaceChildren(create('h3', '', '历史对话'));
     for (const c of [...this.messages].reverse()) this.log.append(this.action(c.turns.find(t => t.role === 'user')?.content.slice(0, 45) || '新对话', async () => { await this.persist(); this.currentId = c.id; this.history = c.turns.slice(); this.renderHistory(); }));
     this.log.append(this.action('返回对话', () => this.renderHistory()));
   }
   async settings() {
     if (this.runner.running) { this.notice('请先停止当前任务再修改设置'); return; }
-    const generation = this.generation, ready = await this.options.ready(); if (generation !== this.generation) return; const personalReady = !!this.options.providerStatus()?.personalReady;
-    this.log.replaceChildren(create('h3', '', 'AI设置'), create('p', 'agent-notice', '与课程问答、本页速览共用 AI 来源。只有你发起任务时，指令、所需页面状态与课程资料才会发送到所选服务。密钥保存在 macOS 钥匙串。'));
-    const source = create('select'); source.setAttribute('aria-label', 'AI服务来源');
+    const generation = this.generation; await this.options.ready(); if (generation !== this.generation) return;
+    const status = this.options.providerStatus() || {}, personalReady = !!status.personalReady;
+    this.root.dataset.view = 'settings';
+    const intro = create('div', 'agent-settings-intro'); intro.append(create('h3', '', 'AI 设置'), create('p', '', '应用助手、课程问答与本页速览共用。'));
+    this.log.replaceChildren(intro);
+    const field = (name, control, help = '') => {
+      const item = create('label', 'agent-field'); item.append(create('span', 'agent-field-label', name), control);
+      if (help) item.append(create('span', 'agent-field-help', help)); return item;
+    };
+    const section = title => { const n = create('section', 'agent-settings-group'); n.append(create('h4', '', title)); return n; };
+    const connection = section('连接与模型'), source = create('select'); source.setAttribute('aria-label', 'AI服务来源');
     for (const [value, text] of [['auto', '自动 · 优先个人 API'], ['campus', '浙大校内网关'], ['personal', '个人 DeepSeek API']]) { const option = create('option', '', text); option.value = value; source.append(option); }
     source.value = this.options.provider();
-    const sourceHint = create('p', 'agent-notice', this.options.providerDescription() + '。' + (this.options.providerDescription().includes('校内') ? CAMPUS_LIMITS : ''));
-    source.onchange = () => this.options.setProvider(source.value).then(() => { this.updateServiceNote(); sourceHint.textContent = this.options.providerDescription() + (this.options.providerDescription().includes('校内') ? '。' + CAMPUS_LIMITS : ''); }).catch(error => this.notice(error.message));
-    this.log.append(source, sourceHint);
+    const sourceHint = create('p', 'agent-provider-hint');
+    const describe = () => { const description = this.options.providerDescription(); sourceHint.textContent = description + (description.includes('校内') ? '。课件先经 OCR 转为文字，图示关系可能遗漏。' : ''); }; describe();
+    source.onchange = () => this.options.setProvider(source.value).then(() => { this.updateServiceNote(); describe(); modelField.hidden = source.value === 'campus' || (source.value === 'auto' && !personalReady); }).catch(error => this.notice(error.message));
     const model = create('select'); model.setAttribute('aria-label', '助手模型');
     for (const [value, text] of [['deepseek-flash', 'DeepSeek Flash'], ['deepseek-v4-pro', 'DeepSeek Pro']]) { const option = create('option', '', text); option.value = value; model.append(option); }
-    model.value = this.options.model(); model.onchange = () => this.options.setModel(model.value); this.log.append(create('p', 'agent-notice', '个人 API 模型（校内网关使用固定模型）'), model);
-    const password = create('input'); password.type = 'password'; password.placeholder = personalReady ? '新 API 密钥（不修改可留空）' : 'DeepSeek API 密钥'; password.autocomplete = 'off';
-    this.log.append(create('h4', '', '个人 DeepSeek API'), password, this.action(personalReady ? '更换个人密钥' : '保存个人密钥', async () => { const key = password.value.trim(); if (!/^sk-[A-Za-z0-9_-]{16,200}$/.test(key)) throw new Error('请输入有效的 API 密钥'); await this.options.setKey(key); password.value = ''; this.renderHistory(); this.notice('已改用个人 API'); }));
-    const advanced = create('details', 'agent-gateway-config'), heading = create('summary', '', '本机校园网关配置');
-    const campus = create('input'); campus.type = 'password'; campus.autocomplete = 'off'; campus.placeholder = '校园网关密钥'; campus.setAttribute('aria-label', '校园网关密钥');
-    advanced.append(heading, create('p', 'agent-notice', '仅在浙大内网环境下可用。这里的密钥只预置在本机，不包含在公开安装包和源码中。'), campus, this.action('保存到本机钥匙串', async () => { const key = campus.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('校园网关密钥格式无效'); await this.options.setCampusKey(key); campus.value = ''; await this.options.setProvider('auto'); this.renderHistory(); this.notice('校园网关已在本机预置。仅在浙大内网环境下可用。'); }));
-    const ocr = create('input'); ocr.type = 'password'; ocr.autocomplete = 'off'; ocr.placeholder = '校园 OCR 密钥'; ocr.setAttribute('aria-label', '校园 OCR 密钥');
-    advanced.append(create('p', 'agent-notice', '校园 OCR 用于识别课件的文字、公式与版面；不可用时尝试本机文字识别。'), ocr, this.action('保存 OCR 密钥', async () => { const key = ocr.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('OCR 密钥格式无效'); await this.options.setCampusOCRKey(key); ocr.value = ''; this.renderHistory(); this.notice('校园 OCR 已在本机预置'); }));
-    this.log.append(advanced, this.action('返回对话', () => this.renderHistory()));
+    model.value = this.options.model(); model.onchange = () => this.options.setModel(model.value);
+    const modelField = field('个人 API 模型', model, '校园网关使用学校指定的固定模型。'); modelField.hidden = source.value === 'campus' || (source.value === 'auto' && !personalReady);
+    connection.append(field('服务来源', source), sourceHint, modelField); this.log.append(connection);
+    const credentials = section('个人 DeepSeek API'), badge = create('span', 'agent-config-badge', personalReady ? '已配置' : '未配置'); credentials.querySelector('h4').append(badge);
+    const password = create('input'); password.type = 'password'; password.placeholder = personalReady ? '输入新密钥以更换' : 'sk-…'; password.autocomplete = 'off'; password.setAttribute('aria-label', 'DeepSeek API 密钥');
+    credentials.append(field('API 密钥', password, '密钥仅保存在本机，输入后即可使用。'), this.action(personalReady ? '更换个人密钥' : '保存个人密钥', async () => { const key = password.value.trim(); if (!/^sk-[A-Za-z0-9_-]{16,200}$/.test(key)) throw new Error('请输入有效的 API 密钥'); await this.options.setKey(key); password.value = ''; this.renderHistory(); this.notice('已改用个人 API'); }, 'primary'));
+    this.log.append(credentials);
+    const advanced = create('details', 'agent-gateway-config'), heading = create('summary', '', '本机校园服务');
+    const campus = create('input'); campus.type = 'password'; campus.autocomplete = 'off'; campus.placeholder = status.campusReady ? '已配置 · 输入新密钥以更换' : '校园网关密钥'; campus.setAttribute('aria-label', '校园网关密钥');
+    advanced.append(heading, create('p', 'agent-notice', '仅在浙大内网环境下可用。密钥仅存于本机，不随安装包分发。'), field('模型网关密钥', campus), this.action('保存到本机钥匙串', async () => { const key = campus.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('校园网关密钥格式无效'); await this.options.setCampusKey(key); campus.value = ''; await this.options.setProvider('auto'); this.renderHistory(); this.notice('校园网关已在本机预置。仅在浙大内网环境下可用。'); }));
+    const ocr = create('input'); ocr.type = 'password'; ocr.autocomplete = 'off'; ocr.placeholder = status.campusOCRReady ? '已配置 · 输入新密钥以更换' : '校园 OCR 密钥'; ocr.setAttribute('aria-label', '校园 OCR 密钥');
+    advanced.append(field('课件 OCR 密钥', ocr, '识别文字、公式与版面；图表关系、模糊内容可能识别不完整。'), this.action('保存 OCR 密钥', async () => { const key = ocr.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('OCR 密钥格式无效'); await this.options.setCampusOCRKey(key); ocr.value = ''; this.renderHistory(); this.notice('校园 OCR 已在本机预置'); }));
+    const footer = create('div', 'agent-settings-footer'); footer.append(this.action('返回对话', () => this.renderHistory()));
+    this.log.append(advanced, create('p', 'agent-privacy-note', '只在你发起任务时，向所选服务发送完成任务所需的资料。'), footer); this.log.scrollTop = 0; this.root.scrollTop = 0;
   }
   reset() {
     this.runner.stop(); this.generation++; clearTimeout(this.geometryTimer); this.history = []; this.messages = []; this.currentId = 'agent-' + Date.now(); this.loadedOwner = null; this.savedGeometry = null; this.preferredMode = 'floating';

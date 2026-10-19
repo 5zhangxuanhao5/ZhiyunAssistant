@@ -5,11 +5,11 @@ const wait=(ms=10)=>new Promise(resolve=>setTimeout(resolve,ms));
 async function start(t,names=[]){const r=runtime({extraTestingNames:names});const app=(await r.load('app.js')).testing;app.setup();t.after(async()=>{await wait(40);app.getGlobalAssistant?.()?.reset();app.cleanup();r.win.close()});return{r,app,doc:r.win.document}}
 const lessonAt=(r,offsetDays,id)=>{const now=Math.floor(Date.now()/1000)+offsetDays*86400;return{...r.current,subId:id,courseId:'c-'+id,title:'课次 '+id,start:now-600,end:now+3000}};
 
-test('近两周 lists the past two weeks and today, never tomorrow',async t=>{
+test('近两周 lists only the days before today; today and tomorrow are left to 今日课表',async t=>{
  const{r,app,doc}=await start(t);app.put({courses:[lessonAt(r,-3,'past'),lessonAt(r,0,'today'),lessonAt(r,1,'tomorrow')]});
  await app.go('recent');const titles=[...doc.querySelectorAll('.course-card h3')].map(n=>n.textContent);
- assert.ok(titles.includes('课次 past')&&titles.includes('课次 today'));assert.ok(!titles.includes('课次 tomorrow'));
- assert.equal(doc.querySelector('.classroom-intro .intro-count').textContent,'2');
+ assert.deepEqual(titles.join(),'课次 past');
+ assert.equal(doc.querySelector('.classroom-intro .intro-count').textContent,'1');
  await app.go('today');assert.deepEqual([...doc.querySelectorAll('.course-card h3')].map(n=>n.textContent).join(),'课次 today');
  assert.match(doc.querySelector('.section-heading').dataset.day,/^今天 · 周/);
 });
@@ -46,7 +46,7 @@ test('clearing assistant records in the background keeps the running task and it
  let release;r.win.native.call=((call)=>(action,params)=>action==='aiStatus'?Promise.resolve({personalReady:true,campusReady:false}):call(action,params))(r.win.native.call.bind(r.win.native));
  assistant.runner.stream=async()=>{await new Promise(resolve=>release=resolve);return{answer:'已清空',calls:[]}};
  assistant.input.value='清空助手聊天记录';const running=assistant.submit();await wait(20);
- r.win.__confirm=()=>true;const result=await actions.execute('assistant_history',{command:'clear'});assert.equal(result.cleared,true);
+ let asked=0;r.win.__confirm=()=>{asked++;return true};await assert.rejects(actions.execute('assistant_history',{command:'clear'}),/confirm:true/);const result=await actions.execute('assistant_history',{command:'clear',confirm:true});assert.equal(result.cleared,true);assert.equal(asked,0,'an explicit request needs no dialog');
  assert.equal(assistant.runner.running,true);assert.ok(!assistant.log.textContent.includes('旧回答'));assert.ok(assistant.log.textContent.includes('清空助手聊天记录'));
  release();await running;const saved=JSON.parse(r.data.get('chats-agent.json')).conversations;assert.equal(saved.length,1);assert.deepEqual(saved[0].turns.map(t=>t.content).join('|'),'清空助手聊天记录|已清空');
  assert.equal(doc.querySelector('#modal').hidden,true);
@@ -55,11 +55,29 @@ test('background operations read notes and clear caches without navigating',asyn
  const{r,app}=await start(t,['getGlobalAssistant']);const actions=app.getGlobalAssistant().options.registry,key=app.courseKey(r.current);
  r.data.set('notes-index.json',JSON.stringify([{key,course:r.current,count:1,updatedAt:5}]));r.data.set('notes-'+key+'.json',JSON.stringify([{id:'n',name:'第一篇',html:'<div>要点</div>'}]));
  await app.go('recent');const index=await actions.execute('notes_index',{});assert.equal(index[0].key,key);const notes=await actions.execute('notes_read',{key});assert.equal(notes[0].text,'要点');assert.equal(app.state().page,'recent');
- r.win.__confirm=()=>true;await actions.execute('cache_clear',{category:'question'});assert.ok(r.calls.some(([a,p])=>a==='cache'&&p.clear&&p.category==='question'));assert.equal(app.state().page,'recent');
- r.win.__confirm=()=>false;await assert.rejects(actions.execute('cache_clear',{category:'all'}),/取消/);
+ let asked=0;r.win.__confirm=()=>{asked++;return true};await actions.execute('cache_clear',{category:'question',confirm:true});assert.ok(r.calls.some(([a,p])=>a==='cache'&&p.clear&&p.category==='question'));assert.equal(app.state().page,'recent');assert.equal(asked,0);
+ const before=r.calls.filter(([a,p])=>a==='cache'&&p.clear).length;await assert.rejects(actions.execute('cache_clear',{category:'all'}),/不可撤销/);assert.equal(r.calls.filter(([a,p])=>a==='cache'&&p.clear).length,before,'nothing is cleared without the user\'s explicit request');
 });
 test('privacy opens as a compact sheet with the four data topics',async t=>{
  const{app,doc}=await start(t,['privacy']);app.privacy();
  assert.equal(doc.querySelector('#modalTitle').textContent,'隐私与数据');assert.ok(doc.querySelector('.modal-shell').classList.contains('compact'));
  assert.equal(doc.querySelectorAll('.privacy-card').length,4);assert.match(doc.querySelector('.privacy-page').textContent,/不保存密码.*钥匙串.*API 费用.*断网不会自动退出登录/s);
+});
+test('a course page lists its lessons from the first to the last, upcoming ones at the end',async t=>{
+ const{r,app,doc}=await start(t,['openGroup']);const rows=[lessonAt(r,7,'next'),lessonAt(r,-14,'first'),lessonAt(r,-7,'second')].map(c=>({...c,courseId:'same'}));
+ app.api.chapters=async()=>rows;await app.openGroup(rows[0],rows);await wait(20);
+ assert.equal(app.state().page,'chapters');assert.deepEqual([...doc.querySelectorAll('.course-card h3')].map(n=>n.textContent).join(),'课次 first,课次 second,课次 next');
+});
+test('course tiles have no artwork and lesson rows always show their favourite and later marks',async t=>{
+ const{r,app,doc}=await start(t);app.put({courses:[lessonAt(r,-1,'one')]});await app.go('recent');
+ const row=doc.querySelector('.lesson-row');const marks=[...row.querySelectorAll('.actions > button.icon')];assert.equal(marks.length,2);
+ const css=require('node:fs').readFileSync(require('node:path').join(__dirname,'../web/app.css'),'utf8');assert.ok(!/lesson-row[^{]*\.icon[^{]*\{[^}]*opacity:\s*0/.test(css),'inactive marks are never hidden');
+ assert.ok(!/course-art/.test(css));assert.equal(doc.querySelector('.course-art'),null);
+});
+test('lessons that have not started cannot be downloaded from the batch list, the queue or the assistant',async t=>{
+ const{r,app,doc}=await start(t,['getGlobalAssistant','batchDownload','states']);const past=lessonAt(r,-1,'done'),future=lessonAt(r,2,'future');app.put({courses:[past,future]});
+ for(const c of [past,future])app.states[c.subId]='allowed';
+ app.batchDownload([past,future]);await wait(20);const labels=[...doc.querySelectorAll('#modalBody label')].map(n=>n.textContent).join('|');
+ assert.ok(labels.includes('课次 done'));assert.ok(!labels.includes('课次 future'));app.closeModal();
+ const actions=app.getGlobalAssistant().options.registry;await assert.rejects(actions.execute('download_lesson',{key:app.courseKey(future),slides:true,transcript:true,video:false}),/尚未开始/);
 });

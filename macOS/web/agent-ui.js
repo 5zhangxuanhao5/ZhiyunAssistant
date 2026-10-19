@@ -15,7 +15,7 @@ const STEP_LABELS = {
   app_state: '查看当前状态', app_actions: '查找可用操作', app_interface: '读取界面',
   navigate: '打开页面', back: '返回上一级', refresh_courses: '刷新课表', list_lessons: '查找课次', search_courses: '搜索课程广场',
   course_lessons: '读取课程的课次', list_courses: '汇总课程', read_material: '读取课程资料', search_material: '查找课程内容', open_lesson: '进入课程', read_lesson: '读取课堂转写',
-  read_slides: '识别课件', seek: '跳转时间', slide_page: '切换课件页', follow_current: '回到最新进度', set_pane: '调整功能区',
+  read_slides: '识别课件', ui: '操作界面', notes_edit: '编辑笔记', seek: '跳转时间', slide_page: '切换课件页', follow_current: '回到最新进度', set_pane: '调整功能区',
   set_study_option: '修改学习选项', show_learning_tool: '打开学习工具', video_control: '控制视频', set_collection: '更新收藏',
   notes_list: '读取笔记', note_create: '新建笔记', note_write: '写入笔记', note_rename: '重命名笔记', note_insert_slide: '插入课件到笔记',
   note_export: '导出笔记', download_lesson: '下载课程', download_control: '管理下载', download_queue: '查看下载队列', set_theme: '切换主题',
@@ -81,7 +81,7 @@ export class GlobalAssistant {
   }
   fitInput() { this.input.style.height = 'auto'; this.input.style.height = Math.min(140, Math.max(22, this.input.scrollHeight)) + 'px'; }
   labelAction(node, label) {
-    const icons = { '清空记录': 'trash', '删除这段对话': 'close', '设置': 'settings', '收起': 'minus', '新对话': 'plus', '历史': 'history', '收为功能区': 'layout', '浮动显示': 'expand', '发送': 'send', '停止': 'stop', '应用助手': 'agent', '返回对话': 'back', '完成': 'check', '保存个人密钥': 'key', '更换个人密钥': 'key', '保存到本机钥匙串': 'check', '保存 OCR 密钥': 'check' };
+    const icons = { '清空记录': 'trash', '删除这段对话': 'close', '设置': 'settings', '收起': 'minus', '新对话': 'plus', '历史': 'history', '收为功能区': 'layout', '浮动显示': 'expand', '发送': 'send', '停止': 'stop', '应用助手': 'agent', '返回对话': 'back', '完成': 'check', '保存个人密钥': 'key', '更换个人密钥': 'key', '保存到本机': 'check', '保存 OCR 密钥': 'check' };
     node.replaceChildren(); if (icons[label]) node.append(makeIcon(icons[label]));
     node.append(create('span', 'agent-action-label', label)); node.title = label; node.setAttribute('aria-label', label);
   }
@@ -280,6 +280,8 @@ export class GlobalAssistant {
         case 'cache_clear': return args.category === 'all' ? '全部' : ({ schedule: '课表', timeline: '时间线', vision: '课件识别', summary: '速览', question: 'AI 对话', skip: '无效片段', images: '课件图片' })[args.category] || '';
         case 'collection_clear': return WORDS[args.kind] || '';
         case 'notes_read': return title(args.key) || '';
+        case 'notes_edit': return [title(args.key), { append: '追加', create: '新建', replace: '替换', rename: '改名' }[args.mode], args.text ? String(args.text).length + ' 字' : args.name ? clip(args.name, 16) : ''].filter(Boolean).join(' · ');
+        case 'ui': return [WORDS[args.operation] || '', '“' + clip(args.label, 18) + '”'].filter(Boolean).join(' ');
         case 'interface_action': return WORDS[args.operation] || '';
         case 'set_theme': return [args.theme ? themeFor(args.theme).name : '', { system: '跟随系统', light: '浅色', dark: '深色' }[args.mode] || ''].filter(Boolean).join(' · ') || (args.list ? '查看全部' : '');
         case 'set_ai_provider': return WORDS[args.provider] || (args.provider === 'auto' ? '自动' : '');
@@ -328,6 +330,10 @@ export class GlobalAssistant {
       this.stepNode = this.stepRow(this.currentStep, true); this.progress.items.append(this.stepNode);
       if (this.progress.node.open) this.progress.items.scrollTop = this.progress.items.scrollHeight;
       this.live(label + (detail ? ' · ' + detail : '')); this.status.textContent = '正在执行'; this.tick(); this.updateBubble();
+    } else if (event.type === 'retry') {
+      // The first attempt of this round is discarded; anything it streamed is withdrawn.
+      if (this.reply) { window.cancelAnimationFrame(this.draftFrame); this.draftFrame = 0; this.reply.remove(); this.reply = null; }
+      this.draft = ''; if (!this.progress) this.startProgress(); this.live('网络较慢，正在重试…');
     } else if (event.type === 'result' && this.currentStep) {
       const step = this.currentStep; Object.assign(step, { ok: event.ok !== false, error: clip(event.error || '', 200), result: event.ok === false ? '' : clip(this.stepResult(event.action, event.output), 40), ms: Date.now() - step.started });
       delete step.started; this.stepNode?.replaceWith(this.stepRow(step)); this.stepNode = null; this.currentStep = null;
@@ -361,11 +367,13 @@ export class GlobalAssistant {
     this.input.value = ''; this.fitInput(); this.runningTurn = this.addTurn('user', text).parentElement; this.history.push({ role: 'user', content: text }); this.reply = null;
     this.progress = null; this.startProgress(); this.busy(true); this.status.textContent = '正在处理'; this.scroll();
     try { const answer = await this.runner.run(text, history); if (generation === this.generation) this.history.push({ role: 'assistant', content: answer, activity: this.activity() }); }
-    catch (error) { if (generation === this.generation) { this.finishProgress('未完成'); this.notice(error.message, 'error'); this.history.push({ role: 'assistant', content: '任务未完成：' + error.message, activity: this.activity('未完成') }); this.status.textContent = '未完成'; } }
+    catch (error) { if (generation === this.generation) { this.finishProgress('未完成'); this.notice(error.message, 'error'); this.history.push({ role: 'assistant', content: '任务未完成：' + error.message + this.completedSteps(), activity: this.activity('未完成') }); this.status.textContent = '未完成'; } }
     finally { if (generation === this.generation) { if (this.root.hidden) this.unseen = this.status.textContent === '未完成' ? 'failed' : 'done'; this.busy(false); await this.persist(); } }
   }
+  // Written into the conversation so that “继续” resumes instead of repeating what already succeeded.
+  completedSteps() { const done = (this.progress?.steps || []).filter(s => s.ok && !/^(查看当前状态|查找可用操作|读取界面)$/.test(s.label)); return done.length ? '。已完成的操作：' + done.map(s => s.label + (s.detail ? '（' + s.detail + '）' : '')).join('、') : '。尚未完成任何操作'; }
   busy(value) { this.sendButton.hidden = value; this.stopButton.hidden = !value; this.input.readOnly = value; this.root.dataset.state = value ? 'running' : 'idle'; this.updateBubble(); }
-  stop() { this.finishProgress('已停止'); this.runner.stop(); this.generation++; this.busy(false); this.status.textContent = '已停止'; this.notice('已停止后续操作；已完成的操作会保留。'); this.history.push({ role: 'assistant', content: '用户停止了任务，已完成的操作保留。', activity: this.activity('已停止') }); this.persist().catch(() => {}); }
+  stop() { this.finishProgress('已停止'); this.runner.stop(); this.generation++; this.busy(false); this.status.textContent = '已停止'; this.notice('已停止后续操作；已完成的操作会保留。'); this.history.push({ role: 'assistant', content: '用户停止了任务' + this.completedSteps(), activity: this.activity('已停止') }); this.persist().catch(() => {}); }
   async persist() {
     if (this.loadedOwner !== this.options.owner()) return;
     // A conversation exists in history only once something was said in it.
@@ -397,9 +405,9 @@ export class GlobalAssistant {
     if (!list.children.length) list.append(create('p', 'agent-history-empty', '还没有历史对话'));
     this.log.append(list); this.log.scrollTop = 0;
   }
-  async deleteConversation(id) {
+  async deleteConversation(id, { ask = true } = {}) {
     const c = this.messages.find(m => m.id === id); if (!c) return false;
-    if (!confirm('删除这段对话？此操作不能撤销。')) return false;
+    if (ask && !confirm('删除这段对话？此操作不能撤销。')) return false;
     this.messages = this.messages.filter(m => m.id !== id);
     if (id === this.currentId && !this.runner.running) { this.currentId = conversationId(); this.history = []; }
     await this.options.write('chats-agent.json', { current: this.currentId, conversations: this.messages }, true);
@@ -449,7 +457,7 @@ export class GlobalAssistant {
     this.log.append(credentials);
     const advanced = create('details', 'agent-gateway-config'), heading = create('summary', '', '本机校园服务');
     const campus = create('input'); campus.type = 'password'; campus.autocomplete = 'off'; campus.placeholder = status.campusReady ? '已配置 · 输入新密钥以更换' : '校园网关密钥'; campus.setAttribute('aria-label', '校园网关密钥');
-    advanced.append(heading, create('p', 'agent-notice', '仅在浙大内网环境下可用。密钥仅存于本机，不随安装包分发。'), field('模型网关密钥', campus), this.action('保存到本机钥匙串', async () => { const key = campus.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('校园网关密钥格式无效'); await this.options.setCampusKey(key); campus.value = ''; this.renderHistory(); this.notice('校园网关已在本机预置。仅在浙大内网环境下可用。'); }));
+    advanced.append(heading, create('p', 'agent-notice', '仅在浙大内网环境下可用。密钥仅存于本机，不随安装包分发。'), field('模型网关密钥', campus), this.action('保存到本机', async () => { const key = campus.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('校园网关密钥格式无效'); await this.options.setCampusKey(key); campus.value = ''; this.renderHistory(); this.notice('校园网关已在本机预置。仅在浙大内网环境下可用。'); }));
     const ocr = create('input'); ocr.type = 'password'; ocr.autocomplete = 'off'; ocr.placeholder = status.campusOCRReady ? '已配置 · 输入新密钥以更换' : '校园 OCR 密钥'; ocr.setAttribute('aria-label', '校园 OCR 密钥');
     advanced.append(field('课件 OCR 密钥', ocr, '识别文字、公式与版面；图表关系、模糊内容可能识别不完整。'), this.action('保存 OCR 密钥', async () => { const key = ocr.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('OCR 密钥格式无效'); await this.options.setCampusOCRKey(key); ocr.value = ''; this.renderHistory(); this.notice('校园 OCR 已在本机预置'); }));
     const footer = create('div', 'agent-settings-footer'); footer.append(this.action('完成', () => this.renderHistory(), 'primary'));

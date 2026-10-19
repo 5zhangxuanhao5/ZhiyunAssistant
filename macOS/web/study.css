@@ -39,7 +39,7 @@
 #content.study {
   display: flex;
   flex-direction: column;
-  padding: 0 10px 10px;
+  padding: 0 8px 8px;
   overflow: hidden;
   scrollbar-gutter: auto;
 }
@@ -144,8 +144,8 @@
   gap: 8px;
   flex-shrink: 0;
   min-width: 0;
-  min-height: 44px;
-  padding: 12px 8px 4px 14px;
+  min-height: 40px;
+  padding: 9px 6px 3px 12px;
   background: var(--surface);
   user-select: none;
   -webkit-user-select: none;
@@ -231,7 +231,7 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 6px 14px 14px;
+  padding: 4px 12px 12px;
   cursor: text;
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
@@ -277,8 +277,8 @@
 .parity-pane .slide-image { outline-offset: 3px; }
 .parity-pane[data-pane=slides] .slide-card .slide-image { max-height: 100%; user-select: none; -webkit-user-select: none; }
 .parity-pane[data-pane=slides] > .pane-content {
-  margin: 2px 8px 8px;
-  padding: 12px;
+  margin: 0 6px 6px;
+  padding: 8px;
   border-radius: max(4px, calc(var(--r-lg) - 4px));
   background: color-mix(in srgb, var(--text) 4.5%, var(--surface));
   scrollbar-gutter: auto;
@@ -394,7 +394,7 @@
 
 /* ---------- Video ---------- */
 /* Black stays inside the player itself; the pane header keeps the theme surface. */
-.parity-pane[data-pane=video] > .video-wrap { margin: 2px 8px 8px; border-radius: max(4px, calc(var(--r-lg) - 4px)); }
+.parity-pane[data-pane=video] > .video-wrap { margin: 0 6px 6px; border-radius: max(4px, calc(var(--r-lg) - 4px)); }
 .video-wrap { display: flex; flex-direction: column; padding: 0; overflow: hidden; background: #0e1013; cursor: default; scrollbar-gutter: auto; }
 .video-wrap video { flex: 1; width: 100%; min-height: 0; object-fit: contain; background: #000; }
 .video-controls { position: relative; display: flex; align-items: center; flex-shrink: 0; gap: 8px; padding: 8px 12px 10px; background: #0e1013; color: #fff; }

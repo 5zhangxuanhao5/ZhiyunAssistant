@@ -30,7 +30,9 @@ import CryptoKit
   let config=WKWebViewConfiguration();config.websiteDataStore=app.store;config.mediaTypesRequiringUserActionForPlayback=[];config.userContentController.add(app,name:"native")
   let view=WKWebView(frame:NSRect(x:0,y:0,width:1200,height:820),configuration:config);view.navigationDelegate=app;view.uiDelegate=app
   let window=NSWindow(contentRect:view.frame,styleMask:[.titled],backing:.buffered,defer:false);window.contentView=view;window.isReleasedWhenClosed=false;app.window=window;app.web=view;app.token="fixture"
-  let start=Int(Date().timeIntervalSince1970)-7200
+  // Both synthetic lessons sit at fixed times yesterday (Shanghai), so 近两周 always lists them together.
+  var shanghai=Calendar(identifier:.gregorian);shanghai.timeZone=TimeZone(identifier:"Asia/Shanghai")!
+  let start=Int(shanghai.startOfDay(for:Date()).timeIntervalSince1970)-86400+10*3600
   let course:[String:Any]=["courseId":"synthetic-design","subId":"synthetic-design-lesson","title":"设计心理学","teacher":"演示教师","room":"演示教室","term":"2026—2027学年 · 秋季学期","start":start,"end":start+3600,"status":"3"]
   var bridge=WebKitAppSmoke.mockBridge(course:course)
   bridge=bridge.replacingOccurrences(of:"seed('courses.json',[course]);",with:"seed('courses.json',[course,{...course,courseId:'synthetic-visual',subId:'synthetic-visual-lesson',title:'视觉文化导论',start:course.start+3600,end:course.end+3600}]);")
@@ -41,7 +43,7 @@ import CryptoKit
   let server=SmokeServer(app:app,root:root,video:temporary.appendingPathComponent("unused.mp4"),bridge:bridge);var ready=false
   try server.start{app.origin=server.origin;view.load(URLRequest(url:URL(string:server.origin+"/fixture/index.html")!));ready=true}
   try smokeWait({ready});try waitJS(view,"!!document.querySelector('.classroom-page') && !!window.__smoke")
-  // The synthetic lessons start two hours ago, which can be yesterday; 近两周 always lists both.
+  // The synthetic lessons were yesterday; 近两周 lists both.
   _=try evaluate(view,"[...document.querySelectorAll('.classroom-tabs button')].find(n=>n.textContent==='近两周').click();void 0")
   try waitJS(view,"document.querySelectorAll('.classroom-page .course-card').length===2")
   RunLoop.current.run(until:Date().addingTimeInterval(0.3))

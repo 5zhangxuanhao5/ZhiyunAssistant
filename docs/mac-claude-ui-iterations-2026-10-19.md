@@ -7,6 +7,7 @@ Four consecutive Claude revisions are preserved as separate commits and tags. Th
 | 1 | `mac-claude-ui-round1-20261018` | Workspace, theme and task-card redesign |
 | 2 | `mac-claude-ui-round2-20261019` | Timetable, appearance and agent refinements |
 | 3 | `mac-claude-ui-round3-20261019` | Study-pane chrome, compact execution status and background course-material search |
+| 4 | `mac-claude-ui-round4-20261019` | Course-list ordering, consistent surfaces, default study layouts, agent efficiency and local credential persistence |
 
 ## Recovery and validation
 

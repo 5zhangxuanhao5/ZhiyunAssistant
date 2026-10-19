@@ -319,23 +319,10 @@ body[data-page=themes] #topbar { display: flex !important; }
 .actions { display: flex; align-items: center; gap: 4px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
 .actions > button.icon { background: transparent; color: var(--text-3); }
 .actions > button.icon:hover { background: var(--fill); color: var(--text); }
-.actions > button.icon.active, .actions > button[aria-pressed=true] { color: var(--accent); }
+/* Favourite and later stay visible either way; a chosen one is tinted (the star also fills). */
+.actions > button.icon.active, .actions > button[aria-pressed=true] { background: var(--accent-soft); color: var(--accent-ink); }
 button[aria-pressed=true] > .ui-icon[data-ui-icon=favourite] svg { fill: currentColor; }
 .actions > .primary { margin-left: 6px; }
-.course-art {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  border-radius: var(--r-md);
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-  font: 650 18px/1 var(--font-display);
-}
-.course-art.tone-1 { background: color-mix(in srgb, var(--second) 24%, var(--surface)); color: color-mix(in srgb, var(--second), var(--text) 50%); }
-.course-art.tone-2 { background: color-mix(in srgb, var(--text) 8%, var(--surface)); color: var(--text-2); }
-.course-art.tone-3 { background: color-mix(in srgb, var(--accent) 10%, color-mix(in srgb, var(--second) 16%, var(--surface))); color: var(--accent-ink); }
 
 /* ---------- 我的课堂: header row, timetable, course tiles ---------- */
 .classroom-page { display: flex; flex-direction: column; gap: 12px; min-height: 100%; }
@@ -403,20 +390,18 @@ button[aria-pressed=true] > .ui-icon[data-ui-icon=favourite] svg { fill: current
 .lesson-row[data-phase=live] { box-shadow: inset 3px 0 0 var(--live); }
 .lesson-row[data-phase=live] .course-time { color: var(--live); }
 .lesson-row[data-phase=later] .course-time, .lesson-row[data-phase=soon] .course-time { color: var(--accent-ink); }
-.lesson-row .actions > .icon:not(.active):not([aria-pressed=true]) { opacity: 0; }
-.lesson-row:hover .actions > .icon, .lesson-row:focus-within .actions > .icon { opacity: 1; }
 
 .course-grid, .cards:has(> .course-tile) { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; align-items: stretch; }
 .course-grid > :not(.course-card), .cards:has(> .course-tile) > :not(.course-card) { grid-column: 1 / -1; }
 .course-tile {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 1fr auto;
   align-items: start;
-  gap: 4px 12px;
-  padding: 14px;
+  gap: 4px;
+  padding: 14px 16px;
 }
-.course-tile .course-copy { align-self: center; }
+.course-tile .course-copy { align-self: start; }
 .course-tile .course-copy h3 { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .course-tile > .actions { grid-column: 1 / -1; justify-content: flex-end; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-soft); }
 .course-tile > .actions > .primary { margin-left: auto; }

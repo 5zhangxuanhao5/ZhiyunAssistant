@@ -85,6 +85,46 @@ final class CredentialSlots {
     }
 }
 
+/// AI service keys must outlive app updates. An ad-hoc rebuild can never silently read a Keychain
+/// item another build created: the item's partition rejects it even with an open access list, and
+/// this app never prompts. So the campus model gateway key, the campus layout OCR key and each
+/// account's personal DeepSeek key live in an owner-only file in the app's data folder; the course
+/// session and account identity stay in Keychain. A key an earlier build stored and this build can
+/// still read moves into the file once, as does the campus file the previous build wrote.
+func fileStoredCredential(_ name:String)->Bool{name==campusGatewayCredential || name==campusOCRCredential || name.hasSuffix("-deepseek")}
+final class ServiceKeyStore {
+    typealias Legacy=(Data?,Bool)->Data?
+    let url:URL,earlier:URL?
+    init(url:URL,earlier:URL?=nil){self.url=url;self.earlier=earlier}
+    private func read(_ file:URL)->[String:String]?{guard let data=try? Data(contentsOf:file),data.count<64*1024 else{return nil};return try? JSONDecoder().decode([String:String].self,from:data)}
+    private func rows()->[String:String]{
+        if let rows=read(url){return rows}
+        guard let earlier,let rows=read(earlier) else{return [:]}
+        if (try? save(rows)) != nil{try? FileManager.default.removeItem(at:earlier)}
+        return rows
+    }
+    private func save(_ rows:[String:String])throws{
+        let fm=FileManager.default,folder=url.deletingLastPathComponent();try fm.createDirectory(at:folder,withIntermediateDirectories:true)
+        let data=try JSONEncoder().encode(rows),temp=folder.appendingPathComponent("."+url.lastPathComponent+"."+UUID().uuidString)
+        // Owner-only from creation, then an atomic rename: the file is never readable by others.
+        let fd=open(temp.path,O_WRONLY|O_CREAT|O_EXCL,0o600);guard fd>=0 else{throw appError("无法保存密钥")}
+        let written=data.withUnsafeBytes{bytes in write(fd,bytes.baseAddress,bytes.count)==bytes.count};close(fd)
+        guard written,rename(temp.path,url.path)==0 else{try? fm.removeItem(at:temp);throw appError("无法保存密钥")}
+    }
+    func access(_ name:String,_ data:Data?,remove:Bool,onError:@escaping(OSStatus)->Void,legacy:Legacy)->Data?{
+        var rows=self.rows()
+        if remove{rows.removeValue(forKey:name);do{try save(rows)}catch{onError(errSecIO)};_=legacy(nil,true);return nil}
+        if let data=data{
+            guard let text=String(data:data,encoding:.utf8) else{onError(errSecParam);return nil}
+            rows[name]=text;do{try save(rows)}catch{onError(errSecIO);return nil};return data
+        }
+        if let text=rows[name]{return Data(text.utf8)}
+        guard let stored=legacy(nil,false) else{return nil}
+        if let text=String(data:stored,encoding:.utf8){rows[name]=text;try? save(rows)}
+        return stored
+    }
+}
+
 final class KeychainMemoryCache {
     typealias Backend=(String,Data?,Bool,Bool,@escaping(OSStatus)->Void)->Data?
     private let backend:Backend
@@ -332,8 +372,12 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         if let operation=self.testKeychainOperation{return operation(name,data,remove,false,onError)}
         if let storage=self.testSessionKeychain{return storage(name,data,remove)}
         #endif
+        if fileStoredCredential(name){
+            return self.serviceKeys.access(name,data,remove:remove,onError:onError){value,remove in self.credentialSlots.access(name,value,remove:remove,onError:onError)}
+        }
         return self.credentialSlots.access(name,data,remove:remove,onError:onError)
     }
+    private lazy var serviceKeys=ServiceKeyStore(url:root.appendingPathComponent("service-keys.json"),earlier:root.appendingPathComponent("campus-services.json"))
     private lazy var credentialSlots:CredentialSlots={
         let bytes=Bundle.main.executableURL.flatMap{try? Data(contentsOf:$0,options:.mappedIfSafe)} ?? Data("unknown-build".utf8)
         let tag=SHA256.hash(data:bytes).prefix(12).map{String(format:"%02x",$0)}.joined()
@@ -387,7 +431,15 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         imageDrags[source.id]=source;let session=view.beginDraggingSession(with:[item],event:event,source:source);session.animatesToStartingPositionsOnCancelOrFail=true
     }
     var themeDefaults = UserDefaults.standard
-    var themeBrandImage:NSImageView?
+    var themeBrandLabel:NSTextField?
+    /// The brand is one plain label with the theme icon as a text attachment. macOS 26+ draws glass
+    /// behind stack and image toolbar views but not behind labels, so it matches the plain actions beside it.
+    func brandText(_ image:NSImage?)->NSAttributedString{
+        let text=NSMutableAttributedString()
+        if let image{let icon=NSTextAttachment();icon.image=image;icon.bounds=NSRect(x:0,y:-5,width:20,height:20);text.append(NSAttributedString(attachment:icon));text.append(NSAttributedString(string:" ",attributes:[.kern:4]))}
+        text.append(NSAttributedString(string:"智云助手",attributes:[.font:NSFont.systemFont(ofSize:14,weight:.semibold),.foregroundColor:NSColor.labelColor]))
+        return text
+    }
     /// Three colour schemes; each works in light and dark appearance.
     let themeIdentifiers=["collage","playful","film"]
     /// Earlier releases offered twenty decorative themes; each maps to the closest colour scheme.
@@ -415,7 +467,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func applyTheme(_ theme:String,persist:Bool=true){
         guard themeIdentifiers.contains(theme) else{return}
         if persist{themeDefaults.set(theme,forKey:"appearanceTheme")}
-        if let image=themeImage(theme){NSApp.applicationIconImage=image;themeBrandImage?.image=image}
+        if let image=themeImage(theme){NSApp.applicationIconImage=image;themeBrandLabel?.attributedStringValue=brandText(image);themeBrandLabel?.sizeToFit()}
         event("appearanceTheme",theme)
     }
     func installToolbar(){
@@ -446,7 +498,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let text=key=="brand" ? "智云助手":toolbarName,label=NSTextField(labelWithString:text)
             label.font=NSFont.systemFont(ofSize:key=="brand" ? 14:12,weight:key=="brand" ? .semibold:.regular);label.textColor=key=="brand" ? .labelColor:.secondaryLabelColor
             label.lineBreakMode = .byTruncatingTail;label.setAccessibilityLabel(key=="brand" ? "智云助手":text);label.sizeToFit();if key=="name"{label.frame.size.width=min(160,label.frame.width)}
-            if key=="brand" {let image=NSImageView();image.image=themeImage(selectedTheme);image.imageScaling = .scaleProportionallyUpOrDown;image.translatesAutoresizingMaskIntoConstraints=false;NSLayoutConstraint.activate([image.widthAnchor.constraint(equalToConstant:22),image.heightAnchor.constraint(equalToConstant:22)]);themeBrandImage=image;let stack=NSStackView(views:[image,label]);stack.orientation = .horizontal;stack.spacing=7;item.view=stack}else{item.view=label};item.label=text;return item
+            if key=="brand" {label.attributedStringValue=brandText(themeImage(selectedTheme));label.sizeToFit();themeBrandLabel=label}
+            item.view=label;item.label=text;return item
         }
         guard ["home","agent","theme","privacy","logout"].contains(key) else{return nil}
         let title=key=="home" ? "我的课堂":key=="agent" ? "应用助手":key=="theme" ? "外观":key=="privacy" ? "隐私":"退出登录",button=NSButton(title:title,target:self,action:#selector(toolbarClicked(_:)))
@@ -864,8 +917,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         case "secret":
             let name=account+"-deepseek",owner=account,generation=accountGeneration
             storageQueue.async{
-                if p["remove"] as? Bool == true{var failure:OSStatus?;_=self.sessionKeychain(name,remove:true,allowUI:true,onError:{failure=$0});if failure != nil{self.reply(id,nil,"无法静默移除密钥，请稍后重试")}else{self.reply(id,true)}}
-                else if let text=p["text"] as? String{guard self.sessionKeychain(name,Data(text.utf8),allowUI:true) != nil else{self.reply(id,nil,"无法静默保存密钥，请确认登录钥匙串已解锁后重试");return};self.reply(id,true)}
+                if p["remove"] as? Bool == true{var failure:OSStatus?;_=self.sessionKeychain(name,remove:true,allowUI:true,onError:{failure=$0});if failure != nil{self.reply(id,nil,"无法移除密钥，请稍后重试")}else{self.reply(id,true)}}
+                else if let text=p["text"] as? String{guard self.sessionKeychain(name,Data(text.utf8),allowUI:true) != nil else{self.reply(id,nil,"无法保存密钥，请稍后重试");return};self.reply(id,true)}
                 else{let text=String(data:self.sessionKeychain(name) ?? Data(),encoding:.utf8) ?? "";DispatchQueue.main.async{guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return};self.reply(id,text)}}
             }
         case "cache":
@@ -1183,6 +1236,16 @@ final class RemoteTransfer:NSObject,URLSessionDataDelegate {
     }
 }
 // Status-specific messages never echo response bodies or authentication material.
+/// Network failures read as short Chinese reasons instead of the system's English sentence.
+func aiNetworkFailure(_ error:Error)->String{
+    switch (error as? URLError)?.code {
+    case .timedOut?:return "请求超时"
+    case .notConnectedToInternet?,.networkConnectionLost?:return "网络连接中断"
+    case .cannotFindHost?,.dnsLookupFailed?,.cannotConnectToHost?:return "无法连接到服务"
+    case .cancelled?:return "请求已取消"
+    default:return error.localizedDescription.trimmingCharacters(in:CharacterSet(charactersIn:"。. "))
+    }
+}
 func aiHTTPFailure(_ status:Int)->String? {
     switch status {
     case 200:return nil
@@ -1220,7 +1283,7 @@ final class AIStream:NSObject,URLSessionDataDelegate {
     }
     func result()->[String:Any]{var value:[String:Any]=["answer":answer,"calls":calls.keys.sorted().compactMap{calls[$0]},"usage":usage,"reasoning_content":reasoning];if let reason=finishReason{value["finish_reason"]=reason};return value}
     func urlSession(_ session:URLSession,dataTask:URLSessionDataTask,didReceive data:Data){consume(data)}
-    func urlSession(_ session:URLSession,task:URLSessionTask,didCompleteWithError error:Error?){if !buffer.isEmpty{consume(Data([10]))};done(result(),error?.localizedDescription ?? aiHTTPFailure(status));session.finishTasksAndInvalidate()}
+    func urlSession(_ session:URLSession,task:URLSessionTask,didCompleteWithError error:Error?){if !buffer.isEmpty{consume(Data([10]))};done(result(),error.map(aiNetworkFailure) ?? aiHTTPFailure(status));session.finishTasksAndInvalidate()}
 }
 
 let application=NSApplication.shared

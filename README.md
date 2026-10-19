@@ -1,6 +1,6 @@
 ## Mac source update (2026-10-19)
 
-The main branch now preserves Claude revision 3. New revision tags: `mac-claude-ui-round3-20261019` and `mac-claude-ui-round4-20261019`. [Revision history and validation](docs/mac-claude-ui-iterations-2026-10-19.md). This uploads source only; the existing Mac 1.8.1 installer remains the earlier build.
+The main branch now preserves Claude revision 4. New revision tags: `mac-claude-ui-round3-20261019` and `mac-claude-ui-round4-20261019`. [Revision history and validation](docs/mac-claude-ui-iterations-2026-10-19.md). This uploads source only; the existing Mac 1.8.1 installer remains the earlier build.
 
 # 智云助手
 

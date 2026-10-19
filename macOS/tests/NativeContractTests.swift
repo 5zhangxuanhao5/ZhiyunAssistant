@@ -146,6 +146,26 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(nextSlots.access("campus",nil,remove:false,onError:{slotFailures.append($0)})==syntheticSlotSecret && slotValues["campus-app-build-B"]==syntheticSlotSecret,"readable previous slot migrates silently to next build")
         _ = nextSlots.access("campus",nil,remove:true,onError:{slotFailures.append($0)});denyOld=false;slotRequests.removeAll()
         check(nextSlots.access("campus",nil,remove:false,onError:{slotFailures.append($0)})==nil && slotRequests.isEmpty,"explicit delete tombstone prevents legacy secret resurrection")
+        // AI service keys live in an owner-only file, so a rebuilt app reads them without Keychain.
+        check(fileStoredCredential(campusGatewayCredential) && fileStoredCredential(campusOCRCredential) && fileStoredCredential("account-deepseek") && !fileStoredCredential("cookies") && !fileStoredCredential("identity"),"AI service keys use the file store; the course session stays in Keychain")
+        let keyFile=slotFolder.appendingPathComponent("service-keys.json"),campusSecret=Data("campus-synthetic-gateway-key".utf8),personalSecret=Data("personal-synthetic-deepseek-key".utf8)
+        var legacyCalls=0,legacyValue:Data?=Data("campus-key-from-readable-older-build".utf8),keyFailures=[OSStatus]()
+        let legacy:ServiceKeyStore.Legacy={value,remove in legacyCalls+=1;if remove{legacyValue=nil;return nil};return value ?? legacyValue}
+        let firstBuild=ServiceKeyStore(url:keyFile)
+        check(firstBuild.access(campusGatewayCredential,nil,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==legacyValue && legacyCalls==1,"a readable older key moves into the file once")
+        check(firstBuild.access(campusGatewayCredential,campusSecret,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==campusSecret && firstBuild.access("account-deepseek",personalSecret,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==personalSecret,"campus and personal keys are saved")
+        let keyMode=(try FileManager.default.attributesOfItem(atPath:keyFile.path))[.posixPermissions] as? Int
+        check(keyMode==0o600 && keyFailures.isEmpty,"service key file is owner-only")
+        legacyCalls=0;let rebuilt=ServiceKeyStore(url:keyFile)
+        check(rebuilt.access(campusGatewayCredential,nil,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==campusSecret && rebuilt.access("account-deepseek",nil,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==personalSecret && legacyCalls==0,"a rebuilt app reads campus and personal keys without touching Keychain")
+        _ = rebuilt.access("account-deepseek",nil,remove:true,onError:{keyFailures.append($0)},legacy:legacy)
+        let keysAfterRemoval=try String(contentsOf:keyFile,encoding:.utf8)
+        check(rebuilt.access("account-deepseek",nil,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==nil && !keysAfterRemoval.contains("personal-synthetic") && keysAfterRemoval.contains("campus-synthetic"),"removing one key clears it and keeps the others")
+        // The previous build kept the two campus keys in campus-services.json; they carry over once.
+        let earlierFolder=slotFolder.appendingPathComponent("earlier"),earlierFile=earlierFolder.appendingPathComponent("campus-services.json")
+        try FileManager.default.createDirectory(at:earlierFolder,withIntermediateDirectories:true);try JSONEncoder().encode([campusOCRCredential:"campus-synthetic-ocr-key"]).write(to:earlierFile)
+        let upgraded=ServiceKeyStore(url:earlierFolder.appendingPathComponent("service-keys.json"),earlier:earlierFile)
+        check(upgraded.access(campusOCRCredential,nil,remove:false,onError:{keyFailures.append($0)},legacy:{_,_ in nil})==Data("campus-synthetic-ocr-key".utf8) && !FileManager.default.fileExists(atPath:earlierFile.path),"campus keys saved by the previous build carry over to the general file")
         // Real WKWebView, real App WKUIDelegate methods, isolated nonpersistent data
         // store and hidden window. No account/keychain reads or external requests.
         let application=NSApplication.shared;application.setActivationPolicy(.prohibited)
@@ -176,6 +196,9 @@ final class SyntheticCourseProtocol:URLProtocol {
         var toolbarSynced=false;view.callAsyncJavaScript("return await window.callBridge('toolbar',{name:'测试姓名',loggedIn:true});",arguments:[:],in:nil,in:.page){_ in toolbarSynced=true};try waitUntil({toolbarSynced})
         let loggedItems=app.mainToolbar!.items.map{$0.itemIdentifier.rawValue}
         check(loggedItems==["brand","NSToolbarFlexibleSpaceItem","name","home","agent","theme","privacy","logout"],"signed-in native title bar contains identity, theme and account actions")
+        // macOS 26+ puts glass behind stack and image toolbar views but not behind labels or borderless buttons.
+        let brandView=app.mainToolbar!.items.first?.view as? NSTextField
+        check(brandView != nil && brandView!.attributedStringValue.string.contains("智云助手") && app.mainToolbar!.items.compactMap{$0.view}.allSatisfy{$0 is NSTextField || ($0 as? NSButton)?.isBordered==false},"title bar brand is a plain label, matching the borderless actions without glass")
         check((app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue=="name"})?.view as? NSTextField)?.stringValue=="测试姓名","native title bar displays synced user name")
         for key in ["home","theme","privacy","logout"]{(app.mainToolbar!.items.first(where:{$0.itemIdentifier.rawValue==key})!.view as! NSButton).performClick(nil)}
         var toolbarValues:String?,readToolbar=false;view.callAsyncJavaScript("await new Promise(resolve=>setTimeout(resolve,80));return JSON.stringify(window.toolbarEvents.map(event=>event.value));",arguments:[:],in:nil,in:.page){result in if case .success(let value)=result{toolbarValues=value as? String};readToolbar=true};try waitUntil({readToolbar});check(toolbarValues=="[\"home\",\"theme\",\"privacy\",\"logout\"]","real native toolbar buttons emit string action contract")

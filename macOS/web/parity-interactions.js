@@ -23,23 +23,37 @@ export function matchingLayout(raw, ids) {
   const active = idsOf(ids), rects = validPanes(raw, active);
   return rects.length === active.length && active.every(id => rects.some(r => r.id === id)) ? rects : [];
 }
-export function defaultPanes(ids, narrow = false, preset = 'auto') {
+/** Default arrangement for a combination of panes. Slides with transcript alone keep the
+ * two-page spread. With more panes, on a landscape stage the pictures (video, slides) fill a
+ * left column and the reading panes share the right, so slides are not squeezed into a third
+ * of the width and text keeps a readable line length. Squarish stages put the pictures above
+ * the reading panes. `aspect` is the stage width / height. */
+export function defaultPanes(ids, narrow = false, preset = 'auto', aspect = 1.6) {
   ids = idsOf(ids);
   if (!ids.length) return [];
   if (narrow || preset === 'rows') return ids.map((id, i) => ({ id, x: 0, y: i / ids.length, w: 1, h: 1 / ids.length, z: i }));
   if (preset === 'columns') return ids.map((id, i) => ({ id, x: i / ids.length, y: 0, w: 1 / ids.length, h: 1, z: i }));
   if (ids.length === 1) return [{ id: ids[0], x: 0, y: 0, w: 1, h: 1, z: 0 }];
+  // Slides over transcript is a spread: two pages side by side, each with its own caption column below.
   if (ids.length === 2 && ids.includes('slides') && ids.includes('transcript')) return [
     { id: 'slides', x: 0, y: 0, w: 1, h: .62, z: 0 }, { id: 'transcript', x: 0, y: .62, w: 1, h: .38, z: 1 }
   ];
-  const dock = ids.filter(id => ['notes', 'question', 'summary', 'agent'].includes(id)), study = ids.filter(id => !dock.includes(id));
-  const width = dock.length && study.length ? .62 : 1, output = [];
-  if (study.includes('video')) {
-    const rest = study.filter(id => id !== 'video');
-    output.push({ id: 'video', x: 0, y: 0, w: width, h: rest.length ? .55 : 1, z: 0 });
-    rest.forEach((id, i) => output.push({ id, x: i * width / rest.length, y: .55, w: width / rest.length, h: .45, z: i + 1 }));
-  } else study.forEach((id, i) => output.push({ id, x: i * width / study.length, y: 0, w: width / study.length, h: 1, z: i }));
-  dock.forEach((id, i) => output.push({ id, x: study.length ? width : 0, y: i / dock.length, w: study.length ? 1 - width : 1, h: 1 / dock.length, z: i + 3 }));
+  const media = ['video', 'slides'].filter(id => ids.includes(id)), text = ids.filter(id => !media.includes(id)), output = [];
+  // Notes are written in, so they get a little more height than a neighbour they share a column with.
+  const weight = id => id === 'notes' ? 1.4 : 1;
+  const column = (list, x, w) => { const total = list.reduce((n, id) => n + weight(id), 0); let y = 0; for (const id of list) { const h = weight(id) / total; output.push({ id, x, y, w, h, z: output.length }); y += h; } };
+  const row = (list, y, h) => list.forEach((id, i) => output.push({ id, x: i / list.length, y, w: 1 / list.length, h, z: output.length }));
+  if (aspect < 1.25) {
+    if (!media.length || !text.length) { column(ids, 0, 1); return output; }
+    row(media, 0, .56); row(text, .56, .44); return output;
+  }
+  if (!media.length) { if (text.length <= 3) row(text, 0, 1); else { column(text.slice(0, 1), 0, .5); column(text.slice(1), .5, .5); } return output; }
+  if (!text.length) { row(media, 0, 1); return output; }
+  const width = [.66, .6, .56][text.length - 1] ?? .5, rest = 1 - width;
+  column(media, 0, width);
+  // Beyond three reading panes the transcript keeps a full-height column of its own.
+  if (text.length <= 3) column(text, width, rest);
+  else { column(text.slice(0, 1), width, rest / 2); column(text.slice(1), width + rest / 2, rest / 2); }
   return output;
 }
 /** Resize keeps the opposite edge fixed, including when a minimum size is reached. */
@@ -175,7 +189,7 @@ export class PaneLayoutController {
       if (this.key && this.rects.length) { this.temporary.set(this.key, copyRects(this.rects)); if (this.temporary.size > 48) this.temporary.delete(this.temporary.keys().next().value); }
       const saved = !reset && matchingLayout(this.saved()[key], ids), temporary = !reset && matchingLayout(this.temporary.get(key), ids);
       const retained = preserve && !reset && matchingLayout(this.rects, ids);
-      this.rects = retained?.length ? copyRects(retained) : saved?.length ? saved : temporary?.length ? temporary : defaultPanes(ids, width < 640, preset);
+      this.rects = retained?.length ? copyRects(retained) : saved?.length ? saved : temporary?.length ? temporary : defaultPanes(ids, width < 640, preset, width / height);
       this.key = key; this.selected = '';
     }
     for (const [id, binding] of this.bindings) if (!ids.includes(id) || this.panes()[id] !== binding.node) this.unregister(id);
@@ -249,7 +263,7 @@ export class PaneLayoutController {
     await this.options.onSave?.(next); this.options.onToast?.('布局已保存，仅用于相同功能区与窗口尺寸'); return next;
   }
   setLocked(value) { this.locked = !!value; this.select(''); this.options.onLock?.(this.locked); this.drawEditor(); }
-  preset(kind = 'auto') { if (this.locked) return; const size = this.size(); this.rects = defaultPanes(this.ids(), size.width < 640, kind); this.temporary.set(this.key, copyRects(this.rects)); this.apply(); this.options.onContentResize?.(); }
+  preset(kind = 'auto') { if (this.locked) return; const size = this.size(); this.rects = defaultPanes(this.ids(), size.width < 640, kind, size.width / size.height); this.temporary.set(this.key, copyRects(this.rects)); this.apply(); this.options.onContentResize?.(); }
   layer(action) { if (!this.selected || this.locked) return; this.rects = reorderPanes(this.rects, this.selected, action); this.apply(); }
   recoverSelected() { const rect = this.rects.find(r => r.id === this.selected); if (rect && !this.locked) this.change(recoverPane(rect)); }
   /** App calls its own openModal first, then this; any other modal calls closeEditor. */

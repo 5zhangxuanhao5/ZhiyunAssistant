@@ -420,11 +420,6 @@ function title(text, sub = "", actions = []) {
   renderSessionRecovery();
 }
 const designIcon=makeIcon;
-// A course monogram: the first character of its title on a tone derived from the title.
-function courseArtwork(c){
- const key=String(c.title||'');let tone=0;for(const ch of key)tone=(tone+ch.charCodeAt(0))%4;
- return el("div",{class:"course-art tone-"+tone,"aria-hidden":"true",text:[...key.trim()][0]||"课"});
-}
 function classroomIntro(rows,tools){return makeClassroomIntro(rows,{el,page,tools});}
 function nav() {
   document.body.dataset.page=page;
@@ -495,7 +490,7 @@ function privacy() {
       ]),
       el("div", { class: "privacy-grid" }, [
         card("lock", "校园登录", "校园账号密码由浙江大学官方认证页面处理，本应用不保存密码。登录会话通过本机 WebKit 与钥匙串中的受保护快照保存和恢复；会话失效时使用学校官方认证。"),
-        card("key", "密钥", "DeepSeek 密钥保存在 macOS 钥匙串，不写入普通配置，也不会出现在页面中。"),
+        card("key", "密钥", "个人 DeepSeek 与校园服务密钥保存在本机仅你本人可读的文件中，应用更新后保留；不写入普通配置，也不会出现在页面中。"),
         card("agent", "AI 与应用助手", "只有启用 AI 时，所选课程上下文和你的问题才会发送到所选 AI 服务（浙大校内网关或个人 DeepSeek API）。应用助手会按你的指令读取必要的页面状态并操作本应用，过程可随时停止。API 费用由你的账户承担。AI 回答可能有误，请结合课堂原文判断。"),
         card("home", "独立工具", "本工具独立开发，不代表学校或智云课堂运营方；只访问账号允许的课程。断网不会自动退出登录。"),
       ]),
@@ -936,7 +931,7 @@ let allMode = "course";
 function showCourses(recheck = true) {
   if (!account) return welcome();
   const today = shanghaiDate(Date.now() / 1000);
-  // The synced window reaches tomorrow for live/upcoming detection; 近两周 lists only the past two weeks and today.
+  // The synced window reaches tomorrow for live/upcoming detection; 近两周 lists only the days before today.
   const rows =
     page === "chapters"
       ? currentGroup?.rows || []
@@ -944,7 +939,7 @@ function showCourses(recheck = true) {
         ? courses.filter((c) => date(c) === today)
         : page === "all"
           ? allHistory?.courses || []
-          : courses.filter((c) => date(c) <= today);
+          : courses.filter((c) => date(c) < today);
   title(
     page === "chapters" ? currentGroup?.hit.title || "课程" : "我的课堂",
     page === "all" ? rows.length + " 条上课记录" : page === "chapters" ? [currentGroup?.hit.teacher, rows.length + " 节课"].filter(Boolean).join(" · ") : classroomStamp(),
@@ -992,7 +987,7 @@ function showCourses(recheck = true) {
     for (const c of rows
       .slice()
       .sort((a, b) =>
-        page === "today" ? a.start - b.start : b.start - a.start,
+        page === "today" || page === "chapters" ? a.start - b.start : b.start - a.start,
       )) {
       if (date(c) !== previous) {
         previous = date(c);
@@ -1151,7 +1146,6 @@ function courseCard(c) {
 function groupCard(list, fn) {
   const c = list[0];
   return el("article", { class: "course-card course-tile", onclick: fn }, [
-    courseArtwork(c),
     el("div", { class: "course-copy" }, [
       el("h3", { text: c.title }),
       el("div", {
@@ -4800,7 +4794,7 @@ async function batchDownload(rows, restore = {}) {
     !$("#modal").hidden &&
     $("#modalTitle").textContent === "批量下载";
   const refreshList = () => {
-    visible = currentSource().filter((c) => states[c.subId] === "allowed");
+    visible = currentSource().filter((c) => states[c.subId] === "allowed" && started(c));
     render();
     notice.hidden = true;
   };
@@ -4943,7 +4937,7 @@ async function batchDownload(rows, restore = {}) {
     if (!active()) return;
     const known = new Set(visible.map((c) => c.subId)),
       found = currentSource().filter(
-        (c) => states[c.subId] === "allowed" && !known.has(c.subId),
+        (c) => states[c.subId] === "allowed" && started(c) && !known.has(c.subId),
       );
     notice.hidden = !found.length;
     notice.textContent = "新发现 " + found.length + " 节可下载课程 · 更新列表";
@@ -5024,7 +5018,12 @@ async function bindOfflineDownloads(rows = []) {
 async function offlineQueue() {
   return offlineDownloads || bindOfflineDownloads(library);
 }
+// A lesson that has not begun has no slides, transcript or recording to download yet.
+function started(c) {
+  return c.start <= Date.now() / 1000;
+}
 async function enqueue(c, options) {
+  if (!started(c)) return toast("课程尚未开始，暂无可下载的内容");
   if (!Object.values(options).some(Boolean)) return toast("请选择要下载的内容");
   const queue = await offlineQueue(),
     existing = queue.find(courseKey(c));
@@ -6530,6 +6529,10 @@ function getGlobalAssistant() {
   const bool = { type: "boolean" }, choice = values => ({ type: "string", enum: values });
   let extraCourses = [], extraOwner = account?.id;
   const needAccount = () => { if (!account) throw new Error("请先登录智云课堂"); };
+  // Irreversible operations run only when the user asked for them; the model states that with
+  // confirm:true and the app then completes them without interrupting with a dialog.
+  const consent = { type: "boolean", description: "用户已明确要求这项不可撤销的操作时设为 true" };
+  const approved = (value, what) => { if (value !== true) throw new Error(what + "不可撤销：只在用户明确要求时执行，并传 confirm:true"); };
   const needLesson = () => { needAccount(); if (page !== "study" || !lesson) throw new Error("请先进入一节课"); };
   const known = () => {
     if (extraOwner !== account?.id) { extraOwner = account?.id; extraCourses = []; }
@@ -6538,7 +6541,7 @@ function getGlobalAssistant() {
   const describe = c => ({ key: courseKey(c), courseId: c.courseId, title: c.title, teacher: c.teacher || "", date: date(c), start: clockTime(c.start), startEpoch: c.start, duration: Math.max(0, c.end - c.start), access: states[c.subId] || "unknown", favourite: collections.hasLesson("favourite", c), later: collections.hasLesson("later", c) });
   const find = key => { needAccount(); const c = known().find(c => courseKey(c) === key); if (!c) throw new Error("未找到课次，请先查询课程列表或这门课的课次"); return c; };
   const state = () => ({ loggedIn: !!account, page, title: $("#pageTitle")?.textContent, modal: $("#modal").hidden ? null : $("#modalTitle").textContent, lesson: page === "study" && lesson ? describe(lesson) : null, study: page === "study" ? { at: mediaTime(), page: index + 1, pages: groups.length, panes: Object.keys(panes), following, options: { crop: prefs.crop, duplicates: prefs.duplicates, skip: prefs.skip }, video: video ? { paused: video.paused, rate: video.playbackRate, ready: video.readyState >= 2 } : null, notes: notes.map(n => ({ id: n.id, name: n.name })), activeNote: noteId } : null, downloads: library.slice(0, 20).map(r => ({ key: r.key, title: r.course?.title, state: r.state, bytes: r.bytes, total: r.total })), historyComplete: !!allHistory?.complete, knownLessons: known().length });
-  registry.register("navigate", "打开应用页面。home=我的课堂，today/recent/all=今日/近两周/所有课程，favourite/later/offline/noteManager/themes/cache/plaza 对应收藏/稍后再看/离线/笔记管理/主题/缓存/课程广场。", { page: choice(["home", "today", "recent", "all", "favourite", "later", "offline", "noteManager", "themes", "cache", "plaza"]), }, ["page"], async ({ page: target }, guard) => { if (target !== "themes") needAccount(); guard(); await go(target === "home" ? lastClassPage : target); return state(); });
+  registry.register("navigate", "仅在用户要求查看时打开应用页面（完成操作本身不需要换页）。home=我的课堂，today/recent/all=今日/近两周/所有课程，favourite/later/offline/noteManager/themes/cache/plaza 对应收藏/稍后再看/离线/笔记管理/主题/缓存/课程广场。", { page: choice(["home", "today", "recent", "all", "favourite", "later", "offline", "noteManager", "themes", "cache", "plaza"]), }, ["page"], async ({ page: target }, guard) => { if (target !== "themes") needAccount(); guard(); await go(target === "home" ? lastClassPage : target); return state(); });
   registry.register("back", "返回上一级页面。", {}, [], async () => { await back(); return state(); });
   registry.register("refresh_courses", "刷新当前账号的课表和权限。历史课次请先打开所有课程页同步；不会访问无权课程。", {}, [], async (_, guard) => { needAccount(); await refreshCourses(); guard(); return { count: courses.length, historyComplete: !!allHistory?.complete }; });
   registry.register("list_lessons", "查询本机已同步的课次，支持课程/教师关键词与日期；可分页。未同步的历史记录请打开所有课程页。", { query: str("课程名或教师，可留空", 100), date: str("YYYY-MM-DD，可留空", 10), offset: num("分页偏移", 0, 1e6), limit: num("每页条数", 1, 60) }, [], ({ query = "", date: d = "", offset = 0, limit = 30 }) => { needAccount(); const rows = known().filter(c => (!query || (c.title + " " + c.teacher).includes(query)) && (!d || date(c) === d)).sort((a, b) => b.start - a.start); return { total: rows.length, historyComplete: !!allHistory?.complete, lessons: rows.slice(offset, offset + limit).map(describe) }; });
@@ -6621,14 +6624,14 @@ function getGlobalAssistant() {
   registry.register("set_collection", "收藏或稍后再看课次/整门课，可设置为选中或取消。整门课使用当前已知课次。", { key: str("课次key", 300), kind: choice(["favourite", "later"]), selected: bool, wholeCourse: bool }, ["key", "kind", "selected"], ({ key, kind, selected, wholeCourse = false }) => { const c = find(key); const before = wholeCourse ? collections.hasCourse(kind, c.courseId) : collections.hasLesson(kind, c); if (before !== selected) { if (wholeCourse) collections.toggleCourse(kind, c, known().filter(r => r.courseId === c.courseId)); else collections.toggleLesson(kind, c); } if (["favourite", "later"].includes(page)) showCollections(); else if (["today", "recent", "all", "chapters"].includes(page)) showCourses(); return { selected: wholeCourse ? collections.hasCourse(kind, c.courseId) : collections.hasLesson(kind, c), course: describe(c) }; });
   registry.register("notes_list", "读取本节课的笔记名与正文，用 id 标识具体笔记。", {}, [], () => { needLesson(); return notes.map(n => { const div = el("div"); div.innerHTML = sanitizeNote(n.html || ""); return { id: n.id, name: n.name, text: div.textContent.slice(0, 12000) }; }); });
   registry.register("note_create", "在当前课新建并打开笔记，可指定名称。", { name: str("笔记名", 100) }, [], async ({ name }, guard) => { needLesson(); if (!panes.notes) togglePane("notes"); const generation = lessonToken; await saveNote(); guard(); if (generation !== lessonToken) throw new Error("课程已切换"); newNote(); if (name) activeNote().name = name; await saveNotes(); guard(); renderNotes(); syncNoteSelector(); return { id: noteId, name: activeNote()?.name }; });
-  registry.register("note_write", "往指定笔记写入纯文字，可在原光标插入、末尾追加或替换全部正文。替换需用户确认。", { id: str("笔记id，省略为当前笔记", 200), text: str("要写入的正文", 12000), mode: choice(["insert", "append", "replace"]) }, ["text"], async ({ id, text, mode = "insert" }, guard) => { needLesson(); if (!panes.notes) togglePane("notes"); await saveNote(); guard(); if (id && !notes.some(n => n.id === id)) throw new Error("笔记不存在"); if (id && noteId !== id) { noteId = id; renderNotes(); } if (!activeNote()) newNote(); renderNotes(); if (!notesEditor) throw new Error("笔记编辑器未就绪"); if (mode === "replace") { if (!confirm("应用助手将替换“" + activeNote().name + "”的全部正文，是否继续？")) throw new Error("用户取消了替换"); guard(); notesEditor.element.replaceChildren(notesEditor.makeBlock("mine")); notesEditor.refreshGaps(); }
+  registry.register("note_write", "往当前已打开课次的笔记写入纯文字，可在原光标插入、末尾追加或替换全部正文（替换需 confirm:true）。其他课次用 notes_edit 在后台写。", { id: str("笔记id，省略为当前笔记", 200), text: str("要写入的正文", 12000), mode: choice(["insert", "append", "replace"]), confirm: consent }, ["text"], async ({ id, text, mode = "insert", confirm: agreed }, guard) => { if (mode === "replace") approved(agreed, "替换整篇笔记"); needLesson(); if (!panes.notes) togglePane("notes"); await saveNote(); guard(); if (id && !notes.some(n => n.id === id)) throw new Error("笔记不存在"); if (id && noteId !== id) { noteId = id; renderNotes(); } if (!activeNote()) newNote(); renderNotes(); if (!notesEditor) throw new Error("笔记编辑器未就绪"); if (mode === "replace") { guard(); notesEditor.element.replaceChildren(notesEditor.makeBlock("mine")); notesEditor.refreshGaps(); }
     if (mode !== "insert") { const last = notesEditor.addOwnBlock(null); notesEditor.caret(last, true); }
     const place = notesEditor.insertionPlace(); place.range.deleteContents(); const textNode = document.createTextNode(text); place.range.insertNode(textNode); place.range.setStartAfter(textNode); place.range.collapse(true); notesEditor.range = place.range.cloneRange(); notesEditor.restoreSelection(); notesEditor.commit(); await saveNote(); return { id: noteId, name: activeNote().name, insertedCharacters: text.length }; });
   registry.register("note_rename", "重命名本节课的指定笔记。", { id: str("笔记id", 200), name: str("新名称", 100) }, ["id", "name"], async ({ id, name }) => { needLesson(); const n = notes.find(n => n.id === id); if (!n || !name.trim()) throw new Error("笔记或名称无效"); n.name = name.trim(); await saveNotes(); syncNoteSelector(); return { id, name: n.name }; });
   registry.register("note_insert_slide", "把当前课的一页课件原图插入当前笔记，保留时间引用。", { page: num("页码", 1, 10000) }, ["page"], async ({ page: p }) => { needLesson(); const g = groups[p - 1]; if (!Number.isInteger(p) || !g) throw new Error("页码不存在"); await insertNote("slide", "第" + p + "页课件", g.slide.t, g.slide.local || resource(g.slide.url)); return { ok: true, noteId }; });
   registry.register("note_export", "打开当前笔记的导出选项；由用户选择格式和保存位置。", {}, [], () => { needLesson(); exportNote(); return { message: "已打开导出选项" }; });
-  registry.register("download_lesson", "下载指定有权限课次，可分别选择课件、转写、视频。应用会重新验证权限。", { key: str("课次key", 300), slides: bool, transcript: bool, video: bool }, ["key", "slides", "transcript", "video"], async ({ key, ...options }, guard) => { const c = find(key); if (!Object.values(options).some(Boolean)) throw new Error("至少选择一种资源"); guard(); await offlineDownloads.enqueue(c, options); return { key, state: offlineDownloads.find(key)?.state }; });
-  registry.register("download_control", "管理下载队列：暂停/继续/重试失败/调整顺序/保存可用内容/删除。删除需要确认。", { key: str("下载课次key", 300), command: choice(["pause", "resume", "retry", "first", "last", "preserve", "delete"]) }, ["key", "command"], async ({ key, command }, guard) => { needAccount(); if (!offlineDownloads?.find(key)) throw new Error("下载记录不存在"); guard(); if (command === "delete") { if (!confirm("删除这节课的离线资源？")) throw new Error("用户取消了删除"); guard(); await offlineDownloads.remove(key); } else if (["first", "last"].includes(command)) offlineDownloads.move(key, command); else await offlineDownloads[command](key); return { key, state: offlineDownloads.find(key)?.state || "deleted" }; });
+  registry.register("download_lesson", "下载指定有权限课次，可分别选择课件、转写、视频。应用会重新验证权限。", { key: str("课次key", 300), slides: bool, transcript: bool, video: bool }, ["key", "slides", "transcript", "video"], async ({ key, ...options }, guard) => { const c = find(key); if (!started(c)) throw new Error("课程尚未开始，暂无可下载的内容"); if (!Object.values(options).some(Boolean)) throw new Error("至少选择一种资源"); guard(); await offlineDownloads.enqueue(c, options); return { key, state: offlineDownloads.find(key)?.state }; });
+  registry.register("download_control", "管理下载队列：暂停/继续/重试失败/调整顺序/保存可用内容/删除（删除需 confirm:true）。", { key: str("下载课次key", 300), command: choice(["pause", "resume", "retry", "first", "last", "preserve", "delete"]), confirm: consent }, ["key", "command"], async ({ key, command, confirm: agreed }, guard) => { needAccount(); if (!offlineDownloads?.find(key)) throw new Error("下载记录不存在"); guard(); if (command === "delete") { approved(agreed, "删除离线课程"); guard(); await offlineDownloads.remove(key); } else if (["first", "last"].includes(command)) offlineDownloads.move(key, command); else await offlineDownloads[command](key); return { key, state: offlineDownloads.find(key)?.state || "deleted" }; });
   registry.register("download_queue", "读取全部下载状态（分页），或设置同时下载的课次数1-4。", { offset: num("偏移", 0, 1e6), concurrency: num("可选：并行课次数", 1, 4) }, [], ({ offset = 0, concurrency }) => { needAccount(); if (concurrency != null) { if (!Number.isInteger(concurrency)) throw new Error("并行数必须为整数"); offlineDownloads.maxConcurrent = concurrency; } return { concurrency: offlineDownloads?.maxConcurrent, total: library.length, rows: library.slice(offset, offset + 40).map(r => ({ key: r.key, title: r.course?.title, date: date(r.course), state: r.state, bytes: r.bytes, total: r.total, missing: r.missing })) }; });
   registry.register("set_theme", "设置应用配色（晴空/紫藤/琥珀）或外观模式（跟随系统/浅色/深色），在后台完成。可先 list=true 查询。", { theme: str("配色标识", 100), mode: choice(APPEARANCE_MODES.map(([value]) => value)), list: bool }, [], async ({ theme, mode, list }) => {
     if (list || (!theme && !mode)) return { themes: THEMES.map(t => ({ id: t.id, name: t.name })), modes: APPEARANCE_MODES.map(([id, name]) => ({ id, name })), current: { theme: document.documentElement.dataset.theme, mode: appearanceMode() } };
@@ -6638,6 +6641,7 @@ function getGlobalAssistant() {
     return { theme: document.documentElement.dataset.theme, mode: appearanceMode() };
   });
   registry.register("interface_action", "操作刚读取过的页面控件：点击/填写/选择/滚动。不可操作登录密码或 API 密钥；控件ID每次使用后失效。", { id: str("app_interface返回的ID", 80), operation: choice(["click", "fill", "select", "focus", "scroll"]), value: str("输入内容或选项值"), amount: num("滚动像素，可负数", -10000, 10000) }, ["id", "operation"], args => ui.interact(args));
+  registry.register("ui", "按界面上显示的名称直接操作控件，一步完成、无须先读取控件列表：点击按钮或开关、填写输入框、选择下拉项（选项值或显示文字）、滚动、聚焦。同名时用 within（slides/transcript/video/notes/question/summary/toolbar/nav/modal/page）或 nth 指定。返回操作后的页面标题、弹层与可见文字。用于目录里没有专用操作的界面功能。", { operation: choice(["click", "fill", "select", "focus", "scroll"]), label: str("控件名称", 120), value: str("填写内容或选项", 4000), within: str("范围", 40), nth: num("同名控件序号，从1开始", 1, 50), amount: num("滚动像素，可负数", -10000, 10000) }, ["operation", "label"], args => ui.act(args));
   registry.register("layout", "读取、调整、保存或锁定功能区布局。rects使用0-1相对坐标，z为图层顺序，尺寸下限0.12；未列出的区域保留。", { command: choice(["read", "adjust", "save", "lock", "unlock", "auto", "rows", "columns"]), rects: { type: "array", maxItems: 7, items: { type: "object", properties: { id: choice(Object.keys(paneNames)), x: num("横向位置", -1, 1), y: num("纵向位置", 0, 1), w: num("宽度", 0.12, 1), h: num("高度", 0.12, 1), z: num("图层", 0, 100) }, required: ["id", "x", "y", "w", "h", "z"] } } }, ["command"], async ({ command, rects }) => {
     needLesson(); if (!layoutControl) throw new Error("布局尚未就绪");
     if (["adjust", "auto", "rows", "columns"].includes(command) && layoutControl.locked) throw new Error("布局已锁定，请先解锁");
@@ -6663,7 +6667,7 @@ function getGlobalAssistant() {
   });
   registry.register("set_common_features", "读取或替换第一层常用功能的顺序。order省略只读取；数组顺序就是显示顺序。", {order:{type:"array",maxItems:24,items:choice([...Object.keys(paneNames),"crop","duplicates","skip","smartSkip","follow","overview","time","page","download","layout"]) }},[],async({order})=>{needAccount();if(order){prefs.commonOrder=[...new Set(order)];await save("prefs.json",prefs);if(page==="study")renderTools();}return{order:prefs.commonOrder||[]};});
   registry.register("note_open", "打开本节课已有的指定笔记。", {id:str("笔记id",200)},["id"],async({id})=>{needLesson();if(!notes.some(n=>n.id===id))throw new Error("笔记不存在");await saveNote();noteId=id;if(!panes.notes)togglePane("notes");renderNotes();syncNoteSelector();return{id,name:activeNote()?.name};});
-  registry.register("note_delete", "删除本节课的指定笔记，继续使用应用的删除确认。", {id:str("笔记id",200)},["id"],async({id},guard)=>{needLesson();const n=notes.find(n=>n.id===id);if(!n)throw new Error("笔记不存在");if(!confirm("删除笔记“"+n.name+"”？"))throw new Error("用户取消了删除");guard();notes=notes.filter(n=>n.id!==id);if(noteId===id)noteId=notes[0]?.id||"";await saveNotes();notesEditor?.destroy();notesEditor=null;renderNotes();syncNoteSelector();return{deleted:id};});
+  registry.register("note_delete", "删除本节课的指定笔记（需 confirm:true）。", {id:str("笔记id",200),confirm:consent},["id"],async({id,confirm:agreed},guard)=>{needLesson();const n=notes.find(n=>n.id===id);if(!n)throw new Error("笔记不存在");approved(agreed,"删除笔记");guard();notes=notes.filter(n=>n.id!==id);if(noteId===id)noteId=notes[0]?.id||"";await saveNotes();notesEditor?.destroy();notesEditor=null;renderNotes();syncNoteSelector();return{deleted:id};});
   registry.register("note_format", "对笔记现有选中文字设置加粗/斜体/下划线/删除线，或调整当前段落左/中/右对齐。", {command:choice(["bold","italic","underline","strikeThrough","justifyLeft","justifyCenter","justifyRight"])},["command"],async({command})=>{needLesson();if(!notesEditor)throw new Error("请先打开笔记");formatNote(command);await saveNote();return{ok:true};});
   registry.register("note_palette", "读取或设置六种笔记来源的浅色背景。省略source只读取色板。", {source:choice(Object.keys(DEFAULT_NOTE_PALETTE)),color:choice(NOTE_COLORS)},[],async({source,color})=>{needLesson();if(source&&!color)throw new Error("请指定颜色");if(source){prefs.notePalette={...DEFAULT_NOTE_PALETTE,...prefs.notePalette,[source]:color};notesEditor?.setPalette(prefs.notePalette);await save("prefs.json",prefs);}return{palette:prefs.notePalette||DEFAULT_NOTE_PALETTE,colors:NOTE_COLORS};});
   registry.register("note_insert_transcript", "把本课指定时间段的转写插入笔记，保留时间引用，合并为纯文本。", {from:num("起始秒数"),to:num("结束秒数")},["from","to"],async({from,to})=>{needLesson();const rows=lines.filter(l=>l.t>=from&&l.t<=to);if(!rows.length)throw new Error("该时段没有转写");await insertNote("transcript","课堂转写",rows[0].t,rows.map(l=>l.text).join(" "));return{noteId,lines:rows.length};});
@@ -6676,25 +6680,44 @@ function getGlobalAssistant() {
   registry.register("open_batch_download", "打开指定课次列表的批量下载页面，之后可以选择资源并下载。省略keys使用已同步且确认有权限的课次。", {keys:{type:"array",maxItems:200,items:str("课次key",300)}},[],async({keys})=>{needAccount();const rows=keys?keys.map(find):known().filter(c=>states[c.subId]==="allowed");if(!rows.length)throw new Error("当前没有已确认有权限的课次，请先查询权限");await batchDownload(rows);return{lessons:rows.length};});
   registry.register("privacy", "查看隐私与数据说明。",{},[],()=>{privacy();return{ok:true};});
   // Background operations: they change data directly and never navigate the visible app.
-  registry.register("assistant_history", "后台查看、删除或清空应用助手的历史对话，不切换页面。删除和清空使用应用原有确认。", { command: choice(["list", "clear", "delete"]), id: str("要删除的对话id", 80) }, ["command"], async ({ command, id }) => {
+  registry.register("assistant_history", "后台查看、删除或清空应用助手的历史对话（删除和清空需 confirm:true），不切换页面。", { command: choice(["list", "clear", "delete"]), id: str("要删除的对话id", 80), confirm: consent }, ["command"], async ({ command, id, confirm: agreed }) => {
     const assistant = getGlobalAssistant();
     if (command === "list") return { conversations: assistant.listConversations() };
-    if (command === "delete") { if (!id) throw new Error("请指定对话id"); if (!await assistant.deleteConversation(id)) throw new Error("没有删除：对话不存在或用户取消"); return { deleted: id }; }
-    if (!await assistant.clearHistory()) throw new Error("用户取消了清空"); return { cleared: true };
+    approved(agreed, command === "delete" ? "删除对话" : "清空助手对话");
+    if (command === "delete") { if (!id) throw new Error("请指定对话id"); if (!await assistant.deleteConversation(id, { ask: false })) throw new Error("对话不存在"); return { deleted: id }; }
+    await assistant.clearHistory({ ask: false }); return { cleared: true };
   });
-  registry.register("cache_clear", "后台清理普通缓存的某一类或全部，不切换页面；笔记、收藏、学习进度和离线课程不受影响。使用应用原有确认。", { category: choice(["all", "schedule", "timeline", "vision", "summary", "question", "skip", "images"]) }, ["category"], async ({ category }, guard) => {
-    needAccount(); if (!confirm(category === "all" ? "清理普通缓存？课堂笔记、收藏、学习进度和离线课程会保留。" : "清理" + cacheNames[category][0] + "缓存？")) throw new Error("用户取消了清理");
+  registry.register("cache_clear", "后台清理普通缓存的某一类或全部（需 confirm:true），不切换页面；笔记、收藏、学习进度和离线课程不受影响。", { category: choice(["all", "schedule", "timeline", "vision", "summary", "question", "skip", "images"]), confirm: consent }, ["category"], async ({ category, confirm: agreed }, guard) => {
+    needAccount(); approved(agreed, "清理缓存");
     await native.call("cache", category === "all" ? { clear: true } : { clear: true, category }); guard();
     await afterCacheClear(category);
     return { cleared: category };
   });
-  registry.register("collection_clear", "后台取消全部收藏或全部稍后再看，不切换页面，使用应用原有确认。", { kind: choice(["favourite", "later"]) }, ["kind"], ({ kind }) => {
-    needAccount(); if (!confirm("取消全部" + (kind === "later" ? "稍后再看" : "收藏") + "记录？")) throw new Error("用户取消了操作");
+  registry.register("collection_clear", "后台取消全部收藏或全部稍后再看（需 confirm:true），不切换页面。", { kind: choice(["favourite", "later"]), confirm: consent }, ["kind"], ({ kind, confirm: agreed }) => {
+    needAccount(); approved(agreed, "清空" + (kind === "later" ? "稍后再看" : "收藏"));
     collections.clear(kind); if (page === kind) showCollections(); return { cleared: kind };
   });
   registry.register("notes_index", "后台列出所有记过笔记的课次和篇数，不打开课程。", {}, [], async () => {
     needAccount(); const rows = (await saved("notes-index.json")) || [];
     return rows.slice(0, 200).map(r => ({ key: r.key, title: r.course?.title || "", date: r.course ? date(r.course) : "", count: r.count, updatedAt: r.updatedAt }));
+  });
+  registry.register("notes_edit", "后台编辑任一课次的笔记，不打开课程：append 在指定或最近一篇末尾追加文字，create 新建一篇（可带正文），replace 替换整篇正文（需 confirm:true），rename 改名。当前打开且显示着笔记的课次直接写进编辑器。", { key: str("课次key", 300), mode: choice(["append", "create", "replace", "rename"]), text: str("纯文字正文", 12000), note: str("笔记id或名称，省略为最近一篇", 200), name: str("新建或改名时的笔记名", 100), confirm: consent }, ["key", "mode"], async ({ key, mode, text = "", note, name, confirm: agreed }, guard) => {
+    needAccount(); if (mode === "replace") approved(agreed, "替换整篇笔记"); if (mode === "rename" && !name) throw new Error("请提供新的笔记名");
+    const open = page === "study" && lesson && courseKey(lesson) === key, c = open ? lesson : known().find(x => courseKey(x) === key) || ((await saved("notes-index.json")) || []).find(r => r.key === key)?.course;
+    if (!c) throw new Error("未找到课次，请先查询课次列表");
+    const entries = open ? notes : ((await saved("notes-" + key + ".json")) || []); guard();
+    let target = mode === "create" ? null : note ? entries.find(n => n.id === note || n.name === note) : open ? activeNote() : entries.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+    if (note && !target && mode !== "create") throw new Error("笔记不存在");
+    // The note on screen in an open editor is written through that editor, so its next save keeps the change.
+    if (open && notesEditor && target && target.id === notesEditor.noteId && ["append", "replace"].includes(mode)) { const result = await registry.execute("note_write", { id: target.id, text, mode, ...(mode === "replace" ? { confirm: true } : {}) }, guard); return { key, ...result }; }
+    if (!target) { target = { id: "note-" + Date.now() + "-" + ++noteSequence, name: name || (entries.length ? "课堂笔记" + (entries.length + 1) : "课堂笔记"), html: "", updatedAt: Date.now(), course: c }; entries.unshift(target); }
+    else if (name) target.name = name;
+    if (mode === "replace") target.html = "";
+    if (text && mode !== "rename") target.html = (target.html || "") + "<div>" + text.replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]).replace(/\n/g, "<br>") + "</div>";
+    target.updatedAt = Date.now();
+    if (open) { notes = entries; syncNoteSelector(); }
+    await saveNotes(c, entries); guard();
+    return { key, id: target.id, name: target.name, mode, characters: text.length };
   });
   registry.register("notes_read", "后台读取任一课次的笔记正文（纯文字），不打开课程；key 来自 notes_index 或课次列表。", { key: str("课次key", 300) }, ["key"], async ({ key }) => {
     needAccount(); const list = (await saved("notes-" + key + ".json")) || [];

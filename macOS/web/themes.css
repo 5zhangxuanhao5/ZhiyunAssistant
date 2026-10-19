@@ -10,7 +10,6 @@
 :root[data-theme=playful] :is(.classroom-tabs, .classroom-modes, .appearance-modes) button,
 :root[data-theme=playful] #navigation > button,
 :root[data-theme=playful] .badge { border-radius: 999px; }
-:root[data-theme=playful] .course-art { border-radius: 50%; }
 :root[data-theme=playful] .lesson-row:hover { border-radius: 12px; }
 :root[data-theme=playful] .agent-turn.user .agent-message { border-radius: 18px 18px 6px 18px; }
 

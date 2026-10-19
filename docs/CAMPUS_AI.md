@@ -2,13 +2,13 @@
 
 ## 用户体验
 
-四端都支持在未配置个人 DeepSeek API 时使用获授权的校内 DS 网关与校园 OCR；个人 API 已配置时优先个人服务。Mac 另有手动来源选择。首次使用提示校园网要求、效果局限、个人 API 配置入口和 **2026 年 11 月 1 日** 的校内服务使用期限。该日期不触发本机资料清理。
+四端都支持在未配置个人 DeepSeek API 时使用校内 DS 网关与校园 OCR；个人 API 已配置时优先个人服务。Mac 另有手动来源选择。首次使用提示校园网要求、效果局限、个人 API 配置入口和 **2026 年 11 月 1 日** 的校内服务使用期限。该日期不触发本机资料清理。
 
 校内模型固定为 `deepseek-v4-flash-780k-local`，地址为 `https://modelgateway.zju.edu.cn/v1/chat/completions`。校园 OCR 使用 `https://mcp.zju.edu.cn/api/protal/proxy/system/layout-parsing`，先提取课件文字、公式和版面结构。OCR 可能漏识或误识，不能完整替代视觉模型对图表关系的理解；服务失败时不伪造课件内容。
 
 ## 密钥与构建
 
-两枚学校允许分发的凭据通过以下构建变量注入，变量值不写入日志或源码：
+两枚校内服务凭据通过以下构建变量注入，变量值不写入日志或源码：
 
 - `ZJU_CAMPUS_MODEL_API_KEY`
 - `ZJU_CAMPUS_OCR_API_KEY`
@@ -22,7 +22,7 @@
 | Android | `app/src/main/assets/CampusServices.json`，Gradle 编译前写入 | 只向受信的内置应用桥提供，不给远程登录页面挂接原生桥 |
 | HarmonyOS | `entry/src/main/resources/rawfile/CampusServices.json`，Hvigor 配置阶段写入 | UIAbility 加载至课程服务，不进入普通缓存 |
 
-每个平台都有独立的注入脚本，因此单独下载该平台源码仍可构建。生成的 `CampusServices.json` 被 Git 忽略，源码归档明确排除此文件；安装包按授权包含这两项默认服务。校内凭据能从客户端提取，不作为不可泄露的服务器密钥使用。用户自己的个人 API 保持原有本机保存方式，不会被默认配置覆盖。
+每个平台都有独立的注入脚本，因此单独下载该平台源码仍可构建。生成的 `CampusServices.json` 被 Git 忽略，源码归档明确排除此文件；安装包包含这两项默认服务。校内凭据能从客户端提取，不作为不可泄露的服务器密钥使用。用户自己的个人 API 保持原有本机保存方式，不会被默认配置覆盖。
 
 CI 仅在主分支推送或受维护者控制的手动构建中读取仓库 Secrets；拉取请求验证不接收这些构建凭据。Windows 在界面测试之后、打包之前注入，避免测试时的重新构建移除最终配置。签名私钥与设备 Profile 不作为校内服务配置的一部分。
 

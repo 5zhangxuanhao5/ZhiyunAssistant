@@ -151,8 +151,14 @@ test('full screen covers the entire window, uses a black surround, hides control
   await expect(page.locator('.video-is-fullscreen .video-controls')).toHaveCSS('opacity', '0', { timeout: 6000 });
   await page.locator('.video-picture').click({ position: { x: 20, y: 60 } }); await expect(page.locator('.video-is-fullscreen .video-controls')).toHaveCSS('opacity', '1');
   await page.getByRole('button', { name: '退出全屏', exact: true }).click(); await expect(full).toHaveCount(0);
-  const after = await page.locator('.video-pane').evaluate(element => { const box = element.getBoundingClientRect(), canvas = element.closest('.study-canvas')!.getBoundingClientRect(); return { width: box.width, height: box.height, inside: box.left >= canvas.left - 1 && box.top >= canvas.top - 1 && box.right <= canvas.right + 1 && box.bottom <= canvas.bottom + 1 }; });
-  expect(Math.abs(after.width - before.width)).toBeLessThan(1.5); expect(Math.abs(after.height - before.height)).toBeLessThan(1.5); expect(after.inside).toBe(true);
+  // Restoring the toolbar triggers ResizeObserver before normalized pane bounds settle.
+  // Keep the same strict geometry check, but observe the completed layout rather than
+  // whichever frame immediately followed removal of the full-screen class.
+  await expect.poll(async () => page.locator('.video-pane').evaluate((element, expected) => {
+    const box = element.getBoundingClientRect(), canvas = element.closest('.study-canvas')!.getBoundingClientRect();
+    return Math.abs(box.width - expected.width) < 1.5 && Math.abs(box.height - expected.height) < 1.5 &&
+      box.left >= canvas.left - 1 && box.top >= canvas.top - 1 && box.right <= canvas.right + 1 && box.bottom <= canvas.bottom + 1;
+  }, before)).toBe(true);
   await expect(page.locator('.slides-pane .pane-title')).toHaveCSS('background-color', 'rgb(255, 255, 255)'); await expect(page.locator('.transcript-pane .pane-title')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
   const blank = await page.locator('.study-canvas').evaluate(canvas => { const box = canvas.getBoundingClientRect(); for (let y = box.top + 2; y < box.bottom; y += 14) for (let x = box.left + 2; x < box.right; x += 14) { let element = document.elementFromPoint(x, y); if (!element || element.closest('.free-pane')) continue; while (element) { const color = getComputedStyle(element).backgroundColor; if (color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') return color; element = element.parentElement; } } return null; });
   expect(blank).not.toBeNull(); expect(blank).not.toBe('rgb(0, 0, 0)');

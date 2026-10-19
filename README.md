@@ -1,3 +1,7 @@
+## Mac 1.8.3 更新
+
+[下载 Mac 1.8.3](https://github.com/5zhangxuanhao5/ZhiyunAssistant/releases/tag/mac-v1.8.3-preview)：整门课程关键词检索一次汇总、当前课次时间跳转不重载、网络错误中文提示，以及AI普通时间点链接。回归为240项JS/DOM、216项原生契约和98项实际WebKit检查；其他客户端本轮不更新。安装包支持macOS13+的Intel与Apple Silicon，仍为ad-hoc签名预览版。
+
 # 智云助手
 
 面向真实课堂的多端学习工具，将课件、课堂转写、视频、笔记和 AI 放在同一条课程时间线上。支持按课程资料定位讲解、整理带来源的笔记，以及按需下载和离线复习。
@@ -10,7 +14,7 @@
 
 | 客户端 | 本轮更新 | 系统与安装说明 |
 | --- | --- | --- |
-| [Mac](macOS/README.md) | 1.8.2：完整保留四轮 Claude 改版，加入校内 AI / OCR 默认服务及首次提示 | macOS 13+；同一 DMG / ZIP 支持 Apple Silicon 和 Intel；当前为 ad-hoc 签名预览包，尚未完成 Developer ID 公证 |
+| [Mac](macOS/README.md) | 1.8.3：整门课限时检索、同课时间定位、中文网络错误；保留四轮 Claude 改版及校内 AI / OCR 默认服务 | macOS 13+；同一 DMG / ZIP 支持 Apple Silicon 和 Intel；当前为 ad-hoc 签名预览包，尚未完成 Developer ID 公证 |
 | [Windows](windows/README.md) | 0.8.0-beta.2：校内 AI / OCR 自动回退、个人 API 优先 | Windows 10/11；x64 和 ARM64 分别构建、分别验证；未做 Authenticode 发行签名 |
 | [Android](android/README.md) | 0.1.0-beta.3：校内 AI / OCR 自动回退、个人 API 优先 | Android 8.0+；手机、平板及折叠屏；可安装包需发行签名，CI 的 unsigned APK 仅用于构建验证 |
 | [HarmonyOS](harmonyOS/README.md) | 0.7.5：校内 AI / OCR 自动回退、个人 API 优先 | 最低 HarmonyOS 6.1.1 / API 24；手机和平板；公开 HAP 需自行配置匹配设备的调试签名，见[安装说明](harmonyOS/INSTALLATION.md) |

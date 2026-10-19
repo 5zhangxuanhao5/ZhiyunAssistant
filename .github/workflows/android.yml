@@ -29,6 +29,9 @@ jobs:
           packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
           log-accepted-android-sdk-licenses: false
       - name: Shared logic and web assets
+        env:
+          ZJU_CAMPUS_MODEL_API_KEY: ${{ github.event_name != 'pull_request' && secrets.ZJU_CAMPUS_MODEL_API_KEY || '' }}
+          ZJU_CAMPUS_OCR_API_KEY: ${{ github.event_name != 'pull_request' && secrets.ZJU_CAMPUS_OCR_API_KEY || '' }}
         run: |
           npm ci --ignore-scripts
           npm run check

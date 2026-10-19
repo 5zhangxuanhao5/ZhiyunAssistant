@@ -94,8 +94,8 @@ final class CredentialSlots {
 func fileStoredCredential(_ name:String)->Bool{name==campusGatewayCredential || name==campusOCRCredential || name.hasSuffix("-deepseek")}
 final class ServiceKeyStore {
     typealias Legacy=(Data?,Bool)->Data?
-    let url:URL,earlier:URL?
-    init(url:URL,earlier:URL?=nil){self.url=url;self.earlier=earlier}
+    let url:URL,earlier:URL?,bundled:[String:String]
+    init(url:URL,earlier:URL?=nil,bundled:[String:String]=[:]){self.url=url;self.earlier=earlier;self.bundled=bundled}
     private func read(_ file:URL)->[String:String]?{guard let data=try? Data(contentsOf:file),data.count<64*1024 else{return nil};return try? JSONDecoder().decode([String:String].self,from:data)}
     private func rows()->[String:String]{
         if let rows=read(url){return rows}
@@ -119,6 +119,7 @@ final class ServiceKeyStore {
             rows[name]=text;do{try save(rows)}catch{onError(errSecIO);return nil};return data
         }
         if let text=rows[name]{return Data(text.utf8)}
+        if [campusGatewayCredential,campusOCRCredential].contains(name),let text=bundled[name],!text.isEmpty{return Data(text.utf8)}
         guard let stored=legacy(nil,false) else{return nil}
         if let text=String(data:stored,encoding:.utf8){rows[name]=text;try? save(rows)}
         return stored
@@ -154,6 +155,10 @@ let campusGatewayEndpoint = "https://modelgateway.zju.edu.cn/v1/chat/completions
 let campusGatewayModel = "deepseek-v4-flash-780k-local"
 let campusOCRCredential = "campus-layout-ocr-v1"
 let campusOCREndpoint = "https://mcp.zju.edu.cn/api/protal/proxy/system/layout-parsing"
+func bundledCampusCredentials(_ url:URL?)->[String:String]{
+    guard let url,let data=try? Data(contentsOf:url),data.count<16384,let value=try? JSONDecoder().decode([String:String].self,from:data),let model=value["modelKey"],let ocr=value["ocrKey"],model.range(of:"^[A-Za-z0-9_-]{16,256}$",options:.regularExpression) != nil,ocr.range(of:"^pk_[A-Za-z0-9_-]{16,256}$",options:.regularExpression) != nil else{return [:]}
+    return [campusGatewayCredential:model,campusOCRCredential:ocr]
+}
 func campusLayoutText(_ data:Data)throws->String{
     guard data.count<32*1024*1024,let body=try JSONSerialization.jsonObject(with:data) as? [String:Any],(body["errorCode"] as? Int ?? -1)==0,let result=body["result"] as? [String:Any],let pages=result["layoutParsingResults"] as? [[String:Any]] else{throw appError("校园OCR未返回有效的识别结果")}
     let text=pages.prefix(12).compactMap{page -> String? in
@@ -377,7 +382,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         }
         return self.credentialSlots.access(name,data,remove:remove,onError:onError)
     }
-    private lazy var serviceKeys=ServiceKeyStore(url:root.appendingPathComponent("service-keys.json"),earlier:root.appendingPathComponent("campus-services.json"))
+    private lazy var serviceKeys=ServiceKeyStore(url:root.appendingPathComponent("service-keys.json"),earlier:root.appendingPathComponent("campus-services.json"),bundled:bundledCampusCredentials(Bundle.main.url(forResource:"CampusServices",withExtension:"json")))
     private lazy var credentialSlots:CredentialSlots={
         let bytes=Bundle.main.executableURL.flatMap{try? Data(contentsOf:$0,options:.mappedIfSafe)} ?? Data("unknown-build".utf8)
         let tag=SHA256.hash(data:bytes).prefix(12).map{String(format:"%02x",$0)}.joined()

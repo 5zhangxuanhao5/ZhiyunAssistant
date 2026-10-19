@@ -11,7 +11,7 @@ import './panes.css';
 
 export interface AiTurn { question: string; answer: string; at: number; whole?: boolean; expanded?: boolean; mode?: string; complete?: boolean; references?: Course[] }
 export interface ChatSession { id: string; title: string; turns: AiTurn[]; savedAt: number; scroll?: number }
-export interface AiSettings { configured: boolean; model: string; models: string[] }
+export interface AiSettings { personalReady?: boolean; campusReady?: boolean; provider?: string; campusNotice?: string; configured: boolean; model: string; models: string[] }
 export interface AiStreamEvent { requestId: string; text?: string; status?: string; done?: boolean; error?: string }
 export interface AiResult { record?: PageSummaryRecord; answer: string; references?: Course[]; completed?: boolean; signature?: string }
 export interface AiPaneProps {
@@ -26,7 +26,7 @@ export interface AiPaneProps {
 export function useAiConfiguration() {
   const [settings, setSettings] = useState<AiSettings>({ configured: false, model: '', models: [] });
   const [checked, setChecked] = useState(false), [error, setError] = useState('');
-  const refresh = useCallback(async () => { try { const value = await ipc<AiSettings>('ai.settings'); setSettings({ configured: !!value.configured, model: value.model || value.models?.[0] || '', models: value.models || [] }); setError(''); } catch (err) { setError(errorMessage(err)); } finally { setChecked(true); } }, []);
+  const refresh = useCallback(async () => { try { const value = await ipc<AiSettings>('ai.settings'); setSettings({ ...value, configured: !!value.configured, model: value.model || value.models?.[0] || '', models: value.models || [] }); setError(''); } catch (err) { setError(errorMessage(err)); } finally { setChecked(true); } }, []);
   useEffect(() => { void refresh(); let stop: () => void = () => {}; try { stop = bridge().on('ai.settings', () => { void refresh(); }); } catch {} return stop; }, [refresh]);
   return { settings, setSettings, checked, refresh, error };
 }
@@ -39,13 +39,14 @@ export function ApiSettings({ configured, onDone, onRefresh }: { configured: boo
   useEffect(() => { if (changing) input.current?.focus(); }, [changing]);
   return <section className="api-setup" aria-label="API 设置">
     <h3>{configured ? 'API 设置' : '启用 AI 辅助学习'}</h3>
+    <p>校内 AI 与 OCR 随获授权的安装包预置，需要连接浙江大学校园网，效果可能不佳，使用期限截至 2026 年 11 月 1 日。更佳效果可添加个人 DeepSeek API。</p>
     <p>从 DeepSeek 开放平台获取 API 密钥。密钥加密保存在本机，服务费用由你的 DeepSeek 账户承担。</p>
     <button type="button" className="text-link" onClick={() => { void ipc('app.external', { url: 'https://platform.deepseek.com/' }); }}>打开 DeepSeek 开放平台 ↗</button>
     {changing ? <form onSubmit={event => { event.preventDefault(); void save(); }}>
       <label htmlFor="deepseek-key">API 密钥</label>
       <input ref={input} id="deepseek-key" type="password" autoComplete="off" spellCheck={false} value={key} placeholder="粘贴 API 密钥" onChange={event => setKey(event.target.value)} onKeyDown={event => event.stopPropagation()} />
       <div className="pane-actions"><button className="primary" disabled={!key.trim() || busy} type="submit">{busy ? '正在验证…' : '保存并启用'}</button>{configured && <button type="button" disabled={busy} onClick={() => { setKey(''); setChanging(false); }}>取消</button>}</div>
-    </form> : <div className="pane-actions"><button onClick={() => setChanging(true)}>更换密钥</button><button className="danger" onClick={() => { void remove(); }}>删除密钥</button></div>}
+    </form> : <div className="pane-actions"><button onClick={() => setChanging(true)}>添加或更换个人密钥</button><button className="danger" onClick={() => { void remove(); }}>移除个人密钥</button></div>}
     {configured && <button type="button" onClick={onDone}>返回对话</button>}
     {error && <p className="pane-error" role="alert">{error}</p>}
   </section>;

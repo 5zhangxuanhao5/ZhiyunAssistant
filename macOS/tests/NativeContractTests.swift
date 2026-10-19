@@ -166,6 +166,17 @@ final class SyntheticCourseProtocol:URLProtocol {
         try FileManager.default.createDirectory(at:earlierFolder,withIntermediateDirectories:true);try JSONEncoder().encode([campusOCRCredential:"campus-synthetic-ocr-key"]).write(to:earlierFile)
         let upgraded=ServiceKeyStore(url:earlierFolder.appendingPathComponent("service-keys.json"),earlier:earlierFile)
         check(upgraded.access(campusOCRCredential,nil,remove:false,onError:{keyFailures.append($0)},legacy:{_,_ in nil})==Data("campus-synthetic-ocr-key".utf8) && !FileManager.default.fileExists(atPath:earlierFile.path),"campus keys saved by the previous build carry over to the general file")
+        let bundleFixture=slotFolder.appendingPathComponent("CampusServices.json")
+        try JSONEncoder().encode(["modelKey":"fixture-campus-model-123456789", "ocrKey":"pk_fixture_campus_ocr_123456789", "personalDeepSeek":"must-never-import-this"]).write(to:bundleFixture)
+        let defaults=bundledCampusCredentials(bundleFixture)
+        check(defaults.count==2 && defaults[campusGatewayCredential]=="fixture-campus-model-123456789" && defaults["account-deepseek"]==nil,"only the two campus defaults are loaded; personal fields are excluded")
+        var bundledLegacyCalls=0
+        let freshKeys=ServiceKeyStore(url:slotFolder.appendingPathComponent("fresh-services.json"),bundled:defaults)
+        check(freshKeys.access(campusGatewayCredential,nil,remove:false,onError:{_ in},legacy:{_,_ in bundledLegacyCalls+=1;return nil})==Data("fixture-campus-model-123456789".utf8) && bundledLegacyCalls==0,"a clean install can use bundled campus services without a keychain request")
+        check(!FileManager.default.fileExists(atPath:freshKeys.url.path),"using defaults does not manufacture a user profile")
+        _=freshKeys.access(campusGatewayCredential,Data("manual-campus-override".utf8),remove:false,onError:{_ in},legacy:{_,_ in nil})
+        check(freshKeys.access(campusGatewayCredential,nil,remove:false,onError:{_ in},legacy:{_,_ in nil})==Data("manual-campus-override".utf8),"a manual local campus key takes priority")
+        check(bundledCampusCredentials(nil).isEmpty,"plain source builds keep personal API mode when no campus resource is present")
         // Real WKWebView, real App WKUIDelegate methods, isolated nonpersistent data
         // store and hidden window. No account/keychain reads or external requests.
         let application=NSApplication.shared;application.setActivationPolicy(.prohibited)

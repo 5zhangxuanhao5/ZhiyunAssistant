@@ -26,11 +26,16 @@ jobs:
           cache-dependency-path: macOS/package-lock.json
       - run: npm ci --ignore-scripts
       - run: npm test
+      - name: School-service injection and all shared client routes (synthetic)
+        run: node --test ../scripts/campus-services.test.cjs ../scripts/test-campus-clients.cjs
       - run: npm run verify
       - run: npm run test:native
       - run: npm run test:webkit
         timeout-minutes: 5
       - run: npm run build
+        env:
+          ZJU_CAMPUS_MODEL_API_KEY: ${{ github.event_name != 'pull_request' && secrets.ZJU_CAMPUS_MODEL_API_KEY || '' }}
+          ZJU_CAMPUS_OCR_API_KEY: ${{ github.event_name != 'pull_request' && secrets.ZJU_CAMPUS_OCR_API_KEY || '' }}
       - uses: actions/upload-artifact@v4
         with:
           name: macOS-universal-preview

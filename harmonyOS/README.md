@@ -1,12 +1,19 @@
 # 智云助手 · HarmonyOS
 
+## 2026-10-19 校内 AI / OCR 默认接入
+
+获授权的新版安装包在没有个人 API 时默认使用校内 DS 与校园 OCR；已配置个人 DeepSeek API 时优先个人服务。首次调用会提示校园网要求、效果可能不佳，以及校内服务使用期限截至 **2026 年 11 月 1 日**；想获得更佳效果可自行配置个人 DeepSeek API。校内模式先用 OCR 提取课件，可能遗漏图示关系或误识公式、表格。
+
+构建只注入获准分发的两项学校凭据，不包含开发者的个人 API、校园登录、聊天、笔记、学习记录或下载资源。普通源码不包含凭据，仍可构建个人 API 版本。详见[校内服务与构建](../docs/CAMPUS_AI.md)。以下历史验证与版本说明仅对应其标注版本，不代表本轮已完成同等真机验收。
+
+
 0.7.4，版本代码 31。原生 ArkTS/ArkUI 应用，手机和平板使用同一工程，支持平板多窗及电脑模式。安装包最低要求 HarmonyOS 6.1.1 / API 24，目标 SDK 为 API 26；此前在 HarmonyOS 7 手机和平板上进行过测试。
 
 应用市场上架需要备案、授权材料、发行签名和审核，目前尚未完成，因此先在 GitHub 提供开发者自行签名安装的版本。**开启开发者模式之后，仍须为自己的设备配置合法的调试签名。** 未签名 HAP 无法直接安装，现有测试设备的签名也不能供其他设备通用。参见[华为应用签名要求](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides-v5/experience-suggestions-security-debug-V5)。
 
 ## 下载与安装
 
-前往[鸿蒙版发布页](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/harmony-v0.7.4-preview)。
+前往[鸿蒙版发布页](https://github.com/5zhangxuanhao5/ZhiyunAssistant/releases/tag/harmony-v0.7.4-preview)。
 
 - `ZhiyunAssistant-HarmonyOS-0.7.4-PublicSource.zip`：完整、无私人签名材料的工程，推荐通过 DevEco Studio 配置自己的自动签名并运行。
 - `ZhiyunAssistant-HarmonyOS-0.7.4-unsigned.hap`：已编译的未签名 HAP，供已有合法签名材料的开发者自行签名；不能直接安装。

@@ -671,3 +671,10 @@ html[data-theme=playful] .playful-copy { display: block !important; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* First-use school-service notice, independent of course modal/layout state. */
+.campus-welcome { position: fixed; inset: 0; z-index: 40000; display: grid; place-items: center; padding: 24px; background: #14243b55; }
+.campus-welcome-card { width: min(100%, 480px); box-sizing: border-box; border: 1px solid var(--border); border-radius: 20px; padding: 26px; background: var(--surface); color: var(--text); box-shadow: 0 18px 70px #14243b33; }
+.campus-welcome-card h2 { margin: 0 0 14px; font-size: 19px; }
+.campus-welcome-card p { line-height: 1.8; margin: 0 0 20px; }
+.campus-welcome-card button { display: block; margin-left: auto; }

@@ -57,7 +57,12 @@ jobs:
       - name: Electron UI regression
         run: npm run test:e2e
       - name: Package native architecture without publishing
-        run: npx electron-builder --win nsis zip --${{ matrix.arch }} --publish never
+        env:
+          ZJU_CAMPUS_MODEL_API_KEY: ${{ github.event_name != 'pull_request' && secrets.ZJU_CAMPUS_MODEL_API_KEY || '' }}
+          ZJU_CAMPUS_OCR_API_KEY: ${{ github.event_name != 'pull_request' && secrets.ZJU_CAMPUS_OCR_API_KEY || '' }}
+        run: |
+          node scripts/campus-services.cjs staging-app/dist/desktop/CampusServices.json
+          npx electron-builder --win nsis zip --${{ matrix.arch }} --publish never
       - name: Verify PE architecture and ASAR privacy/resources
         run: node scripts/package-audit.cjs --dir '${{ matrix.unpacked }}' --arch '${{ matrix.arch }}' --report 'work/package-audit-${{ matrix.arch }}.json'
       - name: Install and launch from installed path

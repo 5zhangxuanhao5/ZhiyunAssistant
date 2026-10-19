@@ -1,61 +1,62 @@
-## Mac source update (2026-10-19)
-
-The main branch now preserves Claude revision 4. New revision tags: `mac-claude-ui-round3-20261019` and `mac-claude-ui-round4-20261019`. [Revision history and validation](docs/mac-claude-ui-iterations-2026-10-19.md). This uploads source only; the existing Mac 1.8.1 installer remains the earlier build.
-
 # 智云助手
 
-把智云课堂中的课件、课堂转写、视频和笔记放在同一个学习窗口，按课程时间线回看。在线资源按校园账号的实际权限访问，AI 功能由用户自行配置 DeepSeek API。
+面向真实课堂的多端学习工具，将课件、课堂转写、视频、笔记和 AI 放在同一条课程时间线上。支持按课程资料定位讲解、整理带来源的笔记，以及按需下载和离线复习。
 
-本仓库包含 Windows、原生 Mac、原生鸿蒙手机/平板和 Android 手机/平板/折叠屏版本。各客户端分别维护本机资料，目前没有跨端自动同步。
+项目从鸿蒙平板的课堂伴学场景出发，现包含 **HarmonyOS、macOS、Windows 和 Android** 客户端。各端分别维护本机资料，当前没有跨设备自动同步；Mac 的界面和全局应用助手迭代更靠前，其他端的功能范围以各自说明为准。
 
-## 下载
+## 下载与平台
 
-前往 [Releases](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases) 选择对应平台的包，并核对同一发布中的 SHA256 校验文件。Windows 预发布需要两种架构的原生 CI 都成功才由工作流上传；没有上传的构建不能视为已验收。
+到 [Releases](https://github.com/5zhangxuanhao5/ZhiyunAssistant/releases) 按系统与 CPU 架构选择安装包，并核对发布中的 SHA256。尚未提供对应文件时，请以该平台已发布版本为准，不能将源码提交视为可安装包。
 
-| 客户端 | 版本与目标系统 | 下载选择 | 验证范围 |
-| --- | --- | --- | --- |
-| Windows | 0.8.0-beta.1；Windows 10/11，x64 / ARM64 | Intel、AMD 的 64 位电脑选 x64；ARM 电脑选 ARM64；提供 Setup.exe 与 ZIP | 处于测试阶段。Mac 上的模型、服务及 Electron 检查不代替 Windows 原生验收；实际 CI 状态以 [Actions](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/actions) 为准 |
-| Mac 原生版 | 1.8.1；macOS 13 及以上 | [Mac 下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/mac-v1.8.1-preview)：同一 DMG / ZIP 包含 Intel 与 Apple Silicon | 新版有完整页面回归、隐藏真实 WebKit 流程、合成视频实际解码与原生桥验证，见 [Mac 验证记录](macOS/VERIFICATION.md)；Intel 为编译检查 |
-| HarmonyOS 原生版 | 0.7.4；最低 HarmonyOS 6.1.1 / API 24，手机 / 平板 | [鸿蒙下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/harmony-v0.7.4-preview)：未签名 HAP、源码和安装说明，需自行配置设备调试签名 | 374 项自动回归；此前在 HarmonyOS 7 手机/平板测试，不能视为全部设备或交互已验收 |
-| Android | 0.1.0-beta.2；Android 8.0 及以上，手机 / 平板 / 折叠屏 | [Android 下载](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/android-v0.1.0-beta.2)：已签名通用 APK | 本次修正 vivo 图标裁切；0.1.0-beta.1 已验证登录、视频及内外屏切换，并通过 240 项共享测试、7 项合成界面检查和 10 项原生 JVM 测试通过；双铰链为合成布局检查，见 [Android 验证记录](android/VERIFICATION.md) |
+| 客户端 | 本轮更新 | 系统与安装说明 |
+| --- | --- | --- |
+| [Mac](macOS/README.md) | 1.8.2：完整保留四轮 Claude 改版，加入校内 AI / OCR 默认服务及首次提示 | macOS 13+；同一 DMG / ZIP 支持 Apple Silicon 和 Intel；当前为 ad-hoc 签名预览包，尚未完成 Developer ID 公证 |
+| [Windows](windows/README.md) | 0.8.0-beta.2：校内 AI / OCR 自动回退、个人 API 优先 | Windows 10/11；x64 和 ARM64 分别构建、分别验证；未做 Authenticode 发行签名 |
+| [Android](android/README.md) | 0.1.0-beta.3：校内 AI / OCR 自动回退、个人 API 优先 | Android 8.0+；手机、平板及折叠屏；可安装包需发行签名，CI 的 unsigned APK 仅用于构建验证 |
+| [HarmonyOS](harmonyOS/README.md) | 0.7.5：校内 AI / OCR 自动回退、个人 API 优先 | 最低 HarmonyOS 6.1.1 / API 24；手机和平板；公开 HAP 需自行配置匹配设备的调试签名，见[安装说明](harmonyOS/INSTALLATION.md) |
 
-鸿蒙版上架涉及备案、授权材料、发行签名和审核，目前尚未完成，先通过 GitHub 提供开发者自行签名安装的版本。可在设备开启开发者模式，通过 DevEco Studio 配置自己的调试签名后安装；**开发者模式本身不能免除签名或设备绑定要求**，详见[鸿蒙安装说明](harmonyOS/INSTALLATION.md)。不公开作者的私人签名材料或测试设备信息。
+鸿蒙应用商城发布仍涉及 APP 备案、授权材料、发行签名与平台审核；GitHub 预览版本不代表已经通过商店审核。各端旧发布、历史标签与源码均保留。
 
-Mac 1.8.1 提供 20 套完整主题，主窗口内单击真实首页截图预览，双击确认并返回，日期、日历、收藏、翻页与笔记图标按主题统一设计。恢复登录使用学校官方网页会话，不再要求交互式解锁旧登录钥匙串；修复空课表误报并保护未确认窗口内的缓存。保留六个自由功能区、笔记引用和下载队列，Dock 与标题栏图标同步切换。提供 DMG、应用 ZIP、源码 ZIP 与 SHA256；公开资料不含用户账号、密钥或私人课程内容。
+## 核心能力
 
-Mac 包采用 ad-hoc 签名，尚未完成 Apple Developer ID 签名与公证。Windows 当前也没有发布者代码签名。这些包作为预览版本提供，不保证所有电脑、显卡、外设或教室媒体格式都已通过测试。
+- **时间线学习**：清晰课件与课堂转写对应，视频按需打开；支持跳转、概览、去黑边和连续重复课件合并。
+- **可追溯笔记**：文字、课件图片、转写及 AI 引用保留来源与时间，可回到相应内容；支持多笔记管理与导出。
+- **课程问答与本页速览**：按课件、讲解顺序和所选上下文回答，支持联系其他可访问课次。AI 结果仍需结合原文核对。
+- **全局应用助手（Mac）**：通过自然语言查找课程、后台读取资料、整理笔记、管理下载或调整功能区；显示简要执行状态，可随时停止后续操作。
+- **学习资料管理**：收藏、稍后再看、逐节保存进度、选择性下载和离线查看；普通缓存与离线资料分开管理。
+- **多种操作方式**：根据系统适配键盘、鼠标、触控板、触摸及窗口尺寸；各端具体验证记录见对应目录。
 
-## 可以做什么
+## 默认校内 AI：有效至 2026 年 11 月 1 日
 
-- 查看自己的课表与历史课次，搜索课程，收藏或稍后再看，保存每节课的学习进度。
-- 按时间线浏览高清课件和转写，去黑边、合并连续重复课件；主动打开视频后可寻址、调速或全屏观看。
-- 调整学习功能区，记录带来源与时间点的多篇笔记，管理、重命名及导出笔记。
-- 下载当前账号可访问的课件、转写和视频，管理离线资料与普通缓存。
-- 使用课程问答、本页速览及可选的无实质讲解分析；AI 材料按课件和讲解时间对应，费用由用户的 DeepSeek 账户承担。
+获授权的新版安装包预置校内 DS 网关和校园版面 OCR，未配置个人 API 的用户可直接使用。首次实际调用时会说明：
 
-各平台实现与验证细节请读 [Android 说明](android/README.md)、[Android 功能对照](android/FEATURE_PARITY.md)、[Windows 说明](windows/README.md)、[Mac 说明](macOS/README.md)、[Mac 功能对照](macOS/FEATURE_PARITY.md)及 [Mac 分发说明](macOS/DISTRIBUTION.md)。[Windows 功能对照](windows/FEATURE_PARITY.md)包含迁移目标及未验收事项，不是一份全部完成的承诺清单。
+> 这是校内 AI，需要连接浙江大学校园网，效果可能不佳。想获得更佳效果，请在 API 设置中添加自己的 DeepSeek API。校内课件通过 OCR 提取文字，图示关系、公式或表格可能识别不完整。校内服务使用期限截至 2026 年 11 月 1 日，到期后可配置个人 DeepSeek API。
 
-## 使用边界与隐私
+- 已配置个人 DeepSeek API 时优先个人服务；Mac 还可以手动选择服务来源。
+- 校内模型使用学校提供的固定型号，课件经校园 OCR 转为文字后进入上下文；不将 OCR 等同于完整图像理解。
+- 日期为校内服务的使用期限说明，实际可用性仍取决于校园网络及服务端。应用不会因该日期删除笔记、离线课程或其他资料。
+- **开发者个人 API 不随安装包分发。** 用户自行添加的 API 只保存在自己的设备中。
+- 学校允许分发的两枚凭据通过构建配置注入安装包，不提交到公开 Git 历史；凭据嵌入客户端后可以被提取，因此只适用于已获授权的服务使用方式。
 
-学校登录通过官方认证页面完成，不要求把校园密码发给项目维护者。密钥、会话和课程资料不随发布包分发；笔记、离线资料与缓存保存在本机，网络异常不主动注销已保存身份。平台明确拒绝的资源停止访问；直播开始前的转写和可回放片段只在平台实际提供时可用。
+详见[校内服务与构建说明](docs/CAMPUS_AI.md)。不带构建凭据的源码仍可独立构建，并使用用户自行配置的个人 API。
 
-AI 仅在用户配置并启用相关功能后调用。问题及选定的课程上下文会发送给 DeepSeek；本机缓存可在应用内查看、关闭或清理。具体资料发送范围与存储方式见各客户端说明。
+## 全新安装与隐私
 
-智云助手是独立学习工具，不代表浙江大学或智云课堂运营方。公开源码不包含用户账号、API 密钥、登录会话或真实课程原文。反馈问题时请模糊用户信息和课程内容，勿上传密钥或 Cookie。
+发布包只包含程序、必要静态资源与获准分发的校内服务配置，**不包含开发者的校园账号、登录会话、问答及助手历史、笔记、收藏、学习进度、下载队列、离线课程、个人 API 或私人签名材料**。新用户从未登录、无学习记录的状态开始；覆盖更新不会主动清空现有用户本机资料。
 
-## 源码与构建
+学校登录通过官方认证完成。在线资料遵循账号的实际访问权限，不绕过平台明确限制。直播历史转写和可回看片段仅在平台实际提供时可用。
 
-- [Android 使用与构建](android/README.md)
-- [Android 验证说明](android/VERIFICATION.md)
-- [Android 第三方说明](android/THIRD_PARTY_NOTICES.md)
+只有用户启用 AI、发起任务或开启相应的自动生成选项后，相关课程上下文才会发送给所选 AI 服务；校内模式的课件还会发送至校园 OCR。具体存储、费用与功能范围见各客户端说明。
 
-- [Windows 使用与构建](windows/README.md)
-- [Windows 验证说明](windows/VERIFICATION.md)
-- [Windows 第三方说明](windows/THIRD_PARTY_NOTICES.md)
-- [原生 Mac 使用与构建](macOS/README.md)
-- [Mac 第三方说明](macOS/THIRD_PARTY_NOTICES.md)
-- [鸿蒙源码与构建](harmonyOS/README.md)
-- [鸿蒙开发者模式安装说明](harmonyOS/INSTALLATION.md)
-- [鸿蒙第三方说明](harmonyOS/THIRD_PARTY_NOTICES.md)
+## 源码、构建与验证
 
-仓库当前未新增本项目许可证，也没有将原作改为 MIT 授权。第三方组件保留各自现有许可证、版权和通知文件；如需其他使用授权，请与作者确认。
+| 平台 | 源码与构建 | 验证范围 |
+| --- | --- | --- |
+| Mac | [使用说明](macOS/README.md) · [分发说明](macOS/DISTRIBUTION.md) | [验证记录](macOS/VERIFICATION.md)，包含 Node/DOM、原生桥、隐藏 WebKit 与双架构编译 |
+| Windows | [使用说明](windows/README.md) · [功能对照](windows/FEATURE_PARITY.md) | [验证记录](windows/VERIFICATION.md)及两个架构的原生 [Actions](https://github.com/5zhangxuanhao5/ZhiyunAssistant/actions) |
+| Android | [使用说明](android/README.md) · [原生桥契约](android/ANDROID_BRIDGE_CONTRACT.md) | [验证记录](android/VERIFICATION.md)，区分自动检查、签名安装与真机验收 |
+| HarmonyOS | [使用说明](harmonyOS/README.md) · [自行签名安装](harmonyOS/INSTALLATION.md) | 自动回归与 ArkTS / HAP 编译；不将可编译等同于所有设备均已验收 |
+
+校内服务的默认接入不改变各端原有功能差异，也不将合成测试替代每个教室、外设和真实网络环境的验证。
+
+智云助手是独立学习工具，不代表浙江大学或智云课堂运营方。项目未新增 MIT 等源码许可证；第三方组件保留原有版权、许可证与通知文件，见各目录的 `THIRD_PARTY_NOTICES.md`。

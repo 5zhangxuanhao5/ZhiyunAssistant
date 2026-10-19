@@ -233,6 +233,7 @@ export struct AiPanel {
       if (this.configured && this.settings && !this.replacing) {
         Column({ space: 18 }) {
           Text('API 已连接').fontSize(20).fontColor('#20344D')
+          Text('校内 AI 与 OCR 需校园网，效果可能不佳；使用期限截至 2026 年 11 月 1 日。更佳效果请添加个人 DeepSeek API。').fontSize(12).fontColor('#64748B').width('100%')
           Text('密钥已加密保存在本机').fontSize(13).fontColor('#71839A')
           Text(AiClient.usage(this.store).prompt > 0 ? '已记录输入 ' + AiClient.usage(this.store).prompt + ' token · 缓存命中 ' + Math.round(AiClient.usage(this.store).hit / AiClient.usage(this.store).prompt * 100) + '%' : '使用记录将在请求完成后更新').fontSize(12).fontColor('#71839A')
           Button('删除 API 密钥').height(38).fontColor('#B44747').backgroundColor('#FCEEEE').onClick(() => { this.cancel(); AiClient.clearKey().then(() => { this.configured = false; this.settings = false; }).catch(() => this.error = '删除失败，请重试'); })

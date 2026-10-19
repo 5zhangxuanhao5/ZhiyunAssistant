@@ -13,7 +13,7 @@ for tool in node xcrun lipo sips iconutil codesign hdiutil ditto shasum; do
 done
 node --experimental-vm-modules generate-models.cjs
 version="$(node -p 'require("./package.json").version')"
-build_number=16
+build_number=17
 build_root="$PWD/build"
 mkdir -p "$build_root"
 staging="$(mktemp -d "$build_root/staging.XXXXXX")"
@@ -54,6 +54,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>NSHumanReadableCopyright</key><string>智云助手独立学习工具</string>
 </dict></plist>
 PLIST
+node scripts/campus-services.cjs "$app/Contents/Resources/CampusServices.json"
 # Ad-hoc signing is for local builds. Developer ID signing/notarization remains a
 # separate release step and never requires embedding certificates or secrets.
 codesign --force --deep --sign - --identifier cn.suike.slides.mac "$app"

@@ -1,8 +1,13 @@
+import { CampusServices } from '../services/CampusServices';
+import { util } from '@kit.ArkTS';
+import { promptAction } from '@kit.ArkUI';
 import { UIAbility, Want, AbilityConstant } from '@kit.AbilityKit';
 import { window, display } from '@kit.ArkUI';
 import { webview } from '@kit.ArkWeb';
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    CampusServices.configure(this.context.resourceManager.getRawFileContent('CampusServices.json').then((bytes: Uint8Array) => util.TextDecoder.create('utf-8').decodeToString(bytes)));
+    CampusServices.onNotice = async (message: string) => { await promptAction.showDialog({ title: '使用校内 AI', message, buttons: [{ text: '我知道了', color: '#2876C8' }] }); };
     webview.WebviewController.initializeWebEngine();
     AppStorage.setOrCreate<boolean>('foreground', true);
     ['safeTop', 'safeBottom', 'safeLeft', 'safeRight'].forEach((name: string) => AppStorage.setOrCreate<number>(name, 0));

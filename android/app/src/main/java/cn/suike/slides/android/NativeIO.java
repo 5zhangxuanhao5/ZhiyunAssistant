@@ -263,6 +263,7 @@ public final class NativeIO implements Closeable {
 
     private Object value(String method, JSONObject p) throws Exception {
         switch (method) {
+            case "app.campusServices": { try (InputStream input = activity.getAssets().open("CampusServices.json")) { ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] bytes = new byte[1024]; int count; while ((count = input.read(bytes)) != -1) { if (out.size() + count > 16384) throw new IOException("校内服务配置过大"); out.write(bytes,0,count); } return out.toString("UTF-8"); } catch (java.io.FileNotFoundException absent) { return "{}"; } }
             case "app.paths": return object("root", files.getPath(), "filesDir", files.getPath(),
                     "cacheDir", cache.getPath(), "tempDir", temporary.getPath());
             case "fs.exists": return path(p.getString("path")).exists();

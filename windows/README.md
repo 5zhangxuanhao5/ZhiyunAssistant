@@ -1,12 +1,19 @@
 # 智云助手 Windows 测试版
 
+## 2026-10-19 校内 AI / OCR 默认接入
+
+获授权的新版安装包在没有个人 API 时默认使用校内 DS 与校园 OCR；已配置个人 DeepSeek API 时优先个人服务。首次调用会提示校园网要求、效果可能不佳，以及校内服务使用期限截至 **2026 年 11 月 1 日**；想获得更佳效果可自行配置个人 DeepSeek API。校内模式先用 OCR 提取课件，可能遗漏图示关系或误识公式、表格。
+
+构建只注入获准分发的两项学校凭据，不包含开发者的个人 API、校园登录、聊天、笔记、学习记录或下载资源。普通源码不包含凭据，仍可构建个人 API 版本。详见[校内服务与构建](../docs/CAMPUS_AI.md)。以下历史验证与版本说明仅对应其标注版本，不代表本轮已完成同等真机验收。
+
+
 当前版本 **0.8.0-beta.1**。采用 Electron、React 与受限桌面服务，迁移现有智云课程 API、时间线、重复课件、笔记及 AI 上下文模型。目标是保留鸿蒙版本的学习行为；具体迁移目标见 [FEATURE_PARITY.md](FEATURE_PARITY.md)，实际测试范围见 [VERIFICATION.md](VERIFICATION.md)。
 
 ## 安装
 
 目标系统为 Windows 10/11 的 64 位版本，不提供 Windows 7/8/8.1 或 32 位安装包。Electron 的 Windows 平台范围与架构说明见其[官方 README](https://github.com/electron/electron#platform-support)和[安装文档](https://www.electronjs.org/docs/latest/tutorial/installation)。
 
-1. 在本仓库 [Releases](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases) 下载与电脑架构一致的包。
+1. 在本仓库 [Releases](https://github.com/5zhangxuanhao5/ZhiyunAssistant/releases) 下载与电脑架构一致的包。
 2. x64 用于 Intel/AMD 64 位电脑，ARM64 用于 Windows on ARM。Setup.exe 为当前用户安装，不要求先装 Node.js、DevEco Studio 或开发工具。
 3. ZIP 需完整解压后打开其中的智云助手程序，保留同目录的运行时和资源文件。ZIP 仍使用系统用户的数据目录，不是把资料保存在压缩包旁的便携数据模式。
 4. 首次阅读隐私说明，然后通过浙江大学官方登录窗口登录智云课堂。验证码、二次认证等由用户在官方页面完成。
@@ -79,7 +86,7 @@ node scripts/package-audit.cjs --dir release/win-unpacked --arch x64 --report wo
 node scripts/package-audit.cjs --dir release/win-arm64-unpacked --arch arm64 --report work/package-audit-arm64.json
 ~~~
 
-原生 CI 配置会分别在 x64 与 ARM64 Windows 运行器执行检查、构建、包审计、中文含空格路径安装、已安装应用启动烟测及卸载；两个架构都成功后，版本 Tag 的工作流才上传预发布包。查看 [Actions](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/actions)，未运行或失败的任务不能记作通过。x64 CI 使用 Windows Server 2025，不等同 Windows 10/11 每种显卡与外设已经实测。
+原生 CI 配置会分别在 x64 与 ARM64 Windows 运行器执行检查、构建、包审计、中文含空格路径安装、已安装应用启动烟测及卸载；两个架构都成功后，版本 Tag 的工作流才上传预发布包。查看 [Actions](https://github.com/5zhangxuanhao5/ZhiyunAssistant/actions)，未运行或失败的任务不能记作通过。x64 CI 使用 Windows Server 2025，不等同 Windows 10/11 每种显卡与外设已经实测。
 
 ## 已知验收边界
 

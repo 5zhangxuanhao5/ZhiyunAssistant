@@ -1,3 +1,4 @@
+import { CampusServices, CAMPUS_MODEL, CAMPUS_CHAT, CAMPUS_OCR } from './CampusServices';
 import { questionScope } from '../model/QuestionScope';
 import { AiUsage, AiUsageTotals, addUsage } from '../model/AiUsage';
 import { PageGroup } from '../model/Timeline';
@@ -48,7 +49,8 @@ export class AiClient {
   private epoch: number = 0;
   private aborts: Set<() => void> = new Set();
   private static alias(): Uint8Array { return new util.TextEncoder().encodeInto('zhiyun-deepseek-api-key-v1'); }
-  static async savedKey(): Promise<string> {
+  static async savedKey(): Promise<string> { await CampusServices.ready; return (await AiClient.personalKey()) || CampusServices.key(); }
+  static async personalKey(): Promise<string> {
     try { const query: asset.AssetMap = new Map(); query.set(asset.Tag.ALIAS, AiClient.alias()); query.set(asset.Tag.RETURN_TYPE, asset.ReturnType.ALL); const rows = await asset.query(query); const bytes = rows[0]?.get(asset.Tag.SECRET) as Uint8Array; return bytes ? util.TextDecoder.create('utf-8').decodeToString(bytes) : ''; } catch (_) { return ''; }
   }
   static async saveKey(value: string): Promise<void> {
@@ -58,10 +60,13 @@ export class AiClient {
   static async clearKey(): Promise<void> { const query: asset.AssetMap = new Map(); query.set(asset.Tag.ALIAS, AiClient.alias()); await asset.remove(query); }
   cancel(): void { this.epoch++; this.aborts.forEach((abort: () => void) => abort()); this.aborts.clear(); this.pending.forEach((r: http.HttpRequest) => r.destroy()); this.pending.clear(); }
   private async request(path: string, apiKey: string, body: string = ''): Promise<string> {
+    const campus = CampusServices.isCampus(apiKey);
+    if (campus && path === '/models') { const models: ModelsReply = { data: [{ id: CAMPUS_MODEL }] }; return JSON.stringify(models); }
+    if (campus && body) body = CampusServices.body(body);
     const req = http.createHttp(); this.pending.add(req);
     try {
-      const result = await req.request('https://api.deepseek.com' + path, { method: body ? http.RequestMethod.POST : http.RequestMethod.GET, header: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' }, extraData: body, expectDataType: http.HttpDataType.STRING, usingCache: false, connectTimeout: 15000, readTimeout: 120000, maxLimit: 12 * 1024 * 1024 });
-      if (result.responseCode === 401) throw new Error('API 密钥无效，请重新设置');
+      const result = await req.request(campus ? CAMPUS_CHAT : 'https://api.deepseek.com' + path, { method: body ? http.RequestMethod.POST : http.RequestMethod.GET, header: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' }, extraData: body, expectDataType: http.HttpDataType.STRING, usingCache: false, connectTimeout: 15000, readTimeout: 120000, maxLimit: 12 * 1024 * 1024 });
+      if (result.responseCode === 401) throw new Error(campus ? '校内 AI 身份验证失败，请检查服务使用期限或配置个人 DeepSeek API' : 'API 密钥无效，请重新设置');
       if (result.responseCode === 402) throw new Error('DeepSeek 账户余额不足');
       if (result.responseCode === 429) throw new Error('请求较多，请稍后再试');
       if (result.responseCode !== 200) throw new Error(`AI 请求失败（${result.responseCode}）`);
@@ -94,6 +99,15 @@ export class AiClient {
       pixels = await source.createPixelMap({ desiredSize: { width: Math.max(1, Math.round(info.size.width * ratio)), height: Math.max(1, Math.round(info.size.height * ratio)) } });
       packer = image.createImagePacker(); const bytes = await packer.packing(pixels, { format: 'image/jpeg', quality: 80 });
       const encoded = new util.Base64Helper().encodeToStringSync(new Uint8Array(bytes));
+      if (CampusServices.isCampus(apiKey)) {
+        const request = http.createHttp(); this.pending.add(request);
+        try {
+          const reply = await request.request(CAMPUS_OCR, { method: http.RequestMethod.POST, header: { Authorization: 'Bearer ' + CampusServices.ocr(), 'Content-Type': 'application/json' }, extraData: JSON.stringify({ file: encoded, fileType: 1 }), expectDataType: http.HttpDataType.STRING, usingCache: false, connectTimeout: 15000, readTimeout: 90000, maxLimit: 12 * 1024 * 1024 });
+          if (gen !== this.epoch) throw new Error('已取消');
+          if (reply.responseCode !== 200) throw new Error('校园 OCR 暂不可用，请检查校园网或配置个人 DeepSeek API');
+          return { text: CampusServices.text(reply.result as string), version };
+        } finally { request.destroy(); this.pending.delete(request); }
+      }
       const body: VisionRequest = { thinking: { type: 'disabled' }, model: 'deepseek-flash', max_tokens: 3000, stream: false, messages: [{ role: 'user', content: [{ type: 'text', text: '将这页课堂课件转成可供问答引用的完整内容：准确提取所有可辨认的文字、公式、图表和图示含义，保留结构。只记录图片证据；看不清处明确标注，不猜测。返回中文。' }, { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + encoded } }] }] };
       if (gen !== this.epoch) throw new Error('已取消');
       return { text: this.answer(await this.request('/chat/completions', apiKey, JSON.stringify(body))), version };
@@ -101,7 +115,7 @@ export class AiClient {
   }
   async classifySkip(store: LocalStore, course: Course, group: PageGroup, end: number, allLines: Transcript[] = []): Promise<SkipDecision> {
     this.usageStore = store;
-    const gen = this.epoch, apiKey = await AiClient.savedKey(); if (!apiKey) throw new Error('请先设置 API 密钥');
+    const gen = this.epoch, apiKey = await AiClient.savedKey(); if (!apiKey) throw new Error('请先设置 API 密钥'); await CampusServices.notify(store, apiKey);
     const reading = await this.readSlide(group.slide, store, apiKey, course); if (gen !== this.epoch) throw new Error('已取消');
     const before = allLines.filter((line: Transcript) => line.t < group.slide.t).slice(-8), after = allLines.filter((line: Transcript) => line.t >= end).slice(0, 8);
     const body: SkipRequest = { model: store.readJson('ai-model.txt') || 'deepseek-flash', max_tokens: 4000, stream: false, thinking: { type: 'disabled' }, response_format: { type: 'json_object' }, messages: [
@@ -121,14 +135,14 @@ export class AiClient {
     req.on('dataEnd', () => { try { parser.push(decoder.decodeToString(new Uint8Array(0), { stream: false }), changed); parser.finish(changed); resolveEnd(); } catch (err) { rejectEnd(err as Error); } });
     try {
       body.stream_options = { include_usage: true };
-      const status = await req.requestInStream('https://api.deepseek.com/chat/completions', { method: http.RequestMethod.POST, header: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json', Accept: 'text/event-stream', 'Accept-Encoding': 'identity' }, extraData: JSON.stringify(body), usingCache: false, connectTimeout: 15000, readTimeout: 120000 });
+      const status = await req.requestInStream(CampusServices.isCampus(apiKey) ? CAMPUS_CHAT : 'https://api.deepseek.com/chat/completions', { method: http.RequestMethod.POST, header: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json', Accept: 'text/event-stream', 'Accept-Encoding': 'identity' }, extraData: CampusServices.isCampus(apiKey) ? CampusServices.body(JSON.stringify(body)) : JSON.stringify(body), usingCache: false, connectTimeout: 15000, readTimeout: 120000 });
       if (status !== 200) throw new Error(status === 401 ? 'API 密钥无效，请重新设置' : status === 402 ? 'DeepSeek 账户余额不足' : `AI 请求失败（${status}）`);
       await ended; if (!parser.done) throw new Error('回答连接中断，请重试'); this.recordUsage(parser.usage); return parser;
     } finally { req.destroy(); this.pending.delete(req); this.aborts.delete(abort); }
   }
   async ask(store: LocalStore, slides: Slide[], lines: Transcript[], question: string, at: number, whole: boolean, model: string, history: ChatTurn[], progress: (value: string) => void, mode: string = 'auto', currentId: string = '', changed: (answer: string) => void = () => {}, selectedIds: string[] = [], prior: PriorCourseContext | undefined = undefined, loadContext: (() => Promise<CourseMaterials>) | undefined = undefined, onScope: (whole: boolean, expanded: boolean) => void = () => {}): Promise<string> {
     this.usageStore = store;
-    const gen = this.epoch, apiKey = await AiClient.savedKey(); if (!apiKey) throw new Error('请先设置 API 密钥');
+    const gen = this.epoch, apiKey = await AiClient.savedKey(); if (!apiKey) throw new Error('请先设置 API 密钥'); await CampusServices.notify(store, apiKey);
     const course = store.activeCourse;
     const scope = questionScope(question, slides, whole, selectedIds); whole = scope.whole; selectedIds = scope.selectedIds;
     let explicit = selectedIds.length > 0;

@@ -24,11 +24,11 @@ test('summary and question options sit in their pane header instead of an extra 
  assert.equal(doc.querySelector('[data-pane=summary] > .summary-options, [data-pane=question] > .question-options'),null);
  assert.equal(doc.querySelector('.ai-service-note'),null);
 });
-test('campus AI limits are explained once per account at first use, then never again',async t=>{
- const{r,app,doc}=await start(t,['notifyCampusAI']);app.put({prefs:{aiProvider:'campus'}});
- app.notifyCampusAI();assert.match(doc.querySelector('#toast').textContent,/校内 AI.*内网.*OCR/);assert.equal(app.state().prefs.campusLimitsSeen,true);await wait();
- assert.equal(JSON.parse(r.data.get('prefs.json')).campusLimitsSeen,true);
- doc.querySelector('#toast').textContent='';app.notifyCampusAI();assert.equal(doc.querySelector('#toast').textContent,'');
+test('campus AI first use shows a persistent notice with network, expiry and personal API advice',async t=>{
+ const{r,app,doc}=await start(t,['notifyCampusAI']);app.put({prefs:{aiProvider:'campus',campusLimitsSeen:true}});
+ app.notifyCampusAI();let notice=doc.querySelector('.campus-welcome');assert.ok(notice);assert.match(notice.textContent,/校园网.*效果可能不佳.*(?:自己的|个人).*DeepSeek.*2026 年 11 月 1 日/s);
+ assert.notEqual(app.state().prefs.campusOnboarding20261101,true);app.notifyCampusAI();assert.equal(doc.querySelectorAll('.campus-welcome').length,1);
+ notice.querySelector('button').click();await wait();assert.equal(JSON.parse(r.data.get('prefs.json')).campusOnboarding20261101,true);assert.equal(doc.querySelector('.campus-welcome'),null);app.notifyCampusAI();assert.equal(doc.querySelector('.campus-welcome'),null);
 });
 test('assistant history drops empty chats, deletes one chat and clears all with confirmation',async t=>{
  const{r,app,doc}=await start(t,['getGlobalAssistant','loadData']);const assistant=app.getGlobalAssistant();await assistant.show();

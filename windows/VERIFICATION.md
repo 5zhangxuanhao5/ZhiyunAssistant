@@ -21,7 +21,7 @@
 - 新增一项真实 Electron 主进程评估回归：没有 CommonJS require 的环境中，通过系统内建模块实际执行生产图像 Worker；安装检查仍使用真实 app.asar.unpacked 路径。
 - 连续转写阅读位置按句子和视口偏移保存，与视频播放进度分开；明确的时间引用优先于旧阅读位置。退出登录前等待笔记与进度保存，保存失败时保留当前账号和正文。
 - 修复笔记回车后的异步光标恢复与快速输入竞争。主窗口和官方登录窗口的尺寸、位置及最小尺寸均限制在所在显示器工作区。
-- 构建工具锁定 electron-builder 26.15.6，修复上游 ARM64 安装器漏装 EXE/DLL 的缺陷。两个架构已在 [原生运行 38328267506](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/actions/runs/38328267506)实际安装并启动；该运行对应此前的 84f55e8 提交，各通过 245 项单元检查和 32 项界面检查。最终发布包须以包含以上收尾修复的提交重新通过门禁，具体提交和运行见发布页。上游修复见 [PR 9989](https://github.com/electron-userland/electron-builder/pull/9989)。
+- 构建工具锁定 electron-builder 26.15.6，修复上游 ARM64 安装器漏装 EXE/DLL 的缺陷。两个架构已在 [原生运行 38328267506](https://github.com/5zhangxuanhao5/ZhiyunAssistant/actions/runs/38328267506)实际安装并启动；该运行对应此前的 84f55e8 提交，各通过 245 项单元检查和 32 项界面检查。最终发布包须以包含以上收尾修复的提交重新通过门禁，具体提交和运行见发布页。上游修复见 [PR 9989](https://github.com/electron-userland/electron-builder/pull/9989)。
 - 本机为 macOS Apple Silicon，以上不扩写为 Windows 用户硬件、官方校园认证或真实教室媒体已全部验收。
 
 ## Windows CI 门禁
@@ -34,7 +34,7 @@
 4. 安装到中文含空格目录，启动安装后的 EXE，验证系统加密及解包后的真实图像 Worker；卸载后确认程序文件已经删除。
 5. 保留测试报告，两个架构都成功后才允许工作流上传预发布包。
 
-实际运行结果见 [GitHub Actions](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/actions)。工作流配置存在不等于已经成功运行；报告必须引用对应提交与运行。x64 的 Windows Server 运行器不能证明每个 Windows 10/11 桌面设备的兼容性。
+实际运行结果见 [GitHub Actions](https://github.com/5zhangxuanhao5/ZhiyunAssistant/actions)。工作流配置存在不等于已经成功运行；报告必须引用对应提交与运行。x64 的 Windows Server 运行器不能证明每个 Windows 10/11 桌面设备的兼容性。
 
 ## 仍需现场验证
 

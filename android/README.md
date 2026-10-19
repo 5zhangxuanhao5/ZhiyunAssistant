@@ -1,10 +1,17 @@
 # 智云助手 Android 版
 
+## 2026-10-19 校内 AI / OCR 默认接入
+
+获授权的新版安装包在没有个人 API 时默认使用校内 DS 与校园 OCR；已配置个人 DeepSeek API 时优先个人服务。首次调用会提示校园网要求、效果可能不佳，以及校内服务使用期限截至 **2026 年 11 月 1 日**；想获得更佳效果可自行配置个人 DeepSeek API。校内模式先用 OCR 提取课件，可能遗漏图示关系或误识公式、表格。
+
+构建只注入获准分发的两项学校凭据，不包含开发者的个人 API、校园登录、聊天、笔记、学习记录或下载资源。普通源码不包含凭据，仍可构建个人 API 版本。详见[校内服务与构建](../docs/CAMPUS_AI.md)。以下历史验证与版本说明仅对应其标注版本，不代表本轮已完成同等真机验收。
+
+
 Android 手机、平板和折叠屏客户端。沿用智云助手现有学习页面及课程、转写、笔记、AI、离线下载等共享逻辑，Android 系统负责官方登录、安全存储、文件、相机、媒体和窗口适配。各平台分别维护本机资料，不自动同步。
 
 ## 安装
 
-在本仓库 [Releases](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases) 下载 `ZhiyunAssistant-0.1.0-beta.2-Android.apk`，核对同一发布的 SHA256 后打开安装。适用于 Android 8.0 / API26 及以上，需 Android System WebView 100 或更新版本；不要求安装开发工具。安装确认由系统处理，不需要关闭系统安全防护。
+在本仓库 [Releases](https://github.com/5zhangxuanhao5/ZhiyunAssistant/releases) 下载 `ZhiyunAssistant-0.1.0-beta.2-Android.apk`，核对同一发布的 SHA256 后打开安装。适用于 Android 8.0 / API26 及以上，需 Android System WebView 100 或更新版本；不要求安装开发工具。安装确认由系统处理，不需要关闭系统安全防护。
 
 一个 APK 可用于手机、Android 平板和折叠屏；代码不依赖 CPU 原生库。当前为预览版，实际验证范围见 [VERIFICATION.md](VERIFICATION.md)，功能对照见 [FEATURE_PARITY.md](FEATURE_PARITY.md)。
 

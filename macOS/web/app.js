@@ -2,7 +2,7 @@ import { syncWindowChrome, appearanceMode, applyAppearanceMode } from "./themes.
 import { AppActions } from "./agent-runtime.js";
 import { AgentInterface } from "./agent-interface.js";
 import { GlobalAssistant } from "./agent-ui.js";
-import { AIConnection, CAMPUS_NOTICE, CAMPUS_LIMITS } from "./ai-connection.js";
+import { AIConnection, CAMPUS_NOTICE, CAMPUS_LIMITS, CAMPUS_FIRST_USE } from "./ai-connection.js";
 import {makeIcon,decorateAction,refreshThemeIcons} from "./theme-icons.js";
 import {mountThemePicker} from "./theme-picker.js";
 import {THEMES,themeFor,themeIcon,APPEARANCE_MODES} from "./theme-catalog.js";
@@ -200,10 +200,16 @@ function aiProviderChoices(paneKey) {
 }
 // The campus limits are explained once per account, the first time campus AI is actually used.
 function notifyCampusAI(target = "") {
-  if (aiConnection.effective() !== "campus" || campusNoticeShown || prefs.campusLimitsSeen) return;
-  campusNoticeShown = true; prefs.campusLimitsSeen = true; save("prefs.json", prefs).catch(() => {});
-  if (target === "agent" && globalAssistant?.root && !globalAssistant.root.hidden) globalAssistant.notice("校内 AI：" + campusLimitsText, "info");
-  else { toast("校内 AI：" + campusLimitsText); clearTimeout(toast.timer); toast.timer = setTimeout(() => $("#toast").classList.remove("show"), 7000); }
+  if (aiConnection.effective() !== "campus" || campusNoticeShown || prefs.campusOnboarding20261101 || document.querySelector('.campus-welcome')) return;
+  campusNoticeShown = true;
+  const previous = document.activeElement;
+  const overlay = el("div", { class: "campus-welcome", role: "dialog", "aria-modal": "true", "aria-labelledby": "campusWelcomeTitle" });
+  const accept = button("我知道了", () => {
+    prefs.campusOnboarding20261101 = true; save("prefs.json", prefs).catch(() => {}); overlay.remove(); previous?.focus?.();
+  }, "primary");
+  overlay.append(el("section", { class: "campus-welcome-card" }, [el("h2", { id: "campusWelcomeTitle", text: "使用校内 AI" }), el("p", { text: CAMPUS_FIRST_USE }), accept]));
+  overlay.addEventListener("keydown", event => { if (event.key === "Escape" || event.key === "Enter") { event.preventDefault(); accept.click(); } else if (event.key === "Tab") { event.preventDefault(); accept.focus(); } });
+  document.body.append(overlay); accept.focus();
 }
 function el(tag, attrs = {}, children = []) {
   const n = document.createElement(tag);

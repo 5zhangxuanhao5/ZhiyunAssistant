@@ -12,3 +12,6 @@ local.properties
 *.jks
 *.pem
 *.log
+
+# Authorized school services are injected by the release builder, never committed.
+**/CampusServices.json

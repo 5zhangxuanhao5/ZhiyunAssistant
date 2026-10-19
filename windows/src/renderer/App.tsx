@@ -23,6 +23,7 @@ function Modal({title,onClose,children,className=''}:{title:string;onClose:()=>v
 function Consent({onAccept}:{onAccept:()=>void}){return <div className="welcome"><img src="icon.png"/><h1>智云助手</h1><section className="privacy-card"><h2>隐私与数据</h2><p>校园登录在浙江大学官方页面完成。课程资源按你的账号权限访问。</p><p>笔记、学习进度、收藏和离线下载保存在本机。API 密钥由系统加密保存；只有你启用 AI 时，所选课程内容和提问才会发送给 DeepSeek。</p><p>缓存可在主页管理，离线课程和笔记单独管理。本应用为独立学习工具，不代表学校或智云课堂。</p><Button className="primary" onClick={onAccept}>同意并继续</Button></section></div>;}
 type Route={page:string;course?:Course;courseGroup?:any;rows?:Course[];title?:string;noteId?:string;at?:number;reference?:any;batchGroups?:any[];batchScope?:BatchScope;collectionKind?:string;view?:any};
 export default function App(){
+ useEffect(()=>window.zhiyun.on('ai.campusNotice',(value:{message:string})=>window.alert(value.message)),[]);
  const [account,setAccount]=useState<Account|null>(null),[ready,setReady]=useState(false),[consent,setConsent]=useState(false),[route,setRoute]=useState<Route>({page:'classroom'}),[history,setHistory]=useState<Route[]>([]),[myTab,setMyTab]=useState('recent'),[modal,setModal]=useState('');
  const {notice,show}=useNotice();const [busy,setBusy]=useState(false),[collectionVersion,bumpCollections]=useState(0);
  const loggingOut=useRef(false),[logoutBusy,setLogoutBusy]=useState(false);

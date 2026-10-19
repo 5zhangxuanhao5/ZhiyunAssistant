@@ -16,3 +16,6 @@ user-data/
 .DS_Store
 staging-app/
 panes-test-results/
+
+# Authorized school services are injected by the release builder, never committed.
+**/CampusServices.json

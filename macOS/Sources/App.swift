@@ -793,7 +793,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             self.pendingRequests.remove(id);guard !self.loggingOut,self.cancelledRequests.remove(id)==nil else{self.reply(id,nil,"请求已取消");return}
             let task=self.network.dataTask(with:request){data,response,error in DispatchQueue.main.async{
                 self.requests.removeValue(forKey:id);if self.cancelledRequests.remove(id) != nil || self.loggingOut{self.reply(id,nil,"请求已取消");return}
-                if let error=error{self.diagnostic("API error: "+error.localizedDescription);self.reply(id,nil,error.localizedDescription);return}
+                if let error=error{self.diagnostic("API error: "+error.localizedDescription);self.reply(id,nil,userError(error));return}
                 guard let data=data,data.count<16*1024*1024,let response=response as? HTTPURLResponse else{self.reply(id,nil,"课程响应异常");return}
                 self.pendingRequests.insert(id)
                 self.absorbCookies(response){
@@ -816,7 +816,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         absorbCookies(response){self.cookieRequest(url,range:request.value(forHTTPHeaderField:"Range")){base in var next=base;next.httpMethod=request.httpMethod;next.httpBody=request.httpBody;if let value=request.value(forHTTPHeaderField:"Content-Type"){next.setValue(value,forHTTPHeaderField:"Content-Type")};completionHandler(next)}}
     }
     func scoped(_ category:String)->URL { root.appendingPathComponent(account).appendingPathComponent(category) }
-    func cacheCategory(_ key:String)->String {if key.hasPrefix("vision-"){return "vision"};if key.hasPrefix("summary-"){return "summary"};if key.hasPrefix("chats-"){return "question"};if key.hasPrefix("skip-"){return "skip"};if key.hasPrefix("lesson-"){return "timeline"};return "schedule"}
+    func cacheCategory(_ key:String)->String {if key.hasPrefix("vision-"){return "vision"};if key.hasPrefix("summary-"){return "summary"};if key.hasPrefix("chats-"){return "question"};if key.hasPrefix("skip-"){return "skip"};if key.hasPrefix("lesson-") || key.hasPrefix("search-transcript-"){return "timeline"};return "schedule"}
     func cacheSettings()->[String:Bool] {guard let data=try? Data(contentsOf:scoped("data").appendingPathComponent("cache-settings.json")),let value=try? JSONSerialization.jsonObject(with:data) as? [String:Bool] else{return [:]};return value}
     func safeKey(_ key:String)->Bool { !key.isEmpty && key.count<200 && key.range(of:"^[A-Za-z0-9_.-]+$",options:.regularExpression) != nil && !key.contains("..") }
     func diagnostic(_ text:String){let path=root.appendingPathComponent("diagnostics.log");var lines=((try? String(contentsOf:path,encoding:.utf8)) ?? "").components(separatedBy:"\n").suffix(30).map{String($0)};lines.append(text);try? lines.joined(separator:"\n").write(to:path,atomically:true,encoding:.utf8)}
@@ -839,8 +839,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                     while self.preparedDragOrder.count>1 && (self.preparedDragOrder.count>8 || bytes()>64*1024*1024){self.preparedDrags.removeValue(forKey:self.preparedDragOrder.removeFirst())}
                     self.reply(id,["token":key])
                 }
-            }catch{self.reply(id,nil,error.localizedDescription)}}
-        case "dragImage": do{try dragImage(p);reply(id,true)}catch{reply(id,nil,error.localizedDescription)}
+            }catch{self.reply(id,nil,userError(error))}}
+        case "dragImage": do{try dragImage(p);reply(id,true)}catch{reply(id,nil,userError(error))}
         case "toolbar": updateToolbar(name:p["name"] as? String ?? "",loggedIn:p["loggedIn"] as? Bool == true);reply(id,true)
         case "windowChrome": applyWindowChrome(p["color"] as? String ?? "",mode:p["mode"] as? String ?? "system") ? reply(id,true):reply(id,nil,"颜色无效")
         case "resumeSession": resumeOfficialSession{ready in self.reply(id,["ready":ready])}
@@ -878,7 +878,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             storageQueue.async{do{try writeLogoutMarker(in:self.root);DispatchQueue.main.async{self.performLogout(id)}}catch{self.reply(id,nil,"无法保存退出状态，请重试")}}
         case "identity":
             let allowUI=credentialUIAllowed
-            storageQueue.async{if let text=p["text"] as? String{do{try self.saveIdentity(text,allowUI:allowUI);self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}}else{self.reply(id,self.storedIdentity())}}
+            storageQueue.async{if let text=p["text"] as? String{do{try self.saveIdentity(text,allowUI:allowUI);self.reply(id,true)}catch{self.reply(id,nil,userError(error))}}else{self.reply(id,self.storedIdentity())}}
         case "account": let next=digest(p["id"] as? String ?? "guest");if next != account{accountGeneration=UUID();clearPreparedImages()};account=next;reply(id,true)
         case "read":
             guard let key=p["key"] as? String,safeKey(key) else{reply(id,nil,"文件名无效");return}
@@ -889,7 +889,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             guard let key=p["key"] as? String,safeKey(key),let text=p["text"] as? String,text.utf8.count<32*1024*1024 else{reply(id,nil,"文件内容无效");return}
             let cached=p["cache"] as? Bool == true,enabled=cacheSettings()[cacheCategory(key)] != false,path=scoped(cached ? "cache":"data").appendingPathComponent(key)
             if cached && !enabled{reply(id,true);return}
-            storageQueue.async{do{try self.fm.createDirectory(at:path.deletingLastPathComponent(),withIntermediateDirectories:true);try text.write(to:path,atomically:true,encoding:.utf8);self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}}
+            storageQueue.async{do{try self.fm.createDirectory(at:path.deletingLastPathComponent(),withIntermediateDirectories:true);try text.write(to:path,atomically:true,encoding:.utf8);self.reply(id,true)}catch{self.reply(id,nil,userError(error))}}
         case "keychainStatus":
             let name=account+"-deepseek";storageQueue.async{
                 let api=self.credentialCache.requiresAuthorization([name])
@@ -931,7 +931,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             var settings=cacheSettings()
             if let category=p["category"] as? String,let enabled=p["enabled"] as? Bool {
                 guard known.contains(category) else{reply(id,nil,"缓存分类无效");return};settings[category]=enabled;let value=settings
-                storageQueue.async{do{try self.fm.createDirectory(at:settingsFile.deletingLastPathComponent(),withIntermediateDirectories:true);try JSONSerialization.data(withJSONObject:value).write(to:settingsFile,options:.atomic);self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}};return
+                storageQueue.async{do{try self.fm.createDirectory(at:settingsFile.deletingLastPathComponent(),withIntermediateDirectories:true);try JSONSerialization.data(withJSONObject:value).write(to:settingsFile,options:.atomic);self.reply(id,true)}catch{self.reply(id,nil,userError(error))}};return
             }
             if p["clear"] as? Bool == true {
                 let category=p["category"] as? String,keys=p["keys"] as? [String]
@@ -947,7 +947,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                             for path in [cache,images,self.root.appendingPathComponent("diagnostics.log")]{if self.fm.fileExists(atPath:path.path){try self.fm.removeItem(at:path)}}
                         }
                         if category==nil{DispatchQueue.main.async{self.store.removeData(ofTypes:[WKWebsiteDataTypeDiskCache,WKWebsiteDataTypeMemoryCache],modifiedSince:.distantPast){self.reply(id,true)}}}else{self.reply(id,true)}
-                    }catch{self.reply(id,nil,error.localizedDescription)}
+                    }catch{self.reply(id,nil,userError(error))}
                 }
             }else {
                 let value=settings;storageQueue.async{var entries=[String:[[String:Any]]]();for category in known{entries[category]=[]}
@@ -957,7 +957,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }
         case "resourceSize":
             guard let url=URL(string:p["url"] as? String ?? ""),trusted(url) else{reply(id,nil,"资源地址不支持");return}
-            cookieRequest(url){request in var request=request;request.httpMethod="HEAD";self.network.dataTask(with:request){_,response,error in if let error=error{self.reply(id,nil,error.localizedDescription)}else if let response=response as? HTTPURLResponse,(200..<300).contains(response.statusCode){self.absorbCookies(response);self.reply(id,max(0,response.expectedContentLength))}else{self.reply(id,0)}}.resume()}
+            cookieRequest(url){request in var request=request;request.httpMethod="HEAD";self.network.dataTask(with:request){_,response,error in if let error=error{self.reply(id,nil,userError(error))}else if let response=response as? HTTPURLResponse,(200..<300).contains(response.statusCode){self.absorbCookies(response);self.reply(id,max(0,response.expectedContentLength))}else{self.reply(id,0)}}.resume()}
         case "saveResource":
             guard let key=p["lesson"] as? String,safeKey(key),let name=p["name"] as? String,safeKey(name),let url=URL(string:p["url"] as? String ?? ""),trusted(url) else{reply(id,nil,"下载参数无效");return}
             let path=scoped("offline").appendingPathComponent(key).appendingPathComponent(name);pendingDownloads[id]=path
@@ -968,13 +968,13 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                     if existing>0{self.pendingDownloads.removeValue(forKey:id);self.reply(id,["name":name,"size":existing]);return}
                     self.cookieRequest(url){request in
                         self.pendingDownloads.removeValue(forKey:id);guard self.cancelledDownloads.remove(id)==nil else{self.reply(id,nil,"已暂停");return}
-                        let job=Download(request,destination:path,event:{bytes,total in self.event("download",["id":id,"bytes":bytes,"total":total])},finish:{result in DispatchQueue.main.async{self.downloads.removeValue(forKey:id);self.cancelledDownloads.remove(id);switch result{case .success(let name):self.reply(id,["name":name,"size":(try? path.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0]);case .failure(let error):self.reply(id,nil,error.localizedDescription)}}});self.downloads[id]=job
+                        let job=Download(request,destination:path,event:{bytes,total in self.event("download",["id":id,"bytes":bytes,"total":total])},finish:{result in DispatchQueue.main.async{self.downloads.removeValue(forKey:id);self.cancelledDownloads.remove(id);switch result{case .success(let name):self.reply(id,["name":name,"size":(try? path.resourceValues(forKeys:[.fileSizeKey]).fileSize) ?? 0]);case .failure(let error):self.reply(id,nil,userError(error))}}});self.downloads[id]=job
                     }
                 }
             }
         case "writeOffline":
             guard let key=p["lesson"] as? String,safeKey(key),let name=p["name"] as? String,safeKey(name),let text=p["text"] as? String,text.utf8.count<32*1024*1024 else{reply(id,nil,"下载参数无效");return}
-            let path=scoped("offline").appendingPathComponent(key).appendingPathComponent(name);storageQueue.async{do{try self.fm.createDirectory(at:path.deletingLastPathComponent(),withIntermediateDirectories:true);try text.write(to:path,atomically:true,encoding:.utf8);self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}}
+            let path=scoped("offline").appendingPathComponent(key).appendingPathComponent(name);storageQueue.async{do{try self.fm.createDirectory(at:path.deletingLastPathComponent(),withIntermediateDirectories:true);try text.write(to:path,atomically:true,encoding:.utf8);self.reply(id,true)}catch{self.reply(id,nil,userError(error))}}
         case "deleteOffline":
             guard let key=p["lesson"] as? String,safeKey(key) else{reply(id,nil,"课程标识无效");return}
             let folder=scoped("offline").appendingPathComponent(key)
@@ -982,7 +982,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             for (operation,job) in downloads where job.destination.deletingLastPathComponent()==folder{cancelledDownloads.insert(operation);job.cancel()}
             // Pending cookie/file checks belong to the bridge request as well. Front-end
             // pause/delete invalidates its generation; never allow active commits afterward.
-            storageQueue.async{do{if self.fm.fileExists(atPath:folder.path){try self.fm.removeItem(at:folder)};self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}}
+            storageQueue.async{do{if self.fm.fileExists(atPath:folder.path){try self.fm.removeItem(at:folder)};self.reply(id,true)}catch{self.reply(id,nil,userError(error))}}
         case "cancelDownload":
             if let operation=p["id"] as? String,pendingDownloads[operation] != nil || downloads[operation] != nil{cancelledDownloads.insert(operation);downloads[operation]?.cancel()};reply(id,true)
         case "pickImage":
@@ -996,10 +996,10 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }
         case "saveNoteImage":
             guard let value=p["data"] as? String else{reply(id,nil,"图片内容无效");return};let folder=scoped("data")
-            storageQueue.async{do{self.reply(id,try storeNoteImage(value,in:folder))}catch{self.reply(id,nil,error.localizedDescription)}}
+            storageQueue.async{do{self.reply(id,try storeNoteImage(value,in:folder))}catch{self.reply(id,nil,userError(error))}}
         case "export":
             guard let text=p["text"] as? String,text.utf8.count<=128*1024*1024,let name=p["name"] as? String,!name.isEmpty else{reply(id,nil,"导出内容无效");return}
-            let panel=NSSavePanel();panel.nameFieldStringValue=(name as NSString).lastPathComponent;panel.beginSheetModal(for:window){result in guard result == .OK,let path=panel.url else{self.reply(id,false);return};self.storageQueue.async{do{try text.write(to:path,atomically:true,encoding:.utf8);self.reply(id,true)}catch{self.reply(id,nil,error.localizedDescription)}}}
+            let panel=NSSavePanel();panel.nameFieldStringValue=(name as NSString).lastPathComponent;panel.beginSheetModal(for:window){result in guard result == .OK,let path=panel.url else{self.reply(id,false);return};self.storageQueue.async{do{try text.write(to:path,atomically:true,encoding:.utf8);self.reply(id,true)}catch{self.reply(id,nil,userError(error))}}}
         case "copy":
             guard let text=p["text"] as? String else{reply(id,nil,"复制内容无效");return};let html=p["html"] as? String,image=p["image"] as? String,folder=scoped("data")
             storageQueue.async{
@@ -1012,7 +1012,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                         if data.starts(with:[0x89,0x50,0x4e,0x47]){imageData=data;imageType = .png}else{guard let source=CGImageSourceCreateWithData(data as CFData,nil),let image=CGImageSourceCreateImageAtIndex(source,0,nil),let tiff=NSBitmapImageRep(cgImage:image).representation(using:.tiff,properties:[:]) else{throw appError("无法复制这张图片")};imageData=tiff;imageType = .tiff}
                     }
                     DispatchQueue.main.async{let board=NSPasteboard.general;board.clearContents();board.setString(text,forType:.string);if let html=html{board.setString(html,forType:.html)};if let data=imageData,let type=imageType{board.setData(data,forType:type)};self.reply(id,true)}
-                }catch{self.reply(id,nil,error.localizedDescription)}
+                }catch{self.reply(id,nil,userError(error))}
             }
         case "clipboard":
             reply(id,NSPasteboard.general.string(forType:.string) ?? "")
@@ -1023,7 +1023,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                     let folder=self.fm.temporaryDirectory.appendingPathComponent("zhiyun-export-"+UUID().uuidString);defer{try? self.fm.removeItem(at:folder)}
                     do {var size=0;for file in files {guard let name=file["path"],!name.hasPrefix("/"),!name.contains("\\"),!name.components(separatedBy:"/").contains("..") else {throw NSError(domain:"导出",code:1,userInfo:[NSLocalizedDescriptionKey:"导出文件名无效"])};let data=file["base64"].flatMap{Data(base64Encoded:$0)} ?? Data((file["text"] ?? "").utf8);size+=data.count;guard size<512*1024*1024 else {throw NSError(domain:"导出",code:2,userInfo:[NSLocalizedDescriptionKey:"本次导出超过512MB，请分批导出"])};let path=folder.appendingPathComponent(name);try self.fm.createDirectory(at:path.deletingLastPathComponent(),withIntermediateDirectories:true);try data.write(to:path)}
                         let process=Process();process.executableURL=URL(fileURLWithPath:"/usr/bin/ditto");process.arguments=["-c","-k",folder.path,output.path];try process.run();process.waitUntilExit();if process.terminationStatus==0{self.reply(id,true)}else{self.reply(id,nil,"笔记打包失败")}
-                    }catch{self.reply(id,nil,error.localizedDescription)}
+                    }catch{self.reply(id,nil,userError(error))}
                 }
             }
         case "ai": startAI(id,p)
@@ -1090,7 +1090,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 session.dataTask(with:request){data,response,error in
                     session.finishTasksAndInvalidate()
                     let text:Result<String,Error>=Result{guard error==nil,(response as? HTTPURLResponse)?.statusCode==200,let data=data else{throw appError("校园OCR暂时不可用，将尝试本机识别")};return try campusLayoutText(data)}
-                    DispatchQueue.main.async{self.ocrOperations.removeValue(forKey:id);guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"账号已切换");return};switch text{case .success(let text):self.reply(id,["text":text,"method":"campus-layout-ocr"]);case .failure(let error):self.reply(id,nil,error.localizedDescription)}}
+                    DispatchQueue.main.async{self.ocrOperations.removeValue(forKey:id);guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"账号已切换");return};switch text{case .success(let text):self.reply(id,["text":text,"method":"campus-layout-ocr"]);case .failure(let error):self.reply(id,nil,userError(error))}}
                 }.resume()
             }
         }
@@ -1122,12 +1122,12 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 case .ready:
                     guard let port=self.listener.port else{DispatchQueue.main.async{self.serverFailure("未能分配本机端口")};return}
                     DispatchQueue.main.async{self.origin="http://127.0.0.1:"+String(port.rawValue);self.web.load(URLRequest(url:URL(string:self.origin+"/"+self.token+"/index.html")!))}
-                case .failed(let error):DispatchQueue.main.async{self.serverFailure(error.localizedDescription)}
+                case .failed(let error):DispatchQueue.main.async{self.serverFailure(userError(error))}
                 default:break
                 }
             }
             listener.newConnectionHandler={connection in connection.start(queue:self.queue);self.read(connection,Data())};listener.start(queue:queue)
-        }catch{serverFailure(error.localizedDescription)}
+        }catch{serverFailure(userError(error))}
     }
     func read(_ connection:NWConnection,_ previous:Data) {
         connection.receive(minimumIncompleteLength:1,maximumLength:65536) { data,_,complete,error in var total=previous; if let data=data { total.append(data) }; if total.count>65536 { connection.cancel();return }; if let text=String(data:total,encoding:.utf8),text.contains("\r\n\r\n") { self.serve(connection,text) } else if !complete && error == nil { self.read(connection,total) } else { connection.cancel() } }
@@ -1242,15 +1242,26 @@ final class RemoteTransfer:NSObject,URLSessionDataDelegate {
 }
 // Status-specific messages never echo response bodies or authentication material.
 /// Network failures read as short Chinese reasons instead of the system's English sentence.
-func aiNetworkFailure(_ error:Error)->String{
-    switch (error as? URLError)?.code {
-    case .timedOut?:return "请求超时"
-    case .notConnectedToInternet?,.networkConnectionLost?:return "网络连接中断"
-    case .cannotFindHost?,.dnsLookupFailed?,.cannotConnectToHost?:return "无法连接到服务"
-    case .cancelled?:return "请求已取消"
-    default:return error.localizedDescription.trimmingCharacters(in:CharacterSet(charactersIn:"。. "))
+func userError(_ error:Error)->String {
+    let native = error as NSError
+    if native.domain == NSURLErrorDomain {
+        switch URLError.Code(rawValue:native.code) {
+        case .timedOut:return "网络请求超时，请稍后重试"
+        case .notConnectedToInternet:return "当前没有网络连接，请连接网络后重试"
+        case .networkConnectionLost:return "网络连接中断，请重试"
+        case .cannotFindHost,.dnsLookupFailed:return "无法解析服务器地址，请检查网络"
+        case .cannotConnectToHost:return "无法连接服务器，请稍后重试"
+        case .cancelled:return "请求已取消"
+        case .secureConnectionFailed,.serverCertificateHasBadDate,.serverCertificateUntrusted,.serverCertificateHasUnknownRoot,.serverCertificateNotYetValid,.clientCertificateRejected,.clientCertificateRequired:return "安全连接校验失败，请检查系统时间或网络"
+        case .badURL,.unsupportedURL:return "资源地址不受支持"
+        case .badServerResponse,.cannotDecodeRawData,.cannotDecodeContentData,.cannotParseResponse:return "服务器响应异常，请稍后重试"
+        default:return "网络请求失败，请检查网络后重试"
+        }
     }
+    return native.localizedDescription
 }
+func aiNetworkFailure(_ error:Error)->String { userError(error).trimmingCharacters(in:CharacterSet(charactersIn:"。. ")) }
+
 func aiHTTPFailure(_ status:Int)->String? {
     switch status {
     case 200:return nil

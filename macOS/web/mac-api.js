@@ -1,5 +1,6 @@
 import { Zhiyun } from "./models/Zhiyun.js";
 import { shanghaiDate } from "./models/Timeline.js";
+import { userMessage } from "./user-errors.js";
 
 const keyOf = (row) => String(row.courseId) + ":" + String(row.subId);
 const scopeOf = (account) =>
@@ -103,7 +104,11 @@ export function normalizeScheduleEnvelope(data) {
 /** Mac adapter; shared endpoint, permission and parsing implementations stay intact. */
 export class MacZhiyun extends Zhiyun {
   async request(path, body = "", origin = undefined) {
-    const text = await super.request(path, body, origin);
+    if (this.signal?.aborted) throw new Error('请求已取消');
+    let text;
+    try { text = await super.request(path, body, origin); }
+    catch (error) { const message = userMessage(error); if (message === error.message) throw error; throw new Error(message); }
+    if (this.signal?.aborted) throw new Error('请求已取消');
     if (path.startsWith("/courseapi/v2/schedule/get-week-schedules")) {
       const data=JSON.parse(text),normalized=normalizeScheduleEnvelope(data);
       return JSON.stringify({...data,result:{list:normalized.days},__macScheduleAuthoritative:normalized.authoritative});
@@ -114,8 +119,12 @@ export class MacZhiyun extends Zhiyun {
     maxSnapshots = 256,
     maxRecords = 12000,
     clock = () => Date.now() / 1000,
+    signal = null,
   } = {}) {
     super();
+    this.signal = signal;
+    this.abortRequest = () => this.cancel();
+    signal?.addEventListener('abort', this.abortRequest, { once: true });
     this.maxSnapshots = Math.max(
       1,
       Math.min(512, Math.round(maxSnapshots) || 256),
@@ -131,6 +140,14 @@ export class MacZhiyun extends Zhiyun {
     this.scheduleSnapshots = new Map();
     this.historyRuns = new Set();
   }
+  background(signal) {
+    const client = new MacZhiyun({ signal });
+    client.usePermissionStorage(this.permissionStorage);
+    client.slideOrigins = new Map(this.slideOrigins);
+    client.transcriptOrigins = new Map(this.transcriptOrigins);
+    return client;
+  }
+  dispose() { this.signal?.removeEventListener('abort', this.abortRequest); this.cancel(); }
   /** Explicit logout cleanup is available; automatic rebinding also clears records. */
   reset(account = null) {
     super.cancel();

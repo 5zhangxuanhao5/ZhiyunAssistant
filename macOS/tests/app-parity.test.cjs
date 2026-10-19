@@ -28,3 +28,9 @@ test('batch date navigation keeps selection and download options and permits can
  find('选择日期').click();await wait();doc.querySelector('.calendar-grid button').click();await wait();assert.equal(doc.querySelector('#modalTitle').textContent,'批量下载');assert.equal(inputs()[0].checked,false);assert.equal(inputs()[2].checked,true);assert.equal(doc.querySelector('#modalBody input').checked,true);
  find('按课程').click();await wait();assert.equal(find('选择日期').hidden,true);app.closeModal();
 });
+test('plain times in AI answers link back into the open lesson; dated and out-of-range times stay text',async t=>{const{r,app}=await start(t,['rich']);await app.enter(r.current);
+ const node=app.rich('自我克制（00:12–00:30），另见 [01:00]；2026-10-10 00:20 那节课另说；09:59:59 超出本课，1234:56 也不是时间。');
+ assert.deepEqual([...node.querySelectorAll('a.time-link')].map(a=>[a.textContent,a.dataset.timeSeconds]),[['00:12','12'],['00:30','30'],['[01:00]','60']]);
+ assert.ok(node.textContent.includes('2026-10-10 00:20 那节课'));
+ node.querySelector('a.time-link').click();assert.equal(app.state().at,12);
+});

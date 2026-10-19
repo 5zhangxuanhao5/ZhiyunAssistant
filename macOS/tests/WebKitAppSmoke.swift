@@ -64,7 +64,7 @@ final class SmokeServer {
         return #"""
         (()=>{
           const course=\#(json), listeners=new Map(), files=new Map(), operations=new Map(),authorizationScenario=\#(requires);let sequence=0,sessionAuthorizationRequired=authorizationScenario,apiAuthorizationRequired=authorizationScenario,secret=authorizationScenario?'sk-synthetic-saved-only-key-123456':'';
-          window.__smoke={errors:[],requests:[],calls:[],store:files,aiCalls:0,status:'loading',checks:[],clipboard:null,confirms:[],authorizationScenario,authorizations:[],secretWrites:0};const originalConfirm=window.confirm;window.confirm=(message)=>{const value=originalConfirm(message);window.__smoke.confirms.push({message,value});return value};const originalPrompt=window.prompt;window.prompt=(...args)=>{const value=originalPrompt(...args);window.__smoke.lastPrompt=value;return value};
+          window.__smoke={course,errors:[],requests:[],calls:[],store:files,aiCalls:0,status:'loading',checks:[],clipboard:null,confirms:[],authorizationScenario,authorizations:[],secretWrites:0};const originalConfirm=window.confirm;window.confirm=(message)=>{const value=originalConfirm(message);window.__smoke.confirms.push({message,value});return value};const originalPrompt=window.prompt;window.prompt=(...args)=>{const value=originalPrompt(...args);window.__smoke.lastPrompt=value;return value};
           window.addEventListener('error',e=>{if(e.message)window.__smoke.errors.push(e.message)});
           window.addEventListener('unhandledrejection',e=>window.__smoke.errors.push(String(e.reason?.stack||e.reason)));
           const seed=(k,v)=>files.set(k,JSON.stringify(v));
@@ -108,6 +108,8 @@ final class SmokeServer {
                     const prior=params.messages.filter(m=>m.tool_calls).flatMap(m=>m.tool_calls).map(c=>c.function.name==='app_do'?JSON.parse(c.function.arguments).action:c.function.name);
                     let name,args;if(!prior.includes('app_state')){name='app_state';args={}}else if(!prior.includes('app_actions')){name='app_actions';args={search:'笔记'}}else if(!prior.includes('note_create')){name='app_do';args={action:'note_create',args:{name:'助手流程笔记'}}}else if(!prior.includes('note_write')){name='app_do';args={action:'note_write',args:{text:'Synthetic agent wrote this note.',mode:'append'}}}
                     if(name)value={answer:'',calls:[{id:'agent-tool-'+sequence,type:'function',function:{name,arguments:JSON.stringify(args)}}]};else value={answer:'**已完成**，已创建笔记并写入正文。',calls:[]};
+                    if(window.__smoke.agentScenario==='seek')value={answer:'',calls:[{id:'same-course-seek',type:'function',function:{name:'app_do',arguments:JSON.stringify({action:'open_lesson',args:{key:course.courseId+'-'+course.subId,at:21},reply:'已跳到 00:21。'})}}]};
+                    if(window.__smoke.agentScenario==='search'){if(prior.includes('search_material'))window.__smoke.lastSearchOutput=JSON.parse(params.messages.filter(m=>m.role==='tool').at(-1).content);value=prior.includes('search_material')?{answer:'**已汇总**两节课的概念讲解位置。',calls:[]}:{answer:'',calls:[{id:'whole-course-search',type:'function',function:{name:'app_do',arguments:JSON.stringify({action:'search_material',args:{query:'concept',courseId:course.courseId}})}}]};}
                   }
                   queueMicrotask(()=>window.native.event({name:'ai',value:{id,delta:value.answer}}));break;
                 case'saveNoteImage':if(!params.data?.startsWith('data:image/png;base64,'))throw new Error('Unmocked fixture image format');value='note-assets/'+'a'.repeat(64)+'.png';break;
@@ -204,6 +206,22 @@ final class SmokeServer {
       agentDrag(grip,0,0);agentPointer(document.body,'pointerdown',5,5);assert(!assistant.classList.contains('selected'),'outside press exits floating adjustment');
       const agentInput=assistant.querySelector('textarea');agentInput.value='创建一篇笔记并写入测试内容';click('发送',assistant);await until(()=>assistant.querySelector('.agent-status').textContent==='已完成','agent tool loop completion');
       assert(q('.notes-editor').textContent.includes('Synthetic agent wrote this note.'),'agent tool loop writes to the actual note editor');assert(qa('.agent-step[data-ok=true]').length===4,'agent reports every successful tool step');assert(assistant.querySelector('.agent-message strong'),'global assistant formats Markdown without raw HTML');
+      const editorBeforeSeek=q('.notes-editor'), requestsBeforeSeek=window.__smoke.requests.length, callsBeforeSeek=window.__smoke.aiCalls;
+      window.__smoke.agentScenario='seek';agentInput.value='打开到这节课的 00:21';click('发送',assistant);
+      await until(()=>window.__smoke.aiCalls>callsBeforeSeek&&assistant.querySelector('.agent-status').textContent==='已完成','same-lesson seek completion');
+      assert(window.__smoke.requests.length===requestsBeforeSeek,'same-lesson open action seeks without reloading network data');
+      assert(q('.notes-editor')===editorBeforeSeek&&q('#transcriptBody .caption-line[data-t="21"]'),'same-lesson seek keeps the note editor and reaches the requested transcript');
+      const other={...window.__smoke.course,subId:'earlier-fixture',start:window.__smoke.course.start-86400,end:window.__smoke.course.end-86400};
+      window.__smoke.store.set('lesson-'+other.courseId+'-'+other.subId+'.json',JSON.stringify({course:other,slides:[],lines:[{t:50,end:70,text:'Another cached concept.'}]}));
+      window.__smoke.store.set('agent-catalogue-'+other.courseId+'.json',JSON.stringify({checkedAt:Date.now(),courses:[window.__smoke.course,other]}));
+      const requestsBeforeSearch=window.__smoke.requests.length,callsBeforeSearch=window.__smoke.aiCalls;
+      window.__smoke.agentScenario='search';agentInput.value='这门课还有哪几节讲过 concept？列出课次和大致时间。';click('发送',assistant);
+      await until(()=>window.__smoke.aiCalls>callsBeforeSearch&&assistant.querySelector('.agent-status').textContent==='已完成','cached whole-course search completion');
+      assert(window.__smoke.requests.length===requestsBeforeSearch,'whole-course cached search needs no platform request');
+      assert(window.__smoke.aiCalls-callsBeforeSearch===2,'whole-course search finishes in one tool call and one final model response');
+      const searchOutput=window.__smoke.lastSearchOutput;
+      assert(searchOutput?.lessons.length===2&&searchOutput.complete&&searchOutput.next===null,'whole-course search includes the earlier lesson in one aggregate');
+      window.__smoke.agentScenario='';
       click('收为功能区',assistant);await until(()=>q('[data-pane=agent] .global-agent'),'assistant pane docking');assert(qa('#stage>.pane').length===7&&q('[data-pane=agent]').clientWidth>0,'docked assistant participates in seven-pane layout');
       click('浮动显示',assistant);await until(()=>!q('[data-pane=agent]'),'assistant undocking');assert(assistant.parentElement===document.body,'undocked assistant remains outside route DOM');click('收起',assistant);await until(()=>assistant.hidden,'assistant minimise');assert(assistant.hidden&&q('.agent-bubble').hidden,'an idle minimised assistant leaves no floating entry');click('应用助手',q('#studyTools'));await until(()=>!assistant.hidden,'assistant reopens from the study tools');assert(assistant.querySelector('.agent-message strong'),'assistant can minimise without losing conversation');click('收起',assistant);await until(()=>assistant.hidden,'assistant minimise again');
       click('返回',q('#topActions'));await until(()=>q('#pageTitle').textContent==='我的课堂','study back to prior route');click('缓存设置',q('#navigation'));await until(()=>qa('.cache-row').length===7,'cache category list');assert(qa('.cache-row').every(n=>n.textContent.includes('查看详情')&&n.textContent.includes('清理')),'cache controls present for every category');

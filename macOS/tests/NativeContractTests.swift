@@ -57,6 +57,11 @@ final class SyntheticCourseProtocol:URLProtocol {
     }
     static func main()throws{
         if CommandLine.arguments.count==3,CommandLine.arguments[1].hasPrefix("--cold-session-"){try coldProcess(CommandLine.arguments[1],root:URL(fileURLWithPath:CommandLine.arguments[2],isDirectory:true));return}
+        for (code,expected) in [(URLError.timedOut,"网络请求超时，请稍后重试"),(.notConnectedToInternet,"当前没有网络连接，请连接网络后重试"),(.networkConnectionLost,"网络连接中断，请重试"),(.cannotFindHost,"无法解析服务器地址，请检查网络"),(.cancelled,"请求已取消"),(.serverCertificateUntrusted,"安全连接校验失败，请检查系统时间或网络")] {
+            let error=NSError(domain:NSURLErrorDomain,code:code.rawValue,userInfo:[NSLocalizedDescriptionKey:"English failure with a private URL"])
+            check(userError(error)==expected,"URLSession errors have Chinese user messages without URLs or system English")
+        }
+        check(userError(appError("当前账号没有这节课的访问权限"))=="当前账号没有这节课的访问权限","application permission errors keep their original meaning")
         let full=try requestedByteRange(nil,size:100);check(full.start==0 && full.end==99 && !full.partial,"full file")
         let empty=try requestedByteRange(nil,size:0);check(empty.start==0 && !empty.partial,"empty file")
         let bounded=try requestedByteRange("bytes=10-29",size:100);check(bounded.start==10 && bounded.end==29 && bounded.partial,"bounded byte range")
@@ -181,6 +186,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         // store and hidden window. No account/keychain reads or external requests.
         let application=NSApplication.shared;application.setActivationPolicy(.prohibited)
         let app=App();app.testSkipCookiePersistence=true;app.testSessionKeychain={_,_,_ in nil};let isolated=FileManager.default.temporaryDirectory.appendingPathComponent("zhiyun-native-profile-"+UUID().uuidString);app.root=isolated;defer{try? FileManager.default.removeItem(at:isolated)};app.origin="http://127.0.0.1:9876";app.token="fixture"
+        check(app.cacheCategory("search-transcript-fixture.json")=="timeline","background search transcripts obey the visible timeline cache settings and cleanup")
         let config=WKWebViewConfiguration();config.websiteDataStore=app.store;config.userContentController.add(app,name:"native")
         let view=WKWebView(frame:NSRect(x:0,y:0,width:600,height:400),configuration:config);view.uiDelegate=app;view.navigationDelegate=app
         let window=NSWindow(contentRect:view.frame,styleMask:[.titled],backing:.buffered,defer:false);window.contentView=view;window.isReleasedWhenClosed=false;app.window=window;app.web=view

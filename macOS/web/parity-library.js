@@ -1,4 +1,5 @@
 import { resolveMedia, mediaIdentity } from './models/Media.js';
+import { userMessage } from './user-errors.js';
 
 const TYPES = { slides: '课件', transcript: '转写', video: '视频' };
 const finite = n => Math.max(0, Number(n) || 0);
@@ -81,6 +82,9 @@ export class OfflineDownloads {
       const row = clone(raw); row.key = courseKey(row.course); row.version = 2; row.owner = this.owner; row.generation = finite(row.generation); row.options = { slides: false, transcript: false, video: false, ...row.options };
       if (['downloading', 'waiting'].includes(row.state)) row.state = 'paused'; row.inFlight = 0; row.inFlightTotal = 0; row.missing ||= []; row.completed ||= {}; row.files ||= []; row.planErrors ||= {};
       row.files = row.files.map(task => ({ ...task, type: task.type === '课件' ? 'slides' : task.type === '转写' ? 'transcript' : task.type === '视频' ? 'video' : task.type, state: row.completed[task.name] != null ? 'complete' : task.state || (row.state === 'failed' ? 'failed' : 'waiting'), error: task.error || (row.state === 'failed' && row.completed[task.name] == null ? '此前资源未完成' : ''), size: finite(task.size) }));
+      row.message = row.message ? userMessage(row.message) : ''; row.missing = row.missing.map(userMessage);
+      for (const task of row.files) if (task.error) task.error = userMessage(task.error);
+      for (const key of Object.keys(row.planErrors)) row.planErrors[key] = userMessage(row.planErrors[key]);
       row.bytes = row.manifestAvailable && !row.files.length ? finite(row.bytes) : Object.values(row.completed).reduce((n, bytes) => n + finite(bytes), 0); row.done = row.manifestAvailable && !row.files.length ? finite(row.done) : row.files.filter(f => f.state === 'complete').length; row.total = Math.max(row.bytes, finite(row.total)); return row;
     });
     this.tasks = this.rows.filter(row => ['paused', 'waiting', 'downloading'].includes(row.state)).sort((a, b) => finite(a.queueOrder) - finite(b.queueOrder)); this.notify('list'); return this.rows;
@@ -143,7 +147,7 @@ export class OfflineDownloads {
       for (const task of row.files) {
         this.assert(row, gen); if (row.completed[task.name] != null) { task.state = 'complete'; continue; }
         row.message = '正在下载' + TYPES[task.type]; row.currentFile = task.name; this.notify('progress', row);
-        try { await this.file(row, task, active); } catch (error) { if (error instanceof Stopped || !this.current(row, gen)) throw new Stopped(); task.state = 'failed'; task.error = error.message || String(error); }
+        try { await this.file(row, task, active); } catch (error) { if (error instanceof Stopped || !this.current(row, gen)) throw new Stopped(); task.state = 'failed'; task.error = userMessage(error); }
         this.recount(row); this.schedulePersist();
       }
       this.assert(row, gen); this.missing(row); row.state = row.missing.length ? 'failed' : 'complete'; row.message = row.missing.length ? row.missing.join('；') : '下载完成'; row.currentFile = ''; row.inFlight = 0; row.inFlightTotal = 0;
@@ -151,7 +155,7 @@ export class OfflineDownloads {
       await this.write('lesson-' + row.key + '.json', this.usableData(row)); await this.saveManifest(row); this.releaseOlderDetails(); await this.persist();
     } catch (error) {
       if (error instanceof Stopped || this.disposed || this.find(row.key) !== row || row.generation !== gen) return;
-      row.state = 'failed'; row.inFlight = 0; row.inFlightTotal = 0; row.missing = [...new Set([...row.missing, error.message || String(error)])]; row.message = row.missing.join('；'); await this.persist();
+      row.state = 'failed'; row.inFlight = 0; row.inFlightTotal = 0; row.missing = [...new Set([...row.missing, userMessage(error)])]; row.message = row.missing.join('；'); await this.persist();
     }
   }
   async hydrate(row, gen) {
@@ -186,7 +190,7 @@ export class OfflineDownloads {
         }
         const next = tasks.map(task => { const previous = old.get(task.name); if (task.text != null && previous?.text !== task.text) delete row.completed[task.name]; return { ...task, size: finite(task.size || previous?.size), state: row.completed[task.name] != null ? 'complete' : 'waiting', error: '' }; });
         row.files = row.files.filter(file => file.type !== type).concat(next); delete row.planErrors[type];
-      } catch (error) { if (error instanceof Stopped || !this.current(row, gen)) throw new Stopped(); row.planErrors[type] = error.message || String(error); }
+      } catch (error) { if (error instanceof Stopped || !this.current(row, gen)) throw new Stopped(); row.planErrors[type] = userMessage(error); }
     }
     row.retryOnly = false;
     // v1 metadata didn't write a transcript resource. Keep existing local successful content.

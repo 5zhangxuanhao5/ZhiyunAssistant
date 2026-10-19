@@ -1,4 +1,5 @@
 import { AgentRunner } from './agent-runtime.js';
+import { userMessage } from './user-errors.js';
 import { makeIcon } from './theme-icons.js';
 import { themeFor } from './theme-catalog.js';
 import { FloatingPaneController, floatingPaneBounds } from './parity-interactions.js';
@@ -193,6 +194,7 @@ export class GlobalAssistant {
   }
   scroll() { this.log.scrollTop = this.log.scrollHeight; }
   notice(text, kind = '') {
+    text = userMessage(text);
     if (!this.log) this.mount();
     if (this.root.dataset.view === 'chat') this.clearWelcome();
     const n = create('div', 'agent-notice' + (kind ? ' ' + kind : '')); if (kind === 'error') n.append(makeIcon('close')); else if (kind === 'info') n.append(makeIcon('info')); n.append(create('span', '', text));
@@ -207,7 +209,7 @@ export class GlobalAssistant {
     summary.append(mark, label, meta, chevron); node.append(summary, items);
     const progress = { node, summary, mark, label, meta, items, steps: [], started: Date.now() };
     for (const step of steps.slice(-120)) {
-      const safe = { label: clip(step.label || '操作', 100), detail: clip(step.detail, 60), result: clip(step.result, 40), ok: step.ok !== false, error: String(step.error || '').slice(0, 200), ms: Number(step.ms) || 0 };
+      const safe = { label: clip(step.label || '操作', 100), detail: clip(step.detail, 60), result: clip(step.result, 40), ok: step.ok !== false, error: (step.error ? userMessage(step.error) : '').slice(0, 200), ms: Number(step.ms) || 0 };
       progress.steps.push(safe); items.append(this.stepRow(safe));
     }
     if (status) this.settle(progress, status, ms); else { node.dataset.state = 'running'; label.textContent = '正在理解任务…'; mark.append(create('span', 'agent-spinner')); }
@@ -335,7 +337,7 @@ export class GlobalAssistant {
       if (this.reply) { window.cancelAnimationFrame(this.draftFrame); this.draftFrame = 0; this.reply.remove(); this.reply = null; }
       this.draft = ''; if (!this.progress) this.startProgress(); this.live('网络较慢，正在重试…');
     } else if (event.type === 'result' && this.currentStep) {
-      const step = this.currentStep; Object.assign(step, { ok: event.ok !== false, error: clip(event.error || '', 200), result: event.ok === false ? '' : clip(this.stepResult(event.action, event.output), 40), ms: Date.now() - step.started });
+      const step = this.currentStep; Object.assign(step, { ok: event.ok !== false, error: clip(event.error ? userMessage(event.error) : '', 200), result: event.ok === false ? '' : clip(this.stepResult(event.action, event.output), 40), ms: Date.now() - step.started });
       delete step.started; this.stepNode?.replaceWith(this.stepRow(step)); this.stepNode = null; this.currentStep = null;
     } else if (event.type === 'done') {
       window.cancelAnimationFrame(this.draftFrame); this.draftFrame = 0; this.finishProgress();
@@ -367,7 +369,7 @@ export class GlobalAssistant {
     this.input.value = ''; this.fitInput(); this.runningTurn = this.addTurn('user', text).parentElement; this.history.push({ role: 'user', content: text }); this.reply = null;
     this.progress = null; this.startProgress(); this.busy(true); this.status.textContent = '正在处理'; this.scroll();
     try { const answer = await this.runner.run(text, history); if (generation === this.generation) this.history.push({ role: 'assistant', content: answer, activity: this.activity() }); }
-    catch (error) { if (generation === this.generation) { this.finishProgress('未完成'); this.notice(error.message, 'error'); this.history.push({ role: 'assistant', content: '任务未完成：' + error.message + this.completedSteps(), activity: this.activity('未完成') }); this.status.textContent = '未完成'; } }
+    catch (error) { if (generation === this.generation) { this.finishProgress('未完成'); this.notice(error.message, 'error'); this.history.push({ role: 'assistant', content: '任务未完成：' + userMessage(error) + this.completedSteps(), activity: this.activity('未完成') }); this.status.textContent = '未完成'; } }
     finally { if (generation === this.generation) { if (this.root.hidden) this.unseen = this.status.textContent === '未完成' ? 'failed' : 'done'; this.busy(false); await this.persist(); } }
   }
   // Written into the conversation so that “继续” resumes instead of repeating what already succeeded.

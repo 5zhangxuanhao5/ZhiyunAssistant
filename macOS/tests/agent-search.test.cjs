@@ -24,18 +24,20 @@ test('the assistant finds where content was taught from the cache, without openi
  const scoped=await actions.execute('search_material',{query:'变换',course:'laplace'});assert.deepEqual(scoped.lessons.map(l=>l.key).join(),app.courseKey(b));
  const material=await actions.execute('read_material',{key:app.courseKey(a)});assert.equal(material.length,4030);assert.equal(material.pages[1].clock,'01:06:40');assert.equal(material.pages[1].text,'傅里叶变换的性质');
 });
-test('uncached lessons are fetched in small batches and the search continues with offset',async t=>{
- const{r,app,actions}=await start(t),rows=Array.from({length:8},(_,i)=>past(r,i+1,'l'+i));app.put({courses:rows});
- // Unconfirmed access is reported per lesson and nothing is cached for it.
+test('uncached lessons are searched together with one fresh permission batch and bounded transcript concurrency',async t=>{
+ const{r,app,actions}=await start(t),rows=Array.from({length:12},(_,i)=>past(r,i+1,'l'+i));app.put({courses:rows});
+ let allow=false,batches=0,active=0,peak=0,transcripts=0,slides=0;
+ app.api.background=signal=>({
+  async permissions(values,progress,force){assert.equal(force,true);batches++;const state=Object.fromEntries(values.map(c=>[c.subId,allow?'allowed':'denied']));progress(state,values.map(c=>c.subId));return state},
+  async transcripts(c){transcripts++;active++;peak=Math.max(peak,active);await wait(8);active--;return [{t:30,end:40,text:'Fixture keyword'}]},
+  async slides(){slides++;return []},dispose(){},
+ });
  const denied=await actions.execute('search_material',{query:'Fixture'});
- assert.equal(denied.found,0);assert.equal(denied.skipped.length,6);assert.match(denied.skipped[0].reason,/权限/);assert.ok(!r.data.has('lesson-'+app.courseKey(rows[0])+'.json'));
- app.api.checkCurrentPermission=async()=>({video:true});
- const first=await actions.execute('search_material',{query:'Fixture'});
- assert.equal(first.fetched,6);assert.equal(first.next,6);assert.equal(first.lessons.length,6);assert.equal(app.state().page,'recent');
- assert.ok(r.data.has('lesson-'+app.courseKey(rows[0])+'.json'),'fetched material is cached for later');
- const second=await actions.execute('search_material',{query:'Fixture',offset:first.next});
- assert.equal(second.fetched,2);assert.equal(second.next,null);assert.equal(second.lessons.length,2);
- const again=await actions.execute('search_material',{query:'Fixture',limit:40});assert.equal(again.fetched,0);assert.equal(again.lessons.length,8);
+ assert.equal(denied.found,0);assert.equal(denied.skippedCount,12);assert.match(denied.skipped[0].reason,/权限/);assert.equal(transcripts,0);
+ allow=true;const first=await actions.execute('search_material',{query:'Fixture'});
+ assert.equal(first.fetched,12);assert.equal(first.next,null);assert.equal(first.lessons.length,12);assert.equal(first.complete,true);assert.equal(app.state().page,'recent');assert.equal(peak,2);assert.equal(slides,0);assert.equal(batches,2);
+ assert.ok(r.data.has('search-transcript-'+app.courseKey(rows[0])+'.json'),'search transcripts have a separate cache, not an incomplete lesson cache');
+ const again=await actions.execute('search_material',{query:'Fixture'});assert.equal(again.fetched,0);assert.equal(again.lessons.length,12);assert.equal(batches,2);
 });
 test('without a course name only the own timetable is searched, not browsed plaza courses',async t=>{
  const{r,app,actions}=await start(t),mine=past(r,1,'mine'),plaza={...past(r,1,'plaza'),title:'别人的课'};app.put({courses:[mine]});

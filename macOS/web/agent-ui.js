@@ -5,13 +5,16 @@ import { FloatingPaneController, floatingPaneBounds } from './parity-interaction
 const create = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
 const clip = (value, max = 40) => { const text = String(value ?? '').replace(/\s+/g, ' ').trim(); return text.length > max ? text.slice(0, max - 1) + '…' : text; };
 const clock = seconds => { const s = Math.max(0, Math.round(Number(seconds) || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+// Two conversations started within the same millisecond must not share an id.
+let conversationSerial = 0;
+const conversationId = () => 'agent-' + Date.now() + '-' + (++conversationSerial);
 const duration = ms => { const s = Math.max(0, ms / 1000); return s < 60 ? (s < 10 ? s.toFixed(1) : Math.round(s)) + ' 秒' : Math.floor(s / 60) + ' 分 ' + Math.round(s % 60) + ' 秒'; };
 
 // What each registered operation is called in the activity timeline.
 const STEP_LABELS = {
   app_state: '查看当前状态', app_actions: '查找可用操作', app_interface: '读取界面',
   navigate: '打开页面', back: '返回上一级', refresh_courses: '刷新课表', list_lessons: '查找课次', search_courses: '搜索课程广场',
-  course_lessons: '读取课程的课次', list_courses: '汇总课程', read_material: '读取课程资料', open_lesson: '进入课程', read_lesson: '读取课堂转写',
+  course_lessons: '读取课程的课次', list_courses: '汇总课程', read_material: '读取课程资料', search_material: '查找课程内容', open_lesson: '进入课程', read_lesson: '读取课堂转写',
   read_slides: '识别课件', seek: '跳转时间', slide_page: '切换课件页', follow_current: '回到最新进度', set_pane: '调整功能区',
   set_study_option: '修改学习选项', show_learning_tool: '打开学习工具', video_control: '控制视频', set_collection: '更新收藏',
   notes_list: '读取笔记', note_create: '新建笔记', note_write: '写入笔记', note_rename: '重命名笔记', note_insert_slide: '插入课件到笔记',
@@ -42,7 +45,7 @@ export class GlobalAssistant {
     const root = this.root = create('section', 'global-agent'); root.dataset.globalAgent = ''; root.setAttribute('aria-label', '应用助手');
     root.setAttribute('role', 'region'); root.hidden = true; root.dataset.view = 'chat'; root.dataset.state = 'idle';
     const head = this.head = create('header', 'agent-head pane-header'), grip = this.dragHandle = create('span', 'agent-handle'); head.append(grip);
-    const title = create('strong', 'pane-title', '应用助手');
+    const title = create('strong', 'pane-title', '应用助手'); title.prepend(makeIcon('agent'));
     this.status = create('span', 'agent-status', '随时为你操作');
     // Streaming has a single live status rather than announcing every token.
     this.status.setAttribute('role', 'status'); this.status.setAttribute('aria-live', 'polite');
@@ -90,23 +93,35 @@ export class GlobalAssistant {
     if (generation !== this.generation || owner !== this.options.owner()) return;
     this.messages = Array.isArray(stored?.conversations) ? stored.conversations.filter(c => c && typeof c.id === 'string' && Array.isArray(c.turns)).slice(-20) : [];
     const current = this.messages.find(c => c.id === stored?.current) || this.messages.at(-1);
-    this.currentId = current?.id || 'agent-' + Date.now(); this.history = (current?.turns || []).filter(t => ['user', 'assistant'].includes(t.role) && typeof t.content === 'string').slice(-100);
+    this.currentId = current?.id || conversationId(); this.history = (current?.turns || []).filter(t => ['user', 'assistant'].includes(t.role) && typeof t.content === 'string').slice(-100);
     const display = await this.options.read('agent-display.json');
     if (generation !== this.generation || owner !== this.options.owner()) return;
     this.savedGeometry = display?.geometry; this.preferredMode = display?.mode === 'pane' ? 'pane' : 'floating';
     this.renderHistory(); this.clamp();
   }
   async show() {
-    this.mount(); await this.ensureOwner(); const generation = this.generation; await this.options.ready(); if (generation !== this.generation) return; this.root.hidden = false; this.bubble.hidden = true;
+    this.mount(); await this.ensureOwner(); const generation = this.generation; await this.options.ready(); if (generation !== this.generation) return; this.root.hidden = false; this.seen();
     if (this.preferredMode === 'pane' && this.options.canDock()) await this.setMode('pane');
     else if (this.mode !== 'pane') this.options.detach(this.root);
     this.clamp(); this.input.focus({ preventScroll: true });
   }
-  hide() { if (!this.root) return; this.floatingControl?.clear(); this.options.undock(); this.mode = 'floating'; this.root.dataset.mode = 'floating'; document.body.append(this.root); this.root.hidden = true; this.bubble.hidden = false; }
+  hide() { if (!this.root) return; this.floatingControl?.clear(); this.options.undock(); this.mode = 'floating'; this.root.dataset.mode = 'floating'; document.body.append(this.root); this.root.hidden = true; this.updateBubble(); }
+  // Minimised, the assistant stays out of the way: it only surfaces while a task runs or its result is unread.
+  updateBubble() {
+    if (!this.bubble) return;
+    const away = !this.root || this.root.hidden, running = this.runner.running, steps = this.progress?.steps.length || 0;
+    this.bubble.hidden = !(away && (running || this.unseen));
+    if (this.bubble.hidden) return;
+    const text = running ? '正在执行' + (steps ? ' · ' + steps + ' 步' : '') : this.unseen === 'failed' ? '任务未完成 · 查看' : '已完成 · 查看结果';
+    this.bubble.dataset.state = running ? 'running' : this.unseen;
+    this.bubble.replaceChildren(running ? create('span', 'agent-spinner') : makeIcon(this.unseen === 'failed' ? 'close' : 'check'), create('span', 'agent-action-label', text));
+    this.bubble.title = '应用助手 · ' + text; this.bubble.setAttribute('aria-label', '应用助手 · ' + text);
+  }
+  seen() { this.unseen = ''; if (this.bubble) this.bubble.hidden = true; }
   toggle() { return !this.root || this.root.hidden ? this.show() : this.hide(); }
   async setMode(mode) {
     this.mount(); if (mode === 'pane' && !this.options.canDock()) { this.notice('进入学习后可以收为功能区'); return; }
-    this.floatingControl?.clear(); this.root.hidden = false; this.bubble.hidden = true; this.preferredMode = mode; this.mode = mode; this.root.dataset.mode = mode;
+    this.floatingControl?.clear(); this.root.hidden = false; this.seen(); this.preferredMode = mode; this.mode = mode; this.root.dataset.mode = mode;
     if (mode === 'pane') this.options.dock(this.root); else { this.options.undock(); this.options.detach(this.root); this.clamp(); }
     this.labelAction(this.dockButton, mode === 'pane' ? '浮动显示' : '收为功能区');
     await this.persistDisplay();
@@ -195,7 +210,7 @@ export class GlobalAssistant {
       const safe = { label: clip(step.label || '操作', 100), detail: clip(step.detail, 60), result: clip(step.result, 40), ok: step.ok !== false, error: String(step.error || '').slice(0, 200), ms: Number(step.ms) || 0 };
       progress.steps.push(safe); items.append(this.stepRow(safe));
     }
-    if (status) this.settle(progress, status, ms); else { node.dataset.state = 'running'; node.open = true; label.textContent = '正在理解任务…'; mark.append(create('span', 'agent-spinner')); }
+    if (status) this.settle(progress, status, ms); else { node.dataset.state = 'running'; label.textContent = '正在理解任务…'; mark.append(create('span', 'agent-spinner')); }
     return progress;
   }
   stepRow(step, running = false) {
@@ -212,25 +227,17 @@ export class GlobalAssistant {
   }
   settle(progress, status, ms = 0) {
     const failures = progress.steps.filter(s => !s.ok).length, state = status === '已完成' ? 'done' : status === '已停止' ? 'stopped' : 'failed';
-    progress.node.dataset.state = state; progress.node.open = false; progress.items.querySelector('.agent-progress-earlier')?.remove();
+    progress.node.dataset.state = state; progress.node.open = false;
     progress.mark.replaceChildren(makeIcon(state === 'done' ? 'check' : state === 'stopped' ? 'stop' : 'close'));
     progress.label.textContent = status;
     progress.meta.textContent = [progress.steps.length + ' 步', failures ? failures + ' 项未成功' : '', ms >= 1000 ? duration(ms) : ''].filter(Boolean).join(' · ');
   }
-  live(text) { if (!this.progress) return; this.progress.label.textContent = clip(text, 80) || '正在处理…'; }
-  // While running only the latest few steps stay visible; all of them remain one click away.
-  trimSteps() {
-    const p = this.progress, rows = [...p.items.querySelectorAll(':scope > .agent-step')], hidden = Math.max(0, rows.length - 4);
-    rows.forEach((row, i) => row.classList.toggle('agent-step-earlier', i < hidden));
-    let more = p.items.querySelector('.agent-progress-earlier');
-    if (hidden && !more) { more = create('div', 'agent-progress-earlier'); p.items.prepend(more); }
-    if (more) more.textContent = '已完成前 ' + hidden + ' 步';
-  }
+  live(text) { if (this.progress) this.progress.label.textContent = clip(text, 80) || '正在处理…'; }
   tick() { if (!this.progress || this.progress.node.dataset.state !== 'running') return; const n = this.progress.steps.length; this.progress.meta.textContent = (n ? n + ' 步 · ' : '') + duration(Date.now() - this.progress.started).replace(/\.\d/, ''); }
   startProgress() {
     this.clearWelcome(); this.stopClock();
     this.turn = create('div', 'agent-turn assistant'); this.progress = this.makeProgress(); this.turn.append(this.progress.node); this.log.append(this.turn);
-    this.draft = ''; this.narration = ''; this.reply = null; this.tick(); this.clockTimer = setInterval(() => this.tick(), 1000);
+    this.draft = ''; this.reply = null; this.tick(); this.clockTimer = setInterval(() => this.tick(), 1000);
   }
   stopClock() { clearInterval(this.clockTimer); this.clockTimer = 0; }
   finishProgress(status = '已完成') {
@@ -254,6 +261,7 @@ export class GlobalAssistant {
         case 'list_lessons': case 'list_courses': case 'search_courses': return [args.query && '“' + clip(args.query, 18) + '”', args.date].filter(Boolean).join(' · ');
         case 'open_lesson': return [title(args.key), Number.isFinite(args.at) ? clock(args.at) : ''].filter(Boolean).join(' · ');
         case 'read_material': case 'download_lesson': case 'course_lessons': return title(args.key) || '';
+        case 'search_material': return ['“' + clip(args.query, 18) + '”', args.course ? clip(args.course, 12) : title(args.key)].filter(Boolean).join(' · ');
         case 'set_collection': return [title(args.key), WORDS[args.kind], args.selected === false ? '取消' : ''].filter(Boolean).join(' · ');
         case 'read_lesson': return Number.isFinite(args.from) ? clock(args.from) + (Number.isFinite(args.to) && args.to < 1e9 ? '–' + clock(args.to) : ' 起') : '';
         case 'seek': return clock(args.seconds);
@@ -288,6 +296,7 @@ export class GlobalAssistant {
       case 'list_lessons': case 'course_lessons': return count(output.total, '节');
       case 'list_courses': case 'search_courses': return count(output.total, '门');
       case 'read_lesson': case 'read_material': return count(output.lines?.length, '句');
+      case 'search_material': return output.found ? output.lessons.length + ' 节 · ' + output.found + ' 处' : output.next != null ? '暂未找到' : '未找到';
       case 'read_slides': return Array.isArray(output) ? count(output.length, '页') : '';
       case 'notes_list': case 'notes_read': return Array.isArray(output) ? count(output.length, '篇') : '';
       case 'notes_index': return Array.isArray(output) ? count(output.length, '节') : '';
@@ -300,30 +309,31 @@ export class GlobalAssistant {
   }
   event(event) {
     if (event.type === 'turn') {
-      // A new model round: earlier narration no longer describes what happens next.
       if (!this.progress) this.startProgress();
-      this.narration = ''; this.draft = ''; if (this.progress.steps.length) this.live('正在决定下一步…');
+      this.draft = ''; if (this.progress.steps.length) this.live('正在思考下一步…');
     } else if (event.type === 'delta') {
       if (!this.progress) this.startProgress();
       this.draft = (this.draft || '') + event.text;
-      // Short narration stays in the live status line; a real answer streams into the message.
+      // Text written between actions is the model talking to itself, so it never reaches the log.
+      // Only a direct answer (no action taken yet) streams; anything else waits for the final reply.
+      if (this.progress.steps.length) { if (this.draft.length > 120) this.live('正在整理回答…'); return; }
       if (!this.reply && (this.draft.length > 80 || /\n/.test(this.draft.trim()))) { this.reply = this.ensureMessage(); this.reply.classList.add('streaming'); this.live('正在回复…'); }
-      if (this.reply) this.renderDraft(); else this.live(this.draft.trim());
+      if (this.reply) this.renderDraft(); else if (this.draft.trim()) this.live('正在思考…');
     } else if (event.type === 'step') {
-      // Intermediate model narration is replaced by the current action, not a second transcript.
-      if (this.reply) { this.reply.remove(); this.reply = null; }
-      if (this.draft?.trim()) this.narration = this.draft.trim();
+      // A reply that turned out to be a preface to an action is withdrawn.
+      if (this.reply) { window.cancelAnimationFrame(this.draftFrame); this.draftFrame = 0; this.reply.remove(); this.reply = null; }
       this.draft = ''; if (!this.progress) this.startProgress();
       const label = this.stepLabel(event.action), detail = this.stepDetail(event.action, event.args);
       this.currentStep = { label, detail: clip(detail, 60), started: Date.now() }; this.progress.steps.push(this.currentStep);
-      this.stepNode = this.stepRow(this.currentStep, true); this.progress.items.append(this.stepNode); this.trimSteps();
-      this.live(this.narration || label + (detail ? ' · ' + detail : '')); this.status.textContent = '正在执行'; this.tick(); this.scheduleScroll();
+      this.stepNode = this.stepRow(this.currentStep, true); this.progress.items.append(this.stepNode);
+      if (this.progress.node.open) this.progress.items.scrollTop = this.progress.items.scrollHeight;
+      this.live(label + (detail ? ' · ' + detail : '')); this.status.textContent = '正在执行'; this.tick(); this.updateBubble();
     } else if (event.type === 'result' && this.currentStep) {
       const step = this.currentStep; Object.assign(step, { ok: event.ok !== false, error: clip(event.error || '', 200), result: event.ok === false ? '' : clip(this.stepResult(event.action, event.output), 40), ms: Date.now() - step.started });
-      delete step.started; const row = this.stepRow(step); if (this.stepNode?.classList.contains('agent-step-earlier')) row.classList.add('agent-step-earlier'); this.stepNode?.replaceWith(row); this.stepNode = null; this.currentStep = null;
+      delete step.started; this.stepNode?.replaceWith(this.stepRow(step)); this.stepNode = null; this.currentStep = null;
     } else if (event.type === 'done') {
       window.cancelAnimationFrame(this.draftFrame); this.draftFrame = 0; this.finishProgress();
-      if (event.text) { if (!this.reply) this.reply = this.ensureMessage(); this.format(this.reply, event.text); }
+      if (event.text) { const arrived = !this.reply; if (!this.reply) this.reply = this.ensureMessage(); this.format(this.reply, event.text); if (arrived) this.reply.classList.add('arrived'); }
       this.status.textContent = '已完成'; this.scheduleScroll();
     }
   }
@@ -352,9 +362,9 @@ export class GlobalAssistant {
     this.progress = null; this.startProgress(); this.busy(true); this.status.textContent = '正在处理'; this.scroll();
     try { const answer = await this.runner.run(text, history); if (generation === this.generation) this.history.push({ role: 'assistant', content: answer, activity: this.activity() }); }
     catch (error) { if (generation === this.generation) { this.finishProgress('未完成'); this.notice(error.message, 'error'); this.history.push({ role: 'assistant', content: '任务未完成：' + error.message, activity: this.activity('未完成') }); this.status.textContent = '未完成'; } }
-    finally { if (generation === this.generation) { this.busy(false); await this.persist(); } }
+    finally { if (generation === this.generation) { if (this.root.hidden) this.unseen = this.status.textContent === '未完成' ? 'failed' : 'done'; this.busy(false); await this.persist(); } }
   }
-  busy(value) { this.sendButton.hidden = value; this.stopButton.hidden = !value; this.input.readOnly = value; this.root.dataset.state = value ? 'running' : 'idle'; }
+  busy(value) { this.sendButton.hidden = value; this.stopButton.hidden = !value; this.input.readOnly = value; this.root.dataset.state = value ? 'running' : 'idle'; this.updateBubble(); }
   stop() { this.finishProgress('已停止'); this.runner.stop(); this.generation++; this.busy(false); this.status.textContent = '已停止'; this.notice('已停止后续操作；已完成的操作会保留。'); this.history.push({ role: 'assistant', content: '用户停止了任务，已完成的操作保留。', activity: this.activity('已停止') }); this.persist().catch(() => {}); }
   async persist() {
     if (this.loadedOwner !== this.options.owner()) return;
@@ -363,7 +373,7 @@ export class GlobalAssistant {
     this.messages = this.messages.filter(c => c.id !== entry.id && c.turns.length).concat(entry.turns.length ? [entry] : []).slice(-20);
     return this.options.write('chats-agent.json', { current: this.currentId, conversations: this.messages }, true);
   }
-  async newConversation() { if (this.runner.running) this.stop(); await this.persist(); this.currentId = 'agent-' + Date.now(); this.history = []; this.reply = null; this.progress = null; this.empty(); this.status.textContent = '随时为你操作'; await this.persist(); this.input.focus({ preventScroll: true }); }
+  async newConversation() { if (this.runner.running) this.stop(); await this.persist(); this.currentId = conversationId(); this.history = []; this.reply = null; this.progress = null; this.empty(); this.status.textContent = '随时为你操作'; await this.persist(); this.input.focus({ preventScroll: true }); }
   subhead(title) {
     const bar = create('div', 'agent-subhead'); bar.append(this.action('返回对话', () => this.renderHistory(), 'agent-back'), create('h3', '', title)); return bar;
   }
@@ -391,7 +401,7 @@ export class GlobalAssistant {
     const c = this.messages.find(m => m.id === id); if (!c) return false;
     if (!confirm('删除这段对话？此操作不能撤销。')) return false;
     this.messages = this.messages.filter(m => m.id !== id);
-    if (id === this.currentId && !this.runner.running) { this.currentId = 'agent-' + Date.now(); this.history = []; }
+    if (id === this.currentId && !this.runner.running) { this.currentId = conversationId(); this.history = []; }
     await this.options.write('chats-agent.json', { current: this.currentId, conversations: this.messages }, true);
     if (this.root?.dataset.view === 'history') this.showHistory(); return true;
   }
@@ -400,7 +410,7 @@ export class GlobalAssistant {
   async clearHistory({ ask = true } = {}) {
     if (ask && !confirm('清空全部应用助手对话？此操作不能撤销。')) return false;
     const running = this.runner.running && this.runningTurn?.isConnected;
-    this.messages = []; this.currentId = 'agent-' + Date.now();
+    this.messages = []; this.currentId = conversationId();
     if (running) {
       this.history = this.history.slice(-1);
       while (this.log.firstChild && this.log.firstChild !== this.runningTurn) this.log.firstChild.remove();
@@ -446,7 +456,7 @@ export class GlobalAssistant {
     this.log.append(advanced, create('p', 'agent-privacy-note', '只在你发起任务时，向所选服务发送完成任务所需的资料。'), footer); this.log.scrollTop = 0; this.root.scrollTop = 0;
   }
   reset() {
-    this.floatingControl?.clear(); this.runner.stop(); this.stopClock(); this.generation++; clearTimeout(this.geometryTimer); this.history = []; this.messages = []; this.currentId = 'agent-' + Date.now(); this.loadedOwner = null; this.savedGeometry = null; this.progress = null; this.reply = null; this.turn = null; this.preferredMode = 'floating';
-    if (this.root) { this.leavePane(); this.options.undock(); this.root.hidden = true; this.bubble.hidden = true; this.busy(false); this.empty(); }
+    this.floatingControl?.clear(); this.runner.stop(); this.stopClock(); this.generation++; clearTimeout(this.geometryTimer); this.history = []; this.messages = []; this.currentId = conversationId(); this.loadedOwner = null; this.savedGeometry = null; this.progress = null; this.reply = null; this.turn = null; this.preferredMode = 'floating';
+    if (this.root) { this.leavePane(); this.options.undock(); this.root.hidden = true; this.busy(false); this.seen(); this.empty(); }
   }
 }

@@ -1897,13 +1897,14 @@ function renderTools() {
     "question",
     "summary",
   ];
+  // Pane switches come first as one segmented control, then the tools as compact icon buttons;
+  // each group keeps the user's own order of common features.
+  const ids = ["slides", ...order.filter((id) => id !== "slides" && id !== "agent"), "agent"],
+    views = ids.filter((id) => paneNames[id]);
   tools.replaceChildren(
-    featureButton("slides"),
-    ...order
-      .filter((id) => id !== "slides" && id !== "agent")
+    ...[...views, ...ids.filter((id) => !paneNames[id])]
       .map(featureButton)
       .filter(Boolean),
-    featureButton("agent"),
   );
   if (prefs.panes.length === 1 && prefs.panes[0] === "slides")
     tools.append(
@@ -1990,7 +1991,7 @@ function createPane(key) {
       "data-pane": key,
     }),
     head = el("header", { class: "pane-header" }, [
-      el("span", { class: "pane-title", text: paneNames[key] }),
+      el("span", { class: "pane-title" }, [makeIcon(key), paneNames[key]]),
       el("div", { class: "mini" }),
     ]),
     body = el("div", { class: "pane-content", id: key + "Body" });
@@ -2657,6 +2658,18 @@ function highlightCurrent(scroll = true) {
       active.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 }
+function materialSpan(c, data, recorded = 0) {
+  let end = Math.max(0, c.end - c.start, recorded);
+  for (const l of data.lines || []) end = Math.max(end, Number(l.end) || 0, Number(l.t) || 0);
+  for (const s of data.slides || []) end = Math.max(end, Number(s.t) || 0);
+  return end;
+}
+// Course time counts from the scheduled start; a recording or its transcript can run past the scheduled end.
+function lessonSpan() {
+  const source = currentVideoSource(),
+    recorded = video?.src && Number.isFinite(video.duration) && !source?.live ? video.duration + (source?.offset || 0) : 0;
+  return materialSpan(lesson, { lines, slides }, recorded);
+}
 function seek(t, source = "transcript") {
   const before = {
     kind: "jump",
@@ -2668,7 +2681,7 @@ function seek(t, source = "transcript") {
   };
   const moved = Math.abs(before.at - t) > 1,
     oldIndex = index;
-  at = Math.max(0, Math.min(t, Math.max(0, lesson.end - lesson.start)));
+  at = Math.max(0, Math.min(t, lessonSpan()));
   index = pageAtTime(
     groups.map((g) => g.slide),
     at,
@@ -2820,7 +2833,7 @@ function pageJump() {
 function timeJump() {
   openModal("跳转时间");
   $(".modal-shell").classList.add("compact");
-  const max = Math.max(0, Math.floor(lesson.end - lesson.start));
+  const max = Math.floor(lessonSpan());
   let chosen = Math.min(max, Math.max(0, Math.floor(mediaTime())));
   const label = el("h3", { text: stamp(chosen) }),
     wheels = el("div", { class: "time-wheels" });
@@ -5890,6 +5903,8 @@ function featureButton(id) {
     node.querySelectorAll(".ui-icon").forEach(icon => icon.remove());
     node.prepend(makeIcon(id));
     node.dataset.feature = id;
+    node.dataset.kind = paneNames[id] ? "view" : "tool";
+    node.title = node.textContent.replace("▾", "").trim();
     if (!["follow", "overview", "time", "page", "download", "layout"].includes(id))
       node.setAttribute("aria-pressed", String(node.classList.contains("active")));
   }
@@ -6530,15 +6545,77 @@ function getGlobalAssistant() {
   registry.register("search_courses", "搜索课程广场，返回课程而非课次；之后用 course_lessons 取具体课次。", { query: str("课程名或教师", 100), kind: choice(["course", "teacher"]), page: num("结果页，从1开始", 1, 500) }, ["query", "kind"], async ({ query, kind, page: p = 1 }, guard) => { needAccount(); const result = await api.searchCourses(account, kind === "course" ? query : "", kind === "teacher" ? query : "", p); guard(); extraCourses.push(...result.list); return { total: result.total, courses: result.list.map(c => ({ courseId: c.courseId, title: c.title, teacher: c.teacher, term: c.term })) }; });
   registry.register("course_lessons", "读取一门已查到的课程的各次上课记录，获取可用于进入学习/下载的 key。", { courseId: str("查询结果中的课程标识", 200) }, ["courseId"], async ({ courseId }, guard) => { needAccount(); known(); const c = [...known(), ...extraCourses, ...searchHits].find(c => String(c.courseId) === courseId); if (!c) throw new Error("先搜索该课程"); const result = await api.chapters(c); guard(); extraCourses.push(...result); return { lessons: result.slice(0, 100).map(describe), total: result.length }; });
   registry.register("list_courses", "按课程汇总用户已同步的全部上课记录，返回课程id、课次数和代表性课次key，避免逐页扫描数百课次。", {query:str("课程或教师关键词",100),offset:num("偏移",0,1e6),limit:num("课程数",1,60)},[],({query="",offset=0,limit=30})=>{needAccount();const map=new Map();for(const c of known()){if(query&&!(c.title+" "+c.teacher).includes(query))continue;const id=String(c.courseId);if(!map.has(id))map.set(id,{courseId:id,title:c.title,teacher:c.teacher,term:c.term,lessons:[]});map.get(id).lessons.push(c);}const all=[...map.values()].map(c=>{c.lessons.sort((a,b)=>b.start-a.start);return{courseId:c.courseId,title:c.title,teacher:c.teacher,term:c.term,count:c.lessons.length,latest:c.lessons[0].start,keys:c.lessons.slice(0,3).map(courseKey)};}).sort((a,b)=>b.latest-a.latest);return{total:all.length,historyComplete:!!allHistory?.complete,offset,next:offset+limit<all.length?offset+limit:null,courses:all.slice(offset,offset+limit)};});
-  registry.register("read_material", "读取指定课次的转写与课件时间线，无须切换当前页面。复用缓存，缺失时按账号权限获取，按offset分页；不会加载视频。", {key:str("课次key",300),from:num("起始秒数"),to:num("结束秒数"),offset:num("转写偏移",0,1e6),limit:num("转写条数",1,120)},["key"],async({key,from=0,to=1e10,offset=0,limit=100},guard)=>{const c=find(key);let data;if(page==="study"&&courseKey(lesson)===key)data={slides,lines};else data=await saved("lesson-"+key+".json",true);guard();let source="cache",missing=[];if(!data){await api.checkCurrentPermission(c);guard();const result=await Promise.allSettled([api.slides(c),api.transcripts(c)]);guard();data={course:c,slides:result[0].status==="fulfilled"?result[0].value:[],lines:result[1].status==="fulfilled"?result[1].value:[]};for(let i=0;i<2;i++)if(result[i].status==="rejected")missing.push((i?"转写：":"课件：")+result[i].reason.message);if(!missing.length)await save("lesson-"+key+".json",data,true);source="online";}guard();const rows=(data.lines||[]).filter(l=>l.t>=from&&l.t<=to);return{course:describe(c),source,missing,total:rows.length,offset,next:offset+limit<rows.length?offset+limit:null,lines:rows.slice(offset,offset+limit).map(l=>({t:l.t,end:l.end,text:l.text})),pages:(data.slides||[]).map((slide,i,all)=>({page:i+1,t:slide.t,end:all[i+1]?.t??c.end-c.start})).filter(g=>g.end>=from&&g.t<=to).slice(0,100)};});
-  registry.register("open_lesson", "进入指定课次学习。应用会按真实账号权限检查，不能跳过权限。", { key: str("课次key", 300), at: num("可选：进入后定位到的秒数") }, ["key"], async ({ key, at: time }, guard) => { const c = find(key); guard(); await enter(c); guard(); if (page !== "study" || courseKey(lesson) !== key) throw new Error("未能进入课程，请检查界面提示和权限"); if (time != null) seek(time, "agent"); return state(); });
-  registry.register("read_lesson", "读取当前课的有序时间线和转写，不发送图片；按起止秒数及 offset 分页。", { from: num("起始秒数"), to: num("结束秒数"), offset: num("转写偏移", 0, 1e6), limit: num("转写条数", 1, 120) }, [], ({ from = 0, to = 1e10, offset = 0, limit = 80 }) => { needLesson(); const rows = lines.filter(l => l.t >= from && l.t <= to); return { offset, next:offset+limit<rows.length?offset+limit:null, course: describe(lesson), currentTime: mediaTime(), total: rows.length, lines: rows.slice(offset, offset + limit).map(l => ({ t: l.t, end: l.end, text: l.text })), pages: groups.map((g, i) => ({ page: i + 1, t: g.slide.t, end: groups[i + 1]?.slide.t ?? lesson.end - lesson.start })).filter(g => g.end >= from && g.t <= to).slice(0, 100) }; });
+  // Every time an action reports or accepts is course time, the same base the study page uses.
+  const clip = (value, max) => { const text = String(value ?? "").replace(/\s+/g, " ").trim(); return text.length > max ? text.slice(0, max - 1) + "…" : text; };
+  const TIME_BASE = "t、end、at 与 seek 的 seconds 都是课程时间：从这节课开始计时的秒数（clock 为同一时间的 时:分:秒）。length 是这节课资料覆盖的时长，录像或转写可能超过课表时长。";
+  const clock = t => { const n = Math.max(0, Math.floor(t)); return [Math.floor(n / 3600), Math.floor(n / 60) % 60, n % 60].map(v => String(v).padStart(2, "0")).join(":"); };
+  // A lesson's transcript and slide timeline without changing the page: the open lesson, then the cache or a download, then (only when allowed) the platform.
+  const storedMaterial = async (c, guard) => {
+    const key = courseKey(c);
+    if (page === "study" && lesson && courseKey(lesson) === key) return { data: { slides, lines }, source: "open", missing: [] };
+    let data = await saved("lesson-" + key + ".json", true); guard();
+    if (!data && library.some(r => r.course && courseKey(r.course) === key)) { data = await saved("lesson-" + key + ".json", false); guard(); }
+    return data ? { data, source: "cache", missing: [] } : null;
+  };
+  const fetchMaterial = async (c, guard) => {
+    await api.checkCurrentPermission(c); guard();
+    const result = await Promise.allSettled([api.slides(c), api.transcripts(c)]); guard();
+    const data = { course: c, slides: result[0].status === "fulfilled" ? result[0].value : [], lines: result[1].status === "fulfilled" ? result[1].value : [] }, missing = [];
+    for (let i = 0; i < 2; i++) if (result[i].status === "rejected") missing.push((i ? "转写：" : "课件：") + result[i].reason.message);
+    if (!missing.length) await save("lesson-" + courseKey(c) + ".json", data, true);
+    return { data, source: "online", missing };
+  };
+  registry.register("read_material", "后台读取任一课次的转写与课件时间线，不切换页面、不加载视频。复用缓存，缺失时按账号权限获取，按 offset 分页。时间均为课程时间（秒），可直接用作 open_lesson 的 at。", {key:str("课次key",300),from:num("起始秒数（课程时间）"),to:num("结束秒数（课程时间）"),offset:num("转写偏移",0,1e6),limit:num("转写条数",1,120)},["key"],async({key,from=0,to=1e10,offset=0,limit=100},guard)=>{const c=find(key);const {data,source,missing}=(await storedMaterial(c,guard))||(await fetchMaterial(c,guard));guard();const length=materialSpan(c,data),rows=(data.lines||[]).filter(l=>l.t>=from&&l.t<=to);return{course:describe(c),time:TIME_BASE,length,source,missing,total:rows.length,offset,next:offset+limit<rows.length?offset+limit:null,lines:rows.slice(offset,offset+limit).map(l=>({t:l.t,end:l.end,text:l.text})),pages:(data.slides||[]).map((slide,i,all)=>({page:i+1,t:slide.t,clock:clock(slide.t),end:all[i+1]?.t??length,...(slide.note?{text:String(slide.note).slice(0,160)}:{})})).filter(g=>g.end>=from&&g.t<=to).slice(0,100)};});
+  // Finding where something was taught is a background search; the lesson is opened only to show the result.
+  registry.register("search_material", "后台在多节课的课堂转写和课件文字中查找内容，不打开课程、不加载视频、不改变学习选项。可按课程名/教师、日期或课次缩小范围；返回命中的课次 key、课程时间 t 和原文片段，之后可用 read_material 读上下文，或用 open_lesson 的 key 与 at 直接定位。缺少缓存的课次按账号权限获取，每次最多新获取 6 节；next 不为空时用 offset 继续。", {
+    query: str("要找的内容，可用空格分隔多个关键词（须同时出现）", 100),
+    course: str("可选：课程名或教师关键词", 100),
+    key: str("可选：只在这一节课内查找", 300),
+    from: str("可选：起始日期 YYYY-MM-DD", 10),
+    to: str("可选：截止日期 YYYY-MM-DD", 10),
+    offset: num("课次偏移", 0, 1e6),
+    limit: num("最多返回的命中数", 1, 40),
+  }, ["query"], async ({ query, course = "", key = "", from = "", to = "", offset = 0, limit = 16 }, guard) => {
+    needAccount();
+    const terms = query.toLowerCase().split(/[\s,，、]+/).filter(Boolean);
+    if (!terms.length) throw new Error("请说明要查找的内容");
+    const now = Date.now() / 1000, matches = text => { const v = String(text || "").toLowerCase(); return terms.every(t => v.includes(t)); };
+    const excerpt = text => { const v = String(text || "").replace(/\s+/g, " ").trim(), first = Math.max(0, Math.min(...terms.map(t => v.toLowerCase().indexOf(t)).filter(n => n >= 0))), start = Math.max(0, first - 24); return (start ? "…" : "") + v.slice(start, start + 96) + (start + 96 < v.length ? "…" : ""); };
+    // Without a course name the search stays within the user's own lessons, not browsed plaza courses.
+    const own = () => [...new Map([...courses, ...(allHistory?.courses || []), ...library.map(r => r.course), ...(lesson ? [lesson] : [])].filter(c => c?.courseId && c?.subId).map(c => [courseKey(c), c])).values()];
+    const pool = key ? [find(key)] : (course ? known() : own()).filter(c => c.start <= now && (!course || (c.title + " " + (c.teacher || "")).includes(course)) && (!from || date(c) >= from) && (!to || date(c) <= to)).sort((a, b) => b.start - a.start);
+    const lessons = [], skipped = []; let at = Math.floor(offset), scanned = 0, fetched = 0, found = 0;
+    for (; at < pool.length && scanned < 60 && found < limit; at++) {
+      const c = pool[at]; let material = await storedMaterial(c, guard);
+      if (!material) {
+        if (fetched >= 6) break;
+        fetched++;
+        try { material = await fetchMaterial(c, guard); } catch (error) { guard(); skipped.push({ key: courseKey(c), title: c.title, date: date(c), reason: clip(error.message, 80) }); scanned++; continue; }
+      }
+      scanned++;
+      const rows = material.data.lines || [], hits = [];
+      let last = -Infinity;
+      for (let i = 0; i < rows.length && hits.length < 5 && found + hits.length < limit; i++) {
+        // A phrase may be split across neighbouring caption lines.
+        if (!matches(rows[i].text) && !(terms.length > 1 && matches((rows[i - 1]?.text || "") + rows[i].text + (rows[i + 1]?.text || "")) && terms.some(t => String(rows[i].text).toLowerCase().includes(t)))) continue;
+        if (rows[i].t - last < 45) continue;
+        last = rows[i].t; hits.push({ t: Math.floor(rows[i].t), clock: clock(rows[i].t), from: "转写", text: excerpt(rows[i].text + (String(rows[i].text).length < 40 && rows[i + 1] ? " " + rows[i + 1].text : "")) });
+      }
+      for (const slide of material.data.slides || []) if (hits.length < 6 && found + hits.length < limit && slide.note && matches(slide.note) && !hits.some(h => Math.abs(h.t - slide.t) < 45)) hits.push({ t: Math.floor(slide.t), clock: clock(slide.t), from: "课件", text: excerpt(slide.note) });
+      if (material.missing.length) skipped.push({ key: courseKey(c), title: c.title, date: date(c), reason: clip(material.missing.join("；"), 80) });
+      if (hits.length) { hits.sort((a, b) => a.t - b.t); found += hits.length; lessons.push({ key: courseKey(c), title: c.title, teacher: c.teacher || "", date: date(c), hits }); }
+    }
+    return { query, time: TIME_BASE, candidates: pool.length, scanned, fetched, next: at < pool.length ? at : null, found, lessons, skipped: skipped.slice(0, 12), historyComplete: !!allHistory?.complete,
+      ...(found ? {} : { hint: at < pool.length ? "这一批没有命中，可用 offset 继续查找更早的课次。" : terms.length > 1 ? "没有同时包含全部关键词的内容，可减少关键词再试。" : "已查过的课次中没有命中；历史课次未同步时可先同步所有课程。" }) };
+  });
+  registry.register("open_lesson", "进入指定课次学习，让用户在界面上查看；可用 at 直接定位到课程时间。只为查找内容时不要打开课程，先用 search_material / read_material 在后台查到位置。应用会按真实账号权限检查，不能跳过权限。", { key: str("课次key", 300), at: num("可选：进入后定位到的课程时间（秒）") }, ["key"], async ({ key, at: time }, guard) => { const c = find(key); guard(); await enter(c); guard(); if (page !== "study" || courseKey(lesson) !== key) throw new Error("未能进入课程，请检查界面提示和权限"); if (time != null) seek(time, "agent"); return state(); });
+  registry.register("read_lesson", "读取当前已打开课次的有序时间线和转写，不发送图片；按起止秒数及 offset 分页。未打开的课次用 read_material。", { from: num("起始秒数（课程时间）"), to: num("结束秒数（课程时间）"), offset: num("转写偏移", 0, 1e6), limit: num("转写条数", 1, 120) }, [], ({ from = 0, to = 1e10, offset = 0, limit = 80 }) => { needLesson(); const rows = lines.filter(l => l.t >= from && l.t <= to); return { offset, next:offset+limit<rows.length?offset+limit:null, course: describe(lesson), time: TIME_BASE, length: lessonSpan(), currentTime: mediaTime(), total: rows.length, lines: rows.slice(offset, offset + limit).map(l => ({ t: l.t, end: l.end, text: l.text })), pages: groups.map((g, i) => ({ page: i + 1, t: g.slide.t, end: groups[i + 1]?.slide.t ?? lesson.end - lesson.start })).filter(g => g.end >= from && g.t <= to).slice(0, 100) }; });
   registry.register("read_slides", "按需识别当前课的指定课件，每次最多6页；复用已有识别缓存以节约费用。", { pages: { type: "array", items: num("页码", 1, 10000), maxItems: 6 } }, ["pages"], async ({ pages }) => { needLesson(); if (pages.some(p => !Number.isInteger(p) || p > groups.length)) throw new Error("页码不存在"); return readPages(pages); });
-  registry.register("seek", "跳到当前课指定秒数，同时联动视频、课件和转写。", { seconds: num("秒数") }, ["seconds"], ({ seconds }) => { needLesson(); seek(seconds, "agent"); return state(); });
+  registry.register("seek", "把当前已打开的课次跳到指定课程时间，联动视频、课件和转写。秒数与 read_material、search_material 返回的 t 相同；查找内容不要靠反复跳转。", { seconds: num("课程时间（秒）") }, ["seconds"], ({ seconds }) => { needLesson(); seek(seconds, "agent"); return state(); });
   registry.register("slide_page", "切换当前课的课件页码，保留正常的手动浏览逻辑。", { page: num("页码，从1开始", 1, 10000) }, ["page"], ({ page: p }) => { needLesson(); if (!Number.isInteger(p) || p > groups.length) throw new Error("页码不存在"); pageMove(p - 1 - index); return state(); });
   registry.register("follow_current", "让课件和转写回到视频当前进度，或直播最新位置并继续跟随。", {}, [], () => { needLesson(); followNow(); return state(); });
   registry.register("set_pane", "打开/关闭学习功能区。agent 可将应用助手收为功能区。", { pane: choice(Object.keys(paneNames)), open: bool }, ["pane", "open"], async ({ pane: id, open }) => { needLesson(); if (id === "agent") { if (open) await getGlobalAssistant().setMode("pane"); else getGlobalAssistant().hide(); } else if (prefs.panes.includes(id) !== open) togglePane(id); return state(); });
-  registry.register("set_study_option", "设置去黑边、合并连续重复课件、跳过无转写、单独课件页数。", { option: choice(["crop", "duplicates", "skip", "count"]), value: { type: "number", minimum: 0, maximum: 4, description: "开关0/1；count为1-4" } }, ["option", "value"], async ({ option, value }) => { needLesson(); if (option === "count" && (!Number.isInteger(value) || value < 1)) throw new Error("页数应为1-4"); if (option !== "count" && ![0, 1].includes(value)) throw new Error("开关应为0或1"); prefs[option] = option === "count" ? value : !!value; if (option === "duplicates") regroup(); await save("prefs.json", prefs); renderStudyContent(); renderTools(); return state(); });
+  registry.register("set_study_option", "按用户要求设置去黑边、合并连续重复课件、跳过无转写、单独课件页数。这些是用户的学习偏好，查找资料不需要也不应修改它们。", { option: choice(["crop", "duplicates", "skip", "count"]), value: { type: "number", minimum: 0, maximum: 4, description: "开关0/1；count为1-4" } }, ["option", "value"], async ({ option, value }) => { needLesson(); if (option === "count" && (!Number.isInteger(value) || value < 1)) throw new Error("页数应为1-4"); if (option !== "count" && ![0, 1].includes(value)) throw new Error("开关应为0或1"); prefs[option] = option === "count" ? value : !!value; if (option === "duplicates") regroup(); await save("prefs.json", prefs); renderStudyContent(); renderTools(); return state(); });
   registry.register("show_learning_tool", "打开概览、学习设置、功能区布局、时间/页码选择或本节下载选项。", { tool: choice(["overview", "settings", "layout", "time", "page", "download"]) }, ["tool"], ({ tool }) => { needLesson(); ({ overview: () => overview(false), settings: showSettings, layout: showLayout, time: timeJump, page: pageJump, download: () => lessonDownload(lesson) })[tool](); return { ok: true }; });
   registry.register("video_control", "控制当前视频的播放、暂停、倍速或全屏；打开视频后需等待资源就绪。", { command: choice(["play", "pause", "speed", "fullscreen", "exit_fullscreen"]), rate: num("播放速度", 0.1, 16) }, ["command"], async ({ command, rate }) => { needLesson(); if (!panes.video) togglePane("video"); if (!video) throw new Error("视频仍在加载，请稍后读取状态"); if (command === "play") await video.play(); else if (command === "pause") video.pause(); else if (command === "speed") { if (rate == null) throw new Error("请指定倍速"); video.playbackRate = rate; } else panes.video.classList.toggle("video-fullscreen", command === "fullscreen"); return state(); });
   registry.register("set_collection", "收藏或稍后再看课次/整门课，可设置为选中或取消。整门课使用当前已知课次。", { key: str("课次key", 300), kind: choice(["favourite", "later"]), selected: bool, wholeCourse: bool }, ["key", "kind", "selected"], ({ key, kind, selected, wholeCourse = false }) => { const c = find(key); const before = wholeCourse ? collections.hasCourse(kind, c.courseId) : collections.hasLesson(kind, c); if (before !== selected) { if (wholeCourse) collections.toggleCourse(kind, c, known().filter(r => r.courseId === c.courseId)); else collections.toggleLesson(kind, c); } if (["favourite", "later"].includes(page)) showCollections(); else if (["today", "recent", "all", "chapters"].includes(page)) showCourses(); return { selected: wholeCourse ? collections.hasCourse(kind, c.courseId) : collections.hasLesson(kind, c), course: describe(c) }; });

@@ -60,7 +60,18 @@ test('assistant floats on nonstudy pages, docks into a resizable pane, survives 
  await a.enter(r.current);await assistant.setMode('pane');assert.ok(doc.querySelector('[data-pane=agent] [data-global-agent]'));assert.equal(root.dataset.mode,'pane');assert.ok(Number.parseFloat(doc.querySelector('[data-pane=agent]').style.width)>0);
  assistant.history=[{role:'user',content:'Synthetic conversation'}];await assistant.persist();await a.go('recent');assert.equal(root.isConnected,true);assert.equal(root.dataset.mode,'floating');assert.equal(assistant.history.length,1);
  assistant.floatingControl.select(true);await a.enter(r.current);assert.equal(root.dataset.mode,'pane');assert.equal(assistant.floatingControl.selected,false);assert.ok(root.closest('[data-pane=agent]'));await assistant.setMode('floating');assert.equal(doc.querySelector('[data-pane=agent]'),null);
- assistant.hide();assert.equal(root.hidden,true);assert.equal(assistant.bubble.hidden,false);assert.ok(JSON.parse(r.data.get('chats-agent.json')).conversations.length);
+ assistant.hide();assert.equal(root.hidden,true);assert.equal(assistant.bubble.hidden,true,'an idle minimised assistant leaves no floating entry');assert.ok(JSON.parse(r.data.get('chats-agent.json')).conversations.length);
+ await assistant.show();assert.equal(assistant.history.length,1);
+});
+test('a task minimised mid-run shows its progress in a small status bubble until the result is read',async t=>{
+ const{r,assistant}=await fixture(t);await assistant.show();
+ r.win.native.call=((call)=>(action,params)=>action==='aiStatus'?Promise.resolve({personalReady:true,campusReady:false}):call(action,params))(r.win.native.call.bind(r.win.native));
+ let release,requests=0;assistant.runner.stream=async()=>{if(requests++===0)return{calls:[call('list_lessons',{limit:1})]};await new Promise(resolve=>release=resolve);return{answer:'找到了'}};
+ assistant.input.value='找课程';const running=assistant.submit();await new Promise(resolve=>setTimeout(resolve,30));
+ assistant.hide();assert.equal(assistant.bubble.hidden,false);assert.match(assistant.bubble.textContent,/正在执行 · 1 步/);assert.ok(assistant.bubble.querySelector('.agent-spinner'));
+ release();await running;assert.equal(assistant.bubble.hidden,false);assert.match(assistant.bubble.textContent,/已完成/);
+ assistant.bubble.click();await new Promise(resolve=>setTimeout(resolve,20));assert.equal(assistant.root.hidden,false);assert.equal(assistant.bubble.hidden,true);
+ assistant.hide();assert.equal(assistant.bubble.hidden,true,'a read result does not bring the bubble back');
 });
 test('interface excludes credentials and its own assistant and rejects expired observed controls',async t=>{
  const{r,a,assistant,doc}=await fixture(t);await a.go('recent');await assistant.show();await new Promise(resolve=>setTimeout(resolve,30));const {AgentInterface}=await r.load('agent-interface.js'),ui=new AgentInterface(doc);
@@ -139,17 +150,19 @@ test('floating assistant geometry keeps the opposite resize edge fixed and its t
 test('docking and minimising cancel floating adjustment and preserve the saved frame',async t=>{
  const{r,a,assistant}=await fixture(t);await assistant.show();const control=assistant.floatingControl;control.select(true);await a.enter(r.current);await assistant.setMode('pane');assert.equal(control.selected,false);control.select(true);assert.equal(control.selected,false);await assistant.setMode('floating');control.select(true);assistant.hide();assert.equal(control.selected,false);assert.equal(assistant.root.hidden,true);
 });
-test('agent run shows readable step targets and results while running, then folds into one summary',async t=>{
+test('agent run stays folded with one live status, never shows interim model text, then shows only the final reply',async t=>{
  const{r,assistant,doc}=await fixture(t);await assistant.show();assistant.addTurn('user','打开设计心理学');assistant.startProgress();
- const progress=doc.querySelector('.agent-progress');assert.equal(progress.open,true);assert.equal(progress.dataset.state,'running');
- assistant.event({type:'turn',index:0});assistant.event({type:'delta',text:'我先找课程。'});assert.equal(progress.querySelector('.agent-progress-label').textContent,'我先找课程。');
+ const progress=doc.querySelector('.agent-progress');assert.equal(progress.open,false);assert.equal(progress.dataset.state,'running');
+ assistant.event({type:'turn',index:0});assistant.event({type:'delta',text:'我先找课程。'});assert.equal(progress.querySelector('.agent-progress-label').textContent,'正在思考…');assert.ok(!assistant.log.textContent.includes('我先找课程'));
  assistant.event({type:'step',name:'app_do',action:'list_lessons',args:{query:'设计'}});const running=doc.querySelector('.agent-step[data-state=running]');assert.ok(running);assert.match(running.textContent,/查找课次.*设计/);
  assistant.event({type:'result',ok:true,action:'list_lessons',output:{total:3,lessons:[]}});assert.equal(doc.querySelector('.agent-step[data-ok=true] .agent-step-result').textContent,'3 节');
- assistant.event({type:'turn',index:1});assert.equal(progress.querySelector('.agent-progress-label').textContent,'正在决定下一步…');
+ assistant.event({type:'turn',index:1});assert.equal(progress.querySelector('.agent-progress-label').textContent,'正在思考下一步…');
+ assistant.event({type:'delta',text:'我再看看。'});assert.equal(progress.querySelector('.agent-progress-label').textContent,'正在思考下一步…');
+ const musing='页码时间戳超过了视频长度，也许课程时间与视频时间不同，我再跳转一次看看。\n继续核对第二页的时间。'.repeat(3);assistant.event({type:'delta',text:musing});assert.equal(progress.querySelector('.agent-progress-label').textContent,'正在整理回答…');assert.equal(doc.querySelectorAll('.agent-turn.assistant .agent-message').length,0);assert.ok(!assistant.log.textContent.includes('页码时间戳'));
  assistant.event({type:'step',name:'app_do',action:'open_lesson',args:{key:'course-lesson',at:61}});assert.match(doc.querySelectorAll('.agent-step')[1].textContent,/进入课程.*Synthetic Course.*1:01/);
  assistant.event({type:'result',ok:false,action:'open_lesson',error:'没有权限'});assistant.event({type:'done',text:'已找到 **3 节**，但无法进入。'});
  assert.equal(progress.open,false);assert.equal(progress.dataset.state,'done');assert.match(progress.querySelector('.agent-progress-meta').textContent,/2 步 · 1 项未成功/);
- assert.equal(doc.querySelector('.agent-step[data-ok=false] .agent-step-error').textContent,'没有权限');assert.equal(doc.querySelector('.agent-turn.assistant .agent-message strong').textContent,'3 节');assert.ok(!assistant.log.textContent.includes('我先找课程'));
+ assert.equal(doc.querySelector('.agent-step[data-ok=false] .agent-step-error').textContent,'没有权限');assert.equal(doc.querySelector('.agent-turn.assistant .agent-message strong').textContent,'3 节');assert.ok(!assistant.log.textContent.includes('我先找课程'));assert.ok(!assistant.log.textContent.includes('页码时间戳'));assert.equal(doc.querySelectorAll('.agent-turn.assistant .agent-message').length,1);assert.ok(doc.querySelector('.agent-turn.assistant .agent-message').classList.contains('arrived'));
  const activity=assistant.activity();assert.equal(activity.steps[0].result,'3 节');assert.match(activity.steps[1].detail,/Synthetic Course/);assert.equal(activity.steps[1].ok,false);
  assistant.history=[{role:'assistant',content:'已找到。',activity}];assistant.renderHistory();assert.equal(doc.querySelectorAll('.agent-step').length,2);assert.equal(doc.querySelector('.agent-progress').open,false);assert.equal(r.calls.filter(c=>c[0]==='ai').length,0);
 });

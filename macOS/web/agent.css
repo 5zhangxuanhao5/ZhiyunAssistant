@@ -189,7 +189,8 @@
   border-top: 1px solid var(--border-soft);
   background: color-mix(in srgb, var(--text) 2.5%, var(--surface));
 }
-.agent-progress-items::before { content: ""; position: absolute; left: 17.5px; top: 18px; bottom: 18px; width: 1px; background: var(--border-soft); }
+/* A long run stays a compact, scrollable list when opened. */
+.agent-progress[open] > .agent-progress-items { max-height: min(260px, 42vh); overflow-y: auto; overscroll-behavior: contain; }
 .agent-progress-items:empty { display: none; }
 
 .agent-spinner { display: block; width: 12px; height: 12px; border: 1.6px solid color-mix(in srgb, var(--accent) 22%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: agent-spin .75s linear infinite; }
@@ -205,6 +206,9 @@
   line-height: 18px;
   color: var(--text);
 }
+/* Each step draws its own connector, so the line follows a scrolled list. */
+.agent-step { position: relative; }
+.agent-step:not(:last-child)::after { content: ""; position: absolute; left: 7.5px; top: 20px; bottom: -6px; width: 1px; background: var(--border-soft); }
 .agent-step-mark { position: relative; z-index: 1; display: grid; place-items: center; width: 16px; height: 18px; background: color-mix(in srgb, var(--text) 2.5%, var(--surface)); }
 .agent-step-mark .ui-icon { width: 12px; height: 12px; flex-basis: 12px; }
 .agent-step[data-ok=true] .agent-step-mark { color: var(--success); }
@@ -268,24 +272,29 @@
 .global-agent .agent-stop:hover { background: color-mix(in srgb, var(--text), #000 15%); }
 .global-agent[data-view=settings] .agent-composer, .global-agent[data-view=history] .agent-composer { display: none; }
 
-/* Minimised entry */
+/* Background task status while minimised. It only exists during or right after a run;
+   on the study page it keeps clear of the right-hand panes and their send buttons. */
 .agent-bubble {
   position: fixed;
   right: 20px;
   bottom: 20px;
   z-index: 20001;
-  height: 36px;
-  padding: 0 15px 0 12px;
-  gap: 7px;
+  height: 34px;
+  padding: 0 14px 0 11px;
+  gap: 8px;
   border: 1px solid var(--border-soft);
-  border-radius: 18px;
+  border-radius: 17px;
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow-md);
   font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  animation: agent-arrive .24s cubic-bezier(.2, .7, .2, 1);
 }
+.study-mode .agent-bubble { right: auto; left: 22px; bottom: 22px; }
 .agent-bubble:hover { background: var(--surface); box-shadow: var(--shadow-lg); }
-.agent-bubble .ui-icon { color: var(--accent); }
+.agent-bubble .ui-icon { width: 14px; height: 14px; flex-basis: 14px; color: var(--success); }
+.agent-bubble[data-state=failed] .ui-icon { color: var(--danger); }
 
 /* ---------- History and settings views ---------- */
 .agent-subhead { display: flex; align-items: center; gap: 6px; margin: -6px 0 0; }
@@ -379,6 +388,6 @@
   .global-agent *, .global-agent *::before, .global-agent *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
   .agent-progress[data-state=running] .agent-progress-label, .agent-step[data-state=running] .agent-step-label { -webkit-text-fill-color: currentColor; background: none; }
 }
-.agent-progress[data-state=running] .agent-step-earlier { display: none; }
-.agent-progress-earlier { position: relative; z-index: 1; padding: 2px 0 4px 24px; font-size: 11.5px; color: var(--text-3); }
-.agent-progress:not([data-state=running]) .agent-progress-earlier { display: none; }
+/* The final reply arrives in one piece after a run; it settles in rather than popping. */
+.agent-message.arrived { animation: agent-arrive .28s cubic-bezier(.2, .7, .2, 1); }
+@keyframes agent-arrive { from { opacity: 0; transform: translateY(4px); } }

@@ -1,17 +1,17 @@
-# Mac Claude UI iterations — 2026-10-19
+# Mac Claude revisions — 2026-10-19
 
-Two consecutive UI revisions are preserved as separate commits and tags. The application package version remains 1.8.1/build16 because this upload archives source, not a new signed application release.
+Four consecutive Claude revisions are preserved as separate commits and tags. This is source archival; application package version remains 1.8.1/build16, and existing installer assets are unchanged.
 
-## First pass
+| Revision | Tag | Scope |
+| --- | --- | --- |
+| 1 | `mac-claude-ui-round1-20261018` | Workspace, theme and task-card redesign |
+| 2 | `mac-claude-ui-round2-20261019` | Timetable, appearance and agent refinements |
+| 3 | `mac-claude-ui-round3-20261019` | Study-pane chrome, compact execution status and background course-material search |
 
-Tag: `mac-claude-ui-round1-20261018`. Source was reconstructed from the 2026-10-18 local edit history at the boundary immediately before the second user request (23:33:53 Asia/Shanghai). Seven source files match the recorded next-message backups byte for byte. Historical source writes/text patches restore the remaining changes. Theme previews were regenerated from this recovered source with synthetic fixtures; they are refreshed previews, not claimed to be the original historical screenshot bytes.
+## Recovery and validation
 
-The first pass replaces layered CSS, reorganises classroom/study controls, redesigns the floating agent into task cards with live step status and collapsed completion summaries, and unifies native toolbar symbols/window surfaces. It retains 20 themes. Local validation: 205 Node/DOM tests and 58 browser-module/resource checks passed; all 20 themes passed the real hidden-WebKit gallery.
+Revisions 1–2 were previously cloud-download verified. Revision 3 is reconstructed from the verified revision-2 snapshot and historical source writes/text patches at the next user-request boundary (2026-10-19 08:32:41 Asia/Shanghai); ten source files match the recorded file-history backups byte for byte. Its synthetic theme-preview images are regenerated using the recovered source, not claimed to be original historical screenshot bytes. Revision 4 is copied from the current Claude Mac working project, including the follow-up change to local credential persistence.
 
-## Second pass
+Local validation passed: revision 3 has 221 Node/DOM tests, revision 4 has 230, and each has 58 browser-module/resource checks. A hidden-WebKit theme gallery refreshes revision-3 previews. GitHub CI validates the latest uploaded source separately. These checks do not claim all live course formats or physical input devices were retested.
 
-Tag: `mac-claude-ui-round2-20261019`. This is the current Mac source copied from the user's Claude working project. It adds responsive agent history and record clearing, background assistant actions, past-only recent courses, a timetable-style classroom, compact study headers and refined privacy/note pages. Appearance is reduced to three palettes with light/dark/system modes, preserving mappings for previous theme IDs. Local validation: 215 Node/DOM tests and 58 browser-module/resource checks passed. Repository CI validates the newly uploaded head separately; these local checks do not claim all physical peripherals or live classroom sources were retested.
-
-## Scope and recovery
-
-Only Mac source and this revision record were updated. Other clients, existing release tags and previously uploaded 1.8.1 installer assets remain unchanged. No handoff-package API keys, account state, notes, recordings, signing material, build output or installed dependencies were uploaded. Check out either tag to recover that revision. The latest source is on main; the old 1.8.1 release installers do not contain these UI passes.
+Only Mac source and revision documentation are updated. Other clients, existing tags and previously uploaded installers remain unchanged. Actual API keys, account state, notes, recordings, signing material, build outputs and installed dependencies are excluded. Existing local service configuration files remain on the user's computer. Check out a revision tag to recover that source; the earlier 1.8.1 release installers do not contain these changes.

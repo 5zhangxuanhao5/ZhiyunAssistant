@@ -313,14 +313,20 @@ export class PaneLayoutController {
 
 /** Two-finger trackpad wheel flips pages. Mouse press/drag remains native text selection. */
 export function attachPageGestures(node, { onPage, onBrowse, enabled = () => true, selectionRoot = node, threshold = 80 } = {}) {
-  const disposers = [], doc = node.ownerDocument; node.classList.add('parity-page-gestures'); let sum = 0, last = 0, timer = 0, touch = null, suppressedUntil = 0;
+  const disposers = [], doc = node.ownerDocument; node.classList.add('parity-page-gestures'); let sum = 0, last = 0, timer = 0, wheelCommitted = false, touch = null, suppressedUntil = 0;
   listen(node, 'wheel', e => {
     if (!enabled() || e.ctrlKey || e.metaKey || textSelectionHeld(selectionRoot)) return;
     if (Math.abs(e.deltaY) >= Math.abs(e.deltaX) / 1.15) { if (Math.abs(e.deltaY) > 2) onBrowse?.('vertical'); return; }
     if (Math.abs(e.deltaX) < 2) return;
-    e.preventDefault(); const now = performance.now(); if (now - last > 180) sum = 0; last = now; sum += e.deltaX;
-    clearTimeout(timer); timer = setTimeout(() => sum = 0, 180);
-    if (Math.abs(sum) >= threshold) { const direction = sum > 0 ? 1 : -1; sum = 0; onPage?.(direction, 1); }
+    e.preventDefault(); const now = performance.now();
+    if (now - last > 240) { sum = 0; wheelCommitted = false; }
+    last = now;
+    clearTimeout(timer); timer = setTimeout(() => { sum = 0; wheelCommitted = false; }, 240);
+    // One trackpad gesture, including its momentum tail, is one page turn.
+    if (wheelCommitted) return;
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? Math.max(100, node.clientWidth) : 1;
+    sum += e.deltaX * unit;
+    if (Math.abs(sum) >= threshold) { const direction = sum > 0 ? 1 : -1; sum = 0; wheelCommitted = true; onPage?.(direction, 1); }
   }, { passive: false }, disposers);
   listen(node, 'pointerdown', e => { if (e.pointerType !== 'touch' || !enabled() || isEditable(e.target)) return; touch = { id: e.pointerId, x: e.clientX, y: e.clientY, width: node.clientWidth, swiping: false }; }, false, disposers);
   listen(node, 'pointermove', e => { if (!touch || e.pointerId !== touch.id) return; const dx = e.clientX - touch.x, dy = e.clientY - touch.y; if (Math.abs(dy) > 14 && Math.abs(dy) > Math.abs(dx) * 1.2) { touch = null; onBrowse?.('vertical'); return; } if (Math.abs(dx) > 14 && Math.abs(dx) > Math.abs(dy) * 1.2) { touch.swiping = true; e.preventDefault(); } }, { passive: false }, disposers);
@@ -366,7 +372,7 @@ export class FloatingReturn {
 export function attachOverviewGestures(body, { getItems, getSelected, setSelected, isSelectionMode = () => false, getColumns, setColumns, onActivate } = {}) {
   const doc = body.ownerDocument, disposers = [], wrapper = element(doc, 'div', 'parity-overview-shell'), rail = element(doc, 'div', 'parity-overview-rail'), thumb = element(doc, 'div', 'parity-overview-thumb');
   body.before(wrapper); wrapper.append(body, rail); rail.append(thumb); body.classList.add('parity-overview-scroll'); rail.setAttribute('role', 'scrollbar'); rail.setAttribute('aria-label', '课件概览滚动'); rail.tabIndex = 0;
-  let drag = null, pinchColumns = 4, zoomAt = 0, suppressedUntil = 0, pending = 0, disposed = false;
+  let drag = null, press = null, pinchColumns = 4, zoomAt = 0, suppressedUntil = 0, pending = 0, disposed = false;
   const items = () => getItems?.() || [...body.querySelectorAll('.overview-item')].map(node => ({ id: node.dataset.id, node }));
   const active = target => items().find(item => item.node === target?.closest?.('.overview-item') || item.node.contains(target));
   const extent = () => Math.max(0, body.scrollHeight - body.clientHeight);
@@ -377,20 +383,22 @@ export function attachOverviewGestures(body, { getItems, getSelected, setSelecte
   listen(rail, 'pointerdown', e => { if (e.button !== 0) return; e.preventDefault(); e.stopPropagation(); const box = thumb.getBoundingClientRect(); drag = { kind: 'rail', id: e.pointerId, grab: e.clientY >= box.top && e.clientY <= box.bottom ? e.clientY - box.top : box.height / 2 }; rail.setPointerCapture(e.pointerId); scrollRail(e.clientY); }, false, disposers);
   listen(rail, 'keydown', e => { if (['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End'].includes(e.key)) { e.preventDefault(); body.scrollTop = e.key === 'Home' ? 0 : e.key === 'End' ? extent() : body.scrollTop + (e.key.includes('Down') ? 1 : -1) * (e.key.startsWith('Page') ? body.clientHeight * .8 : 50); refresh(); } }, false, disposers);
   listen(body, 'pointerdown', e => {
-    if (!isSelectionMode() || e.button !== 0 || isControl(e.target)) return; const item = active(e.target); e.preventDefault(); e.stopImmediatePropagation(); suppressedUntil = performance.now() + 350;
+    if (e.button !== 0 || isControl(e.target)) return;
+    if (!isSelectionMode()) { const item = active(e.target); press = { id: item?.id, x: e.clientX, y: e.clientY, scroll: body.scrollTop, moved: false }; return; }
+    const item = active(e.target); e.preventDefault(); e.stopImmediatePropagation(); suppressedUntil = performance.now() + 350;
     if (item) { const ordered = items(), ids = ordered.map(i => i.id), initial = [...(getSelected?.() || [])], anchor = ids.indexOf(item.id); drag = { kind: 'brush', id: e.pointerId, ids, initial, anchor, adding: !initial.includes(item.id) }; setSelected?.(brushRange(ids, initial, anchor, anchor, drag.adding)); refresh(); }
     else drag = { kind: 'blank', id: e.pointerId, y: e.clientY, scroll: body.scrollTop };
     body.setPointerCapture?.(e.pointerId);
   }, true, disposers);
-  listen(doc, 'pointermove', e => { if (!drag || drag.id !== e.pointerId) return; e.preventDefault(); if (drag.kind === 'rail') scrollRail(e.clientY); else if (drag.kind === 'blank') { body.scrollTop = drag.scroll + drag.y - e.clientY; refresh(); } else { const hit = active(doc.elementFromPoint(e.clientX, e.clientY)); if (hit) { setSelected?.(brushRange(drag.ids, drag.initial, drag.anchor, drag.ids.indexOf(hit.id), drag.adding)); refresh(); } } }, { passive: false }, disposers);
+  listen(doc, 'pointermove', e => { if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 8) press.moved = true; if (!drag || drag.id !== e.pointerId) return; e.preventDefault(); if (drag.kind === 'rail') scrollRail(e.clientY); else if (drag.kind === 'blank') { body.scrollTop = drag.scroll + drag.y - e.clientY; refresh(); } else { const hit = active(doc.elementFromPoint(e.clientX, e.clientY)); if (hit) { setSelected?.(brushRange(drag.ids, drag.initial, drag.anchor, drag.ids.indexOf(hit.id), drag.adding)); refresh(); } } }, { passive: false }, disposers);
   const end = e => { if (!drag || e.pointerId !== drag.id) return; suppressedUntil = performance.now() + 300; const source = drag.kind === 'rail' ? rail : body; if (source.hasPointerCapture?.(e.pointerId)) source.releasePointerCapture(e.pointerId); drag = null; refresh(); };
   listen(doc, 'pointerup', end, false, disposers); listen(doc, 'pointercancel', end, false, disposers);
-  listen(body, 'click', e => { const item = active(e.target); if (!item) return; if (isSelectionMode() || performance.now() < suppressedUntil) { e.preventDefault(); e.stopImmediatePropagation(); return; } if (onActivate) { e.preventDefault(); e.stopImmediatePropagation(); onActivate(item.id); } }, true, disposers);
+  listen(body, 'click', e => { const item = active(e.target); if (!item) return; if (isSelectionMode() || performance.now() < suppressedUntil || (press && (press.moved || press.id !== item.id || Math.abs(body.scrollTop - press.scroll) > 4))) { press = null; e.preventDefault(); e.stopImmediatePropagation(); return; } press = null; if (onActivate) { e.preventDefault(); e.stopImmediatePropagation(); onActivate(item.id); } }, true, disposers);
   listen(body, 'wheel', e => { if (isSelectionMode()) { e.preventDefault(); return; } if (e.ctrlKey || e.metaKey) { e.preventDefault(); pinchColumns = getColumns?.() || 4; const next = clamp(pinchColumns + (e.deltaY > 0 ? 1 : -1), 1, 8); if (performance.now() - zoomAt > 120) { zoomAt = performance.now(); setColumns?.(next); refresh(); } } }, { passive: false }, disposers);
   listen(body, 'gesturestart', e => { if (isSelectionMode()) { e.preventDefault(); return; } e.preventDefault(); pinchColumns = getColumns?.() || 4; suppressedUntil = performance.now() + 500; zoomAt = 0; }, { passive: false }, disposers);
   listen(body, 'gesturechange', e => { e.preventDefault(); zoom(e.scale); suppressedUntil = performance.now() + 350; }, { passive: false }, disposers);
   listen(body, 'gestureend', e => { e.preventDefault(); zoomAt = 0; zoom(e.scale); suppressedUntil = performance.now() + 350; }, { passive: false }, disposers);
   listen(body, 'scroll', refresh, { passive: true }, disposers);
   const observer = new ResizeObserver(refresh); observer.observe(body); refresh();
-  return { refresh, selectionChanged() { drag = null; if (!isSelectionMode()) setSelected?.([]); refresh(); }, dispose() { disposed = true; observer.disconnect(); disposers.forEach(f => f()); if (pending) cancelAnimationFrame(pending); body.classList.remove('parity-overview-scroll'); body.style.touchAction = ''; wrapper.before(body); wrapper.remove(); } };
+  return { refresh, selectionChanged() { drag = null; press = null; if (!isSelectionMode()) setSelected?.([]); refresh(); }, dispose() { disposed = true; observer.disconnect(); disposers.forEach(f => f()); if (pending) cancelAnimationFrame(pending); body.classList.remove('parity-overview-scroll'); body.style.touchAction = ''; wrapper.before(body); wrapper.remove(); } };
 }

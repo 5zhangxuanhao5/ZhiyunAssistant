@@ -226,7 +226,15 @@ func authenticationExpired(_ response:HTTPURLResponse,_ data:Data)->Bool {
     guard response.statusCode != 403 else{return false}
     if response.statusCode==401{return true}
     guard (200..<400).contains(response.statusCode) else{return false}
-    if let row=try? JSONSerialization.jsonObject(with:data) as? [String:Any],(row["code"] as? Int == 401 || row["code"] as? String == "401"){return true}
+    if let row=try? JSONSerialization.jsonObject(with:data) as? [String:Any]{
+        var pending=[row],codes=[Int](),depth=0
+        while !pending.isEmpty && depth<3{
+            var next=[[String:Any]]()
+            for item in pending{if let code=item["code"] as? Int ?? Int(item["code"] as? String ?? ""){codes.append(code)};for key in ["result","data"]{if let nested=item[key] as? [String:Any]{next.append(nested)}}}
+            pending=next;depth+=1
+        }
+        if codes.contains(403){return false};if codes.contains(401){return true}
+    }
     let type=response.mimeType?.lowercased() ?? "",host=response.url?.host?.lowercased() ?? "",path=response.url?.path.lowercased() ?? ""
     return type.contains("text/html") && (host != "classroom.zju.edu.cn" || path.contains("login") || data.starts(with:Array("<!DOCTYPE".utf8)) || data.starts(with:Array("<!doctype".utf8)))
 }
@@ -573,6 +581,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard let view=web else{DispatchQueue.main.async(execute:scriptDone);return}
         view.callAsyncJavaScript("if (typeof window.zhiyunFlush === 'function') { await window.zhiyunFlush(); } return true;",arguments:[:],in:nil,in:.page){_ in scriptDone()}
     }
+    func applicationDidBecomeActive(_ notification: Notification) { if web != nil { event("foreground",[:]) } }
+    func applicationDidResignActive(_ notification: Notification) { if web != nil { event("background",[:]) } }
     func applicationWillTerminate(_ notification: Notification) { if let monitor=mouseDragMonitor{NSEvent.removeMonitor(monitor)};sessionWeb?.stopLoading();sessionDeadline?.cancel(); downloads.values.forEach { $0.cancel() }; requests.values.forEach{$0.cancel()}; streams.values.forEach { $0.session.invalidateAndCancel() };ocrOperations.values.forEach{$0.invalidateAndCancel()};remoteTransfers.values.forEach{$0.cancel()}; listener?.cancel() }
     func windowWillClose(_ notification: Notification) { if notification.object as? NSWindow === login { credentialUIAllowed=false;persistCookies();login=nil;loginWeb=nil } }
     func webView(_ view: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy)->Void) {
@@ -764,7 +774,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard cookieRestoreComplete else{restoreCookies{self.resumeOfficialSession(force:force,done:done)};return}
         if !sessionCallbacks.isEmpty{sessionCallbacks.append(done);return}
         if !force && !sessionNeedsResume{done(true);return}
-        if force && Date().timeIntervalSince(sessionLastAttempt)<15{done(false);return}
+        if Date().timeIntervalSince(sessionLastAttempt)<15{done(false);return}
         sessionCallbacks.append(done);sessionNeedsResume=false;sessionLastAttempt=Date();let generation=UUID();sessionGeneration=generation
         let timeout=DispatchWorkItem{self.finishSession(false,generation:generation)};sessionDeadline=timeout;DispatchQueue.main.asyncAfter(deadline:.now()+10,execute:timeout)
         #if NATIVE_CONTRACT_TESTS
@@ -776,7 +786,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     }
     private func finishSession(_ ready:Bool,generation:UUID){
         guard sessionGeneration==generation,!sessionCallbacks.isEmpty else{return};sessionDeadline?.cancel();sessionDeadline=nil;sessionWeb?.stopLoading();sessionWeb?.navigationDelegate=nil;sessionWeb?.uiDelegate=nil;sessionWeb=nil
-        let callbacks=sessionCallbacks;sessionCallbacks.removeAll();if ready{persistCookies()};callbacks.forEach{$0(ready && !loggingOut)}
+        let callbacks=sessionCallbacks;sessionCallbacks.removeAll();sessionNeedsResume = !ready
+        if ready{persistCookies()};callbacks.forEach{$0(ready && !loggingOut)}
     }
     func requiresSessionRecovery(_ done:@escaping(Bool)->Void){
         storageQueue.async{let protected=self.credentialCache.requiresAuthorization([persistedSessionCredential,"cookies"])
@@ -800,9 +811,17 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                     self.pendingRequests.remove(id);guard self.cancelledRequests.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
                     let expired=authenticationExpired(response,data)
                     if expired && body.isEmpty && !retried {
-                        self.pendingRequests.insert(id);self.resumeOfficialSession(force:true){ready in
-                            self.pendingRequests.remove(id);guard self.cancelledRequests.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
-                            if ready{self.performCourseRequest(id,url:url,body:body,retried:true)}else{self.reply(id,["status":401,"text":"{\"code\":401,\"message\":\"在线会话需要重新登录；离线课程仍可查看\"}"])}
+                        self.pendingRequests.insert(id)
+                        self.cookieRequest(url){current in
+                            let retry: (Bool)->Void = {ready in
+                                self.pendingRequests.remove(id);guard self.cancelledRequests.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
+                                if ready{self.performCourseRequest(id,url:url,body:body,retried:true)}else{self.reply(id,["status":401,"text":"{\"code\":401,\"message\":\"在线会话需要重新登录；离线课程仍可查看\"}"])}
+                            }
+                            // A slower parallel request can return 401 after another
+                            // request has already refreshed the token. Reuse that token
+                            // rather than treating the handshake cooldown as logout.
+                            if let fresh=current.value(forHTTPHeaderField:"Authorization"),fresh != request.value(forHTTPHeaderField:"Authorization"){retry(true)}
+                            else{self.resumeOfficialSession(force:true,done:retry)}
                         };return
                     }
                     if url.path.contains("get-week-schedules"),let envelope=try? JSONSerialization.jsonObject(with:data) as? [String:Any]{let result=envelope["result"];let kind=result is [Any] ? "array":result is [String:Any] ? "object":"empty";let keys=(result as? [String:Any])?.keys.sorted().joined(separator:",") ?? "";self.diagnostic("Schedule schema code " + String(describing:envelope["code"] ?? "none") + " result " + kind + " keys " + keys)}

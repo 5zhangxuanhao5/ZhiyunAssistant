@@ -14,7 +14,7 @@
 
 | 客户端 | 本轮更新 | 系统与安装说明 |
 | --- | --- | --- |
-| [Mac](macOS/README.md) | 1.8.3：整门课限时检索、同课时间定位、中文网络错误；保留四轮 Claude 改版及校内 AI / OCR 默认服务 | macOS 13+；同一 DMG / ZIP 支持 Apple Silicon 和 Intel；当前为 ad-hoc 签名预览包，尚未完成 Developer ID 公证 |
+| [Mac](macOS/README.md) | 1.8.4：整门课限时检索、同课时间定位、中文网络错误；保留四轮 Claude 改版及校内 AI / OCR 默认服务 | macOS 13+；同一 DMG / ZIP 支持 Apple Silicon 和 Intel；当前为 ad-hoc 签名预览包，尚未完成 Developer ID 公证 |
 | [Windows](windows/README.md) | 0.8.0-beta.2：校内 AI / OCR 自动回退、个人 API 优先 | Windows 10/11；x64 和 ARM64 分别构建、分别验证；未做 Authenticode 发行签名 |
 | [Android](android/README.md) | 0.1.0-beta.3：校内 AI / OCR 自动回退、个人 API 优先 | Android 8.0+；手机、平板及折叠屏；可安装包需发行签名，CI 的 unsigned APK 仅用于构建验证 |
 | [HarmonyOS](harmonyOS/README.md) | 0.7.5：校内 AI / OCR 自动回退、个人 API 优先 | 最低 HarmonyOS 6.1.1 / API 24；手机和平板；公开 HAP 需自行配置匹配设备的调试签名，见[安装说明](harmonyOS/INSTALLATION.md) |

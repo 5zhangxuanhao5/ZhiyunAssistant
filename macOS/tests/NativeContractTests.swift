@@ -6,14 +6,18 @@ import Network
 // URLProtocol answers locally and never forwards anything to the network.
 final class SyntheticCourseProtocol:URLProtocol {
     static var responses=[String:[(Int,String,[String:String])]](),hits=[String:Int](),observed=[URLRequest]()
+    static var beforeResponse:((URLRequest,@escaping()->Void)->Void)?
     override class func canInit(with request:URLRequest)->Bool{request.url?.host=="classroom.zju.edu.cn"}
     override class func canonicalRequest(for request:URLRequest)->URLRequest{request}
     override func startLoading(){
         let path=request.url!.path;Self.hits[path,default:0]+=1;Self.observed.append(request)
         guard var rows=Self.responses[path],!rows.isEmpty else{client?.urlProtocol(self,didFailWithError:appError("Unexpected synthetic API request"));return}
         let row=rows.removeFirst();Self.responses[path]=rows
-        let response=HTTPURLResponse(url:request.url!,statusCode:row.0,httpVersion:"HTTP/1.1",headerFields:row.2)!
-        client?.urlProtocol(self,didReceive:response,cacheStoragePolicy:.notAllowed);client?.urlProtocol(self,didLoad:Data(row.1.utf8));client?.urlProtocolDidFinishLoading(self)
+        let deliver={
+            let response=HTTPURLResponse(url:self.request.url!,statusCode:row.0,httpVersion:"HTTP/1.1",headerFields:row.2)!
+            self.client?.urlProtocol(self,didReceive:response,cacheStoragePolicy:.notAllowed);self.client?.urlProtocol(self,didLoad:Data(row.1.utf8));self.client?.urlProtocolDidFinishLoading(self)
+        }
+        if let before=Self.beforeResponse{before(request,deliver)}else{deliver()}
     }
     override func stopLoading(){}
 }
@@ -318,6 +322,11 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(!authenticationExpired(forbidden,Data("{\"code\":401}".utf8)),"explicit course denial never triggers automatic retry")
         let unavailable=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/courseapi/test")!,statusCode:502,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"text/html"])!
         check(!authenticationExpired(unavailable,Data("<!doctype html>gateway unavailable".utf8)),"server HTML errors are not misidentified as authentication failures")
+        let jsonResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/courseapi/test")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"application/json"])!
+        check(authenticationExpired(jsonResponse,Data(#"{"code":0,"result":{"code":401}}"#.utf8)),"nested session expiry is recognized before schedule parsing latches recovery")
+        check(authenticationExpired(jsonResponse,Data(#"{"data":{"data":{"code":"401"}}}"#.utf8)),"string expiry codes inside nested service envelopes are recognized")
+        check(!authenticationExpired(jsonResponse,Data(#"{"code":403,"result":{"code":401}}"#.utf8)),"nested codes never override an explicit permission denial")
+
         let apiConfiguration=URLSessionConfiguration.ephemeral;apiConfiguration.httpCookieStorage=nil;apiConfiguration.urlCache=nil;apiConfiguration.protocolClasses=[SyntheticCourseProtocol.self]
         app.network=URLSession(configuration:apiConfiguration,delegate:app,delegateQueue:nil);defer{app.network.invalidateAndCancel()}
         SyntheticCourseProtocol.responses=[
@@ -348,6 +357,20 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(postResult["status"] as? Int==401 && SyntheticCourseProtocol.hits["/contract-post"]==1 && retryHandshakes==1,"POST authentication failures never replay mutations")
         let serverResult=try bridgeCall("request",["url":"https://classroom.zju.edu.cn/contract-502"]) as! [String:Any]
         check(serverResult["status"] as? Int==502 && SyntheticCourseProtocol.hits["/contract-502"]==1 && retryHandshakes==1,"upstream outage preserves status and does not trigger SSO")
+
+        SyntheticCourseProtocol.responses["/contract-late-expiry"]=[(401,"{\"code\":401}",["Content-Type":"application/json"]),(200,"{\"code\":200}",["Content-Type":"application/json"])]
+        SyntheticCourseProtocol.beforeResponse={request,deliver in
+            if request.url?.path=="/contract-late-expiry",SyntheticCourseProtocol.hits["/contract-late-expiry"]==1{
+                DispatchQueue.main.async{
+                    let fresh=HTTPCookie(properties:[.name:"_token",.value:"{i:0;s:6:\"_token\";i:1;s:20:\"parallel-fresh-token\";}",.domain:"classroom.zju.edu.cn",.path:"/",.secure:"TRUE",HTTPCookiePropertyKey(rawValue:"HttpOnly"):"TRUE"])!
+                    app.installCookies([fresh],done:deliver)
+                }
+            }else{deliver()}
+        }
+        let lateResult=try bridgeCall("request",["url":"https://classroom.zju.edu.cn/contract-late-expiry"]) as! [String:Any]
+        SyntheticCourseProtocol.beforeResponse=nil
+        check(lateResult["status"] as? Int==200 && SyntheticCourseProtocol.hits["/contract-late-expiry"]==2 && retryHandshakes==1,"late parallel expiry reuses the already renewed token without another SSO handshake")
+        check(SyntheticCourseProtocol.observed.last?.value(forHTTPHeaderField:"Authorization")=="Bearer parallel-fresh-token","late retry uses the current WebKit token rather than the rejected request token")
         var bridgeSecretReads=0,bridgeCookieWrites=0,bridgeKeychainOnBackground=true
         app.testKeychainOperation={name,data,remove,allowUI,onError in
             bridgeKeychainOnBackground = bridgeKeychainOnBackground && !Thread.isMainThread

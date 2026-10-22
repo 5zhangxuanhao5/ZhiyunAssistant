@@ -73,3 +73,18 @@ test('theme reflow retains custom arrangement and live note nodes at a new stage
   assert.equal(panes.notes.querySelector('[contenteditable]'),editor);assert.equal(editor.textContent,'未保存的内容');
   assert.equal(control.key,'notes+slides@900x600');
 });
+
+
+test('one horizontal gesture plus a long momentum tail turns exactly once, the next gesture turns again',async t=>{
+ const f=await fixture(t,'<div id="text">正文</div>'),node=f.doc.querySelector('#text'),turns=[];
+ const dispose=f.api.attachPageGestures(node,{onPage:(d,n)=>turns.push([d,n])});t.after(dispose);
+ for(const delta of [35,55,110,80,50,30,15,5,2]){f.advance(30);node.dispatchEvent(new f.win.WheelEvent('wheel',{deltaX:delta,cancelable:true}));}
+ assert.deepEqual(turns,[[1,1]]);f.advance(300);node.dispatchEvent(new f.win.WheelEvent('wheel',{deltaX:-100,cancelable:true}));assert.deepEqual(turns,[[1,1],[-1,1]]);
+});
+test('overview scroll/press movement is never activated as a new page click',async t=>{
+ const f=await fixture(t,'<div class="overview-item" data-id="a">A</div><div class="overview-item" data-id="b">B</div>'),body=f.doc.querySelector('#body'),activated=[];
+ const control=f.api.attachOverviewGestures(body,{onActivate:id=>activated.push(id)});t.after(()=>control.dispose());const a=body.querySelector('[data-id="a"]'),b=body.querySelector('[data-id="b"]');
+ f.pointer(a,'pointerdown');body.scrollTop=80;f.pointer(f.doc,'pointermove',{y:80});f.pointer(a,'pointerup',{y:80});a.click();assert.deepEqual(activated,[]);
+ f.pointer(a,'pointerdown');f.pointer(b,'pointerup');b.click();assert.deepEqual(activated,[]);
+ f.pointer(a,'pointerdown');f.pointer(a,'pointerup');a.click();assert.deepEqual(activated,['a']);
+});

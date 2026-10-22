@@ -138,6 +138,7 @@ let notes = [],
   overviewCols = 4,
   overviewSelect = false,
   overviewPicker = false,
+  overviewPageTarget = null,
   fullPage = 0;
 let slideCopyTarget = null;
 const aiOperations = new Set(),
@@ -244,10 +245,11 @@ function iconButton(name,label,fn){
 }
 function toast(text) {
   if (isCancelled(text)) return;
-  $("#toast").textContent = userMessage(text);
-  $("#toast").classList.add("show");
+  const node = $("#toast"); if (!node) return;
+  node.textContent = userMessage(text);
+  node.classList.add("show");
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => $("#toast").classList.remove("show"), 2800);
+  toast.timer = setTimeout(() => node.classList.remove("show"), 2800);
 }
 function check(text, value, fn) {
   const input = el("input", { type: "checkbox" });
@@ -312,11 +314,19 @@ function updateSessionRecovery(required) {
   if (!sessionRequestGuardInstalled) {
     const request = api.request;
     api.request = async function (...args) {
-      if (sessionRecoveryRequired)
-        throw new Error("请点击“恢复登录”后同步在线课程；本机资料仍可查看");
+      if (sessionRecoveryRequired) {
+        // An earlier expired request must not permanently latch the app offline.
+        // Only protected, unreadable credentials require an explicit restore action.
+        const status = await native.call("keychainStatus").catch(() => null);
+        if (status?.sessionAuthorizationRequired ?? status?.authorizationRequired)
+          throw new Error("请点击“恢复登录”后同步在线课程；本机资料仍可查看");
+      }
       const owner = account?.id, tenant = account?.tenantId;
       try {
-        return await request.apply(this, args);
+        const result = await request.apply(this, args);
+        if (sessionRecoveryRequired && account?.id === owner && account?.tenantId === tenant)
+          updateSessionRecovery(false);
+        return result;
       } catch (error) {
         if (account && account.id === owner && account.tenantId === tenant && sessionAuthenticationError(error))
           updateSessionRecovery(true);
@@ -586,7 +596,7 @@ function welcome(options = {}) {
       showActions(!!(status?.sessionAuthorizationRequired ?? status?.authorizationRequired));
     }).catch(() => {});
 }
-async function refreshAccount() {
+async function refreshAccount({ preserveRoute = false } = {}) {
   if (authRefreshing) return;
   authRefreshing = true;
   const wasRequired = sessionRecoveryRequired;
@@ -596,7 +606,7 @@ async function refreshAccount() {
     const result = await api.account();
     authenticated = true;
     const changed = !account || account.id !== result.id || account.tenantId !== result.tenantId;
-    const preserveStudy = !changed && page === "study";
+    const preserveStudy = !changed && (page === "study" || preserveRoute);
     if (!preserveStudy) {
       if (page === "study") {
         await saveNote();
@@ -640,7 +650,7 @@ async function refreshAccount() {
     } else account = result;
     await native.call("identity", { text: JSON.stringify(result) })
       .catch((error) => toast(error.message));
-    await native.call("loginDone");
+    if (!preserveRoute) await native.call("loginDone");
     if (!preserveStudy) {
       page = lastClassPage;
       viewStack = [];
@@ -658,6 +668,37 @@ async function refreshAccount() {
 native.on("login", () =>
   refreshAccount().catch((error) => toast(error.message)),
 );
+// Validate only on return from an actual idle period; no keep-alive polling.
+let sessionInactiveAt = 0, sessionIdleCheckAt = 0, sessionIdleCheck = null;
+function noteSessionInactive(now = Date.now()) { sessionInactiveAt = now; }
+function resumeAfterIdle(now = Date.now()) {
+  if (!account || document.visibilityState === "hidden" || !sessionInactiveAt ||
+      now - sessionInactiveAt < 120000 || now - sessionIdleCheckAt < 30000 ||
+      ["offline", "cache", "noteManager", "themes"].includes(page)) return Promise.resolve();
+  if (sessionIdleCheck) return sessionIdleCheck;
+  sessionInactiveAt = 0; sessionIdleCheckAt = now;
+  sessionIdleCheck = (async () => {
+    const status = await native.call("keychainStatus").catch(() => null);
+    if (status?.sessionAuthorizationRequired ?? status?.authorizationRequired) {
+      updateSessionRecovery(true); return;
+    }
+    try { await refreshAccount({ preserveRoute: true }); }
+    catch (error) {
+      if (sessionAuthenticationError(error)) updateSessionRecovery(true);
+      // Network loss is not logout. Keep the current lesson, editor and offline files.
+    }
+  })().finally(() => { sessionIdleCheck = null; });
+  return sessionIdleCheck;
+}
+window.addEventListener("blur", () => noteSessionInactive());
+window.addEventListener("focus", () => { resumeAfterIdle(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") noteSessionInactive();
+  else resumeAfterIdle();
+});
+native.on("background", () => noteSessionInactive());
+native.on("foreground", () => { resumeAfterIdle(); });
+
 async function loadData() {
   globalAssistant?.reset();
   courses = (await saved("courses.json", true)) || [];
@@ -1753,6 +1794,7 @@ async function enter(
   }
 }
 function leaveStudy() {
+  overviewPageTarget = null;
   globalAssistant?.leavePane();
   if (page !== "study") return;
   saveNote();
@@ -2492,6 +2534,7 @@ function horizontalPage(e) {
   }
 }
 function pageMove(direction) {
+  overviewPageTarget = null;
   if (!groups.length) return;
   window.getSelection()?.removeAllRanges();
   notesEditor?.clearSelection?.();
@@ -2673,7 +2716,7 @@ function lessonSpan() {
     recorded = video?.src && Number.isFinite(video.duration) && !source?.live ? video.duration + (source?.offset || 0) : 0;
   return materialSpan(lesson, { lines, slides }, recorded);
 }
-function seek(t, source = "transcript") {
+function seek(t, source = "transcript", pageId = null) {
   const before = {
     kind: "jump",
     at: mediaTime(),
@@ -2685,10 +2728,9 @@ function seek(t, source = "transcript") {
   const moved = Math.abs(before.at - t) > 1,
     oldIndex = index;
   at = Math.max(0, Math.min(t, lessonSpan()));
-  index = pageAtTime(
-    groups.map((g) => g.slide),
-    at,
-  );
+  const selected = pageId == null ? -1 : groups.findIndex(g => g.slide.id === pageId);
+  index = selected >= 0 ? selected : pageAtTime(groups.map(g => g.slide), at);
+  overviewPageTarget = selected >= 0 ? pageId : null;
   if (video && !currentVideoSource()?.live)
     video.currentTime = Math.max(0, at - (currentVideoSource()?.offset || 0));
   manual = false;
@@ -2715,7 +2757,8 @@ function seek(t, source = "transcript") {
     setTimeout(() => match.classList.remove("highlight"), 2000);
   }
   if (["question", "summary", "notes", "slides"].includes(source)) {
-    const image = $("#slidesBody .slide-image");
+    const image = pageId == null ? $("#slidesBody .slide-image") :
+      $$("#slidesBody .slide-image").find(node => node.dataset.slideId === pageId);
     image?.classList.add("highlight");
     setTimeout(() => image?.classList.remove("highlight"), 2000);
   }
@@ -2723,6 +2766,7 @@ function seek(t, source = "transcript") {
   saveProgress();
 }
 function followNow() {
+  overviewPageTarget = null;
   manual = false;
   following = true;
   const live = videoSources.find((s) => s.live);
@@ -2997,47 +3041,56 @@ function overview(picker) {
     },
     onActivate: (id) => {
       if (!overviewPicker) {
-        const i = groups.findIndex((g) => g.slide.id === id);
+        // Capture the resource before closing. Duplicate analysis/live updates may
+        // regroup pages while the overview is open; a stale array index is unsafe.
+        const target = groups.find(g => g.slide.id === id)?.slide || slides.find(s => s.id === id);
+        if (!target) { renderOverview(); return; }
         closeModal();
-        seek(groups[i].slide.t, "slides");
+        seek(target.t, "slides", target.id);
       }
     },
   });
   overviewControl.refresh();
 }
 function renderOverview() {
-  const grid = el("div", {
-    class: "overview-grid",
-    style: "--cols:" + overviewCols,
-  });
+  const host = overviewControl?.content || $("#modalBody");
+  let grid = host.querySelector(".overview-grid");
+  if (!grid) { grid = el("div", { class: "overview-grid" }); host.replaceChildren(grid); }
+  grid.style.setProperty("--cols", overviewCols);
+  const existing = new Map([...grid.children].map(node => [node.dataset.id, node]));
+  const cards = [];
   groups.forEach((g, i) => {
     if (prefs.skip && !effectiveLines(g).length) return;
-    grid.append(
-      el(
-        "div",
-        {
-          class:
-            "overview-item" +
-            (selectedPages.has(g.slide.id) ? " selected" : ""),
-          "data-id": g.slide.id,
-        },
-        [
-          el("img", {
-            src: g.slide.local || resource(g.slide.thumb || g.slide.url),
-            loading: "lazy",
-            alt: "课件",
-          }),
-          el("div", { class: "meta" }, [
-            el("span", { text: "第 " + (i + 1) + " 页" }),
-            el("span", { text: stamp(g.slide.t) }),
-          ]),
-        ],
-      ),
-    );
+    let card = existing.get(g.slide.id);
+    if (!card) card = el("div", { class: "overview-item", "data-id": g.slide.id }, [
+      el("img", { loading: "lazy", decoding: "async", alt: "课件" }),
+      el("div", { class: "meta" }, [el("span"), el("span")]),
+    ]);
+    card.classList.toggle("selected", selectedPages.has(g.slide.id));
+    const image = card.querySelector("img"), original = g.slide.local || resource(g.slide.url);
+    if (image.dataset.original !== original) {
+      image.dataset.original = original;
+      image.onerror = () => {
+        image.onerror = null;
+        if (g.slide.thumb && g.slide.thumb !== g.slide.url) image.src = resource(g.slide.thumb);
+      };
+      image.src = original;
+    }
+    const labels = card.querySelectorAll(".meta span");
+    labels[0].textContent = "第 " + (i + 1) + " 页"; labels[1].textContent = stamp(g.slide.t);
+    cards.push(card);
   });
-  const host = overviewControl?.content || $("#modalBody");
-  host.replaceChildren(grid);
+  // Column changes keep image nodes and decoded originals, avoiding a reload on every pinch.
+  if (grid.children.length !== cards.length || cards.some((card, i) => grid.children[i] !== card))
+    grid.replaceChildren(...cards);
   overviewControl?.refresh();
+}
+function playbackPageIndex(time) {
+  const automatic = pageAtTime(groups.map(g => g.slide), time);
+  const pinned = overviewPageTarget == null ? -1 : groups.findIndex(g => g.slide.id === overviewPageTarget);
+  if (pinned >= 0 && groups[automatic]?.slide.t === groups[pinned].slide.t) return pinned;
+  overviewPageTarget = null;
+  return automatic;
 }
 function buildVideo(body) {
   video = el("video", { playsinline: "", preload: "metadata" });
@@ -3074,10 +3127,7 @@ function buildVideo(body) {
     updateVideoControls();
     highlightCurrent();
     if (following && !manual) {
-      const i = pageAtTime(
-        groups.map((g) => g.slide),
-        videoCourseTime(),
-      );
+      const i = playbackPageIndex(videoCourseTime());
       if (i !== index) {
         index = i;
         at = videoCourseTime();
@@ -3274,8 +3324,8 @@ function updateVideoControls() {
     slider.value = video.currentTime || 0;
   }
   const live = !!currentVideoSource()?.live;
-  slider.hidden = live;
-  $("#videoSpeed").hidden = live;
+  if (slider) slider.hidden = live;
+  const speed = $("#videoSpeed"); if (speed) speed.hidden = live;
 }
 async function loadVideo(play = false) {
   if (!video || !lesson) return;
@@ -3321,7 +3371,7 @@ async function loadVideo(play = false) {
       );
     setVideoSource(available[0], play);
   } catch (e) {
-    toast(e.message);
+    if (gen === lessonToken && video === player) toast(e.message);
   }
 }
 function setVideoSource(source, play = false) {

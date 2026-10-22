@@ -13,7 +13,7 @@ for tool in node xcrun lipo sips iconutil codesign hdiutil ditto shasum; do
 done
 node --experimental-vm-modules generate-models.cjs
 version="$(node -p 'require("./package.json").version')"
-build_number=18
+build_number=19
 build_root="$PWD/build"
 mkdir -p "$build_root"
 staging="$(mktemp -d "$build_root/staging.XXXXXX")"

@@ -90,6 +90,9 @@ export function normalizeScheduleEnvelope(data) {
   // Never let an error carrying list:[] authorize deleting cached courses.
   const codes=[data.code,result?.code,result?.data?.code].filter(code=>code!=null).map(Number);
   if(codes.includes(401))throw new Error("课程会话未恢复，请恢复登录后重试");
+  // The live service returns {result:{code:400,msg:"课表为空"}} on
+  // ordinary no-class dates. This is not an outage or an auth failure.
+  if(codes.length && codes.every(code=>[0,200,400].includes(code)) && Number(result?.code)===400 && result?.msg==='课表为空' && !Array.isArray(result?.list))return{days:[],authoritative:false};
   if(codes.some(code=>![0,200].includes(code)))throw new Error("课表服务暂时不可用，本机记录已保留");
   const list=result?.list??result?.data?.list;
   if(Array.isArray(list))return{days:list,authoritative:true};

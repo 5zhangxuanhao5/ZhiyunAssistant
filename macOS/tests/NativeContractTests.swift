@@ -260,6 +260,9 @@ final class SyntheticCourseProtocol:URLProtocol {
         let plainCookie=HTTPCookie(properties:[.name:"plain-fixture",.value:"plain",.domain:"classroom.zju.edu.cn",.path:"/"])!
         let pathCookie=HTTPCookie(properties:[.name:"path-fixture",.value:"path",.domain:"classroom.zju.edu.cn",.path:"/courseapi"])!
         let bearerCookie=HTTPCookie(properties:[.name:"_token",.value:"{i:0;s:6:\"_token\";i:1;s:13:\"synthetic-jwt\";}",.domain:"classroom.zju.edu.cn",.path:"/",.secure:"TRUE",httpOnly:"TRUE"])!
+        let encodedToken=bearerCookie.value.addingPercentEncoding(withAllowedCharacters:.alphanumerics)!.addingPercentEncoding(withAllowedCharacters:.alphanumerics)!
+        let doubleCookie=HTTPCookie(properties:[.name:"_token",.value:encodedToken,.domain:".zju.edu.cn",.path:"/",.secure:"TRUE"])!
+        check(campusBearer([doubleCookie])=="synthetic-jwt","double percent-encoded official token cookie is decoded like the campus web client")
         let cloudCookie=HTTPCookie(properties:[.name:"cloud-fixture",.value:"cloud",.domain:".chinamcloud.com",.path:"/",.secure:"TRUE",httpOnly:"TRUE"])!
         var cookiesInstalled=false;app.installCookies([secureCookie,plainCookie,pathCookie,bearerCookie,cloudCookie]){cookiesInstalled=true};try waitUntil({cookiesInstalled})
         var originalCookies=[HTTPCookie](),readCookies=false;app.store.httpCookieStore.getAllCookies{originalCookies=$0;readCookies=true};try waitUntil({readCookies})
@@ -333,7 +336,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         try vault.save(secret);vault.remove();check(vault.read()==nil && !FileManager.default.fileExists(atPath:vaultRoot.appendingPathComponent("session-key.bin").path),"logout removes encrypted snapshot and its key")
         func jwt(_ exp:Double)->String { let data=try! JSONSerialization.data(withJSONObject:["exp":exp]);return "header."+data.base64EncodedString().replacingOccurrences(of:"=",with:"")+".signature" }
         check(bearerNeedsRenewal(jwt(Date().addingTimeInterval(-60).timeIntervalSince1970)) && !bearerNeedsRenewal(jwt(Date().addingTimeInterval(3600).timeIntervalSince1970)),"JWT expiry identifies stale bearer rather than cookie presence")
-        check(officialSessionURL.host=="tgmedia.cmc.zju.edu.cn" && officialSessionURL.query!.contains("auth/login"),"background renewal enters official authentication rather than the public homepage")
+        check(officialSessionURL.host=="tgmedia.cmc.zju.edu.cn" && officialSessionURL.query!.contains("tenant_code=112"),"background renewal enters official authentication rather than the public homepage")
         let permissionURL=URL(string:"https://classroom.zju.edu.cn/courseapi/v2/course/video-and-live-promission-by-user-id")!
         check(replayableCourseRead(permissionURL,body:"{}") && !replayableCourseRead(URL(string:"https://classroom.zju.edu.cn/unknown-post")!,body:"{}"),"only known read-only POST can retry after session renewal")
         let loginResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/login")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"text/html"])!

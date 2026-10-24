@@ -216,7 +216,8 @@ func decodedCookies(_ data:Data,now:Date=Date())->[HTTPCookie] {
 func campusBearer(_ cookies:[HTTPCookie])->String? {
     let target=URL(string:"https://classroom.zju.edu.cn/")!,allowed=cookies.filter{cookieApplies($0,to:target) && $0.name=="_token"}.sorted{$0.path.count>$1.path.count}
     for cookie in allowed {
-        let value=cookie.value.removingPercentEncoding ?? cookie.value
+        var value=cookie.value
+        for _ in 0..<2{guard let decoded=value.removingPercentEncoding,decoded != value else{break};value=decoded}
         guard let regex=try? NSRegularExpression(pattern:"s:\\d+:\"_token\";(?:i:\\d+;)?s:\\d+:\"([^\"\\r\\n]+)\""),let match=regex.firstMatch(in:value,range:NSRange(value.startIndex...,in:value)),let range=Range(match.range(at:1),in:value) else{continue}
         return String(value[range])
     }
@@ -242,7 +243,7 @@ func authenticationExpired(_ response:HTTPURLResponse,_ data:Data)->Bool {
 func replayableCourseRead(_ url:URL,body:String)->Bool {
     body.isEmpty || (url.host == "classroom.zju.edu.cn" && url.path == "/courseapi/v2/course/video-and-live-promission-by-user-id")
 }
-let officialSessionURL=URL(string:"https://tgmedia.cmc.zju.edu.cn/index.php?r=auth/login&auType=&tenant_code=112&forward=https%3A%2F%2Fclassroom.zju.edu.cn%2F")!
+let officialSessionURL=URL(string:"https://tgmedia.cmc.zju.edu.cn?forward=https%3A%2F%2Fclassroom.zju.edu.cn%2F&tenant_code=112")!
 func bearerNeedsRenewal(_ bearer:String?,now:Date=Date())->Bool {
     guard let bearer=bearer else{return true};let parts=bearer.split(separator:".",omittingEmptySubsequences:false)
     guard parts.count==3 else{return false};var payload=String(parts[1]).replacingOccurrences(of:"-",with:"+").replacingOccurrences(of:"_",with:"/")
@@ -420,11 +421,21 @@ final class LocalGemmaService {
         }
         attempt([11439,11434])
     }
+    private func otherModelBusy(_ done:@escaping(Bool)->Void){
+        // The optional shared coordinator serializes heavyweight runtimes. Do
+        // not leave a cancelled Gemma request queued behind another app's job.
+        var request=URLRequest(url:URL(string:"http://127.0.0.1:11437/status")!);request.timeoutInterval=1
+        session.dataTask(with:request){data,_,_ in
+            let row=data.flatMap{try? JSONSerialization.jsonObject(with:$0) as? [String:Any]},http=row?["http"] as? [String:Any],requests=http?["requests"] as? [String:Any]
+            done((requests?["active"] as? Int ?? 0)>0)
+        }.resume()
+    }
     func prepare(model:String?,done:@escaping(URL?,String?,String?)->Void){
         func select(_ base:URL?,_ models:[String]){
             guard let base=base else{done(nil,nil,"本地 Ollama 服务未能启动，请打开 Ollama 后重试");return}
             let selected=(model?.isEmpty==false ? model:nil) ?? models.first(where:{$0=="gemma4:31b-mlx"}) ?? models.first
-            guard let selected=selected,models.contains(selected) else{done(nil,nil,"未找到已安装的 Gemma 模型，请先在 Ollama 中安装 Gemma，并在 AI 设置中选择");return};done(base,selected,nil)
+            guard let selected=selected,models.contains(selected) else{done(nil,nil,"未找到已安装的 Gemma 模型，请先在 Ollama 中安装 Gemma，并在 AI 设置中选择");return}
+            if base.port==11439{self.otherModelBusy{busy in if busy{done(nil,nil,"另一个本地模型正在处理任务，请稍后重试。当前对话已保留")}else{done(base,selected,nil)}}}else{done(base,selected,nil)}
         }
         discover{base,models in
             if base != nil{select(base,models);return}
@@ -702,6 +713,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func webView(_ view: WKWebView, didFinish navigation: WKNavigation!) {
         if view === sessionWeb {
             let generation=sessionGeneration
+            diagnostic("Session navigation "+(view.url?.host ?? "unknown")+" "+(view.url?.path ?? ""))
             guard let url=view.url else{finishSession(false,generation:generation);return}
             if url.host=="classroom.zju.edu.cn",!url.path.lowercased().contains("login") {
                 verifyResumedSession(view,generation:generation)
@@ -719,10 +731,10 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     }
     func verifyResumedSession(_ view:WKWebView,generation:UUID){
         guard sessionWeb === view,sessionGeneration==generation,!sessionProbeActive else{return};sessionProbeActive=true
-        let paths=["/userapi/v1/infosimple","/courseapi/userapi/v1/infosimple"]
+        let paths=["/userapi/v1/infosimple"]
         func probe(_ index:Int){
             guard self.sessionWeb === view,self.sessionGeneration==generation,!self.loggingOut else{return}
-            if index==paths.count{self.finishSession(true,generation:generation);return}
+            if index==paths.count{self.store.httpCookieStore.getAllCookies{cookies in self.finishSession(campusBearer(cookies) != nil,generation:generation)};return}
             let url=URL(string:"https://classroom.zju.edu.cn"+paths[index])!
             self.cookieRequest(url){request in
                 self.network.dataTask(with:request){data,response,error in DispatchQueue.main.async {
@@ -751,8 +763,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }
         }
     }
-    func webView(_ view:WKWebView,didFail navigation:WKNavigation!,withError error:Error){if view === sessionWeb{finishSession(false,generation:sessionGeneration)}}
-    func webView(_ view:WKWebView,didFailProvisionalNavigation navigation:WKNavigation!,withError error:Error){if view === sessionWeb{finishSession(false,generation:sessionGeneration)}}
+    func webView(_ view:WKWebView,didFail navigation:WKNavigation!,withError error:Error){if view === sessionWeb{diagnostic("Session navigation failed code "+String((error as NSError).code));finishSession(false,generation:sessionGeneration)}}
+    func webView(_ view:WKWebView,didFailProvisionalNavigation navigation:WKNavigation!,withError error:Error){if view === sessionWeb{diagnostic("Session provisional navigation failed code "+String((error as NSError).code));finishSession(false,generation:sessionGeneration)}}
     func webViewWebContentProcessDidTerminate(_ view:WKWebView){
         if view === web {
             guard Date().timeIntervalSince(lastWebRecovery)>15 else{event("webRecovery",["ready":false]);return}

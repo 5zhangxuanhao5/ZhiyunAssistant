@@ -32,3 +32,7 @@ test('video updates do not replace an explicitly chosen page with its same-time 
  const{r,app,doc}=await fixture(t);app.put({slides:[{id:'a',t:0,url:'https://cmc.zju.edu.cn/a.png'},{id:'b',t:60,url:'https://cmc.zju.edu.cn/b.png'},{id:'c',t:60,url:'https://cmc.zju.edu.cn/c.png'},{id:'d',t:120,url:'https://cmc.zju.edu.cn/d.png'}],prefs:{duplicates:false,skip:false}});app.regroup();app.togglePane('video');app.overview(false);doc.querySelector('[data-id="b"]').click();
  const video=doc.querySelector('video');video.dispatchEvent(new r.win.Event('timeupdate'));assert.equal(app.state().groups[app.state().index].slide.id,'b');video.currentTime=121;video.dispatchEvent(new r.win.Event('timeupdate'));assert.equal(app.state().groups[app.state().index].slide.id,'d');
 });
+
+test('official no-class schedule envelope is readable without removing cached history',async()=>{
+ const r=runtime();try{const {normalizeScheduleEnvelope}=await r.load('mac-api.js');const value=normalizeScheduleEnvelope({result:{code:400,msg:'课表为空'}});assert.equal(value.days.length,0);assert.equal(value.authoritative,false);assert.throws(()=>normalizeScheduleEnvelope({result:{code:400,msg:'服务错误'}}));assert.throws(()=>normalizeScheduleEnvelope({code:401,result:{code:400,msg:'课表为空'}}));}finally{r.win.close();}
+});

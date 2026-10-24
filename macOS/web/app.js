@@ -4372,7 +4372,7 @@ function renderChat() {
       el("div", { class: "question", text: turn.question }),
       el("div", { class: "ai-mark", text: "AI生成 · " + stamp(turn.at) }),
       el("div", { class: "answer" }, [
-        rich(turn.answer || "正在思考…", turn.context || priorContext),
+        rich(turn.answer || (aiConnection.effective() === "local" ? "正在加载本地 Gemma；首次回复需要准备模型…" : "正在思考…"), turn.context || priorContext),
       ]),
     ]);
     body.append(item);

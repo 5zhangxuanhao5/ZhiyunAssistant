@@ -342,6 +342,8 @@ final class SyntheticCourseProtocol:URLProtocol {
         let loginResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/login")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"text/html"])!
         let forbidden=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/courseapi/test")!,statusCode:403,httpVersion:"HTTP/1.1",headerFields:[:])!
         check(authenticationExpired(loginResponse,Data("<!doctype html>".utf8)),"HTML login page is recognized as expired session")
+        let identityDenied=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/userapi/v1/infosimple")!,statusCode:403,httpVersion:"HTTP/1.1",headerFields:[:])!
+        check(authenticationExpired(identityDenied,Data()),"identity endpoint denial renews login rather than being mistaken for course permission")
         check(!authenticationExpired(forbidden,Data("{\"code\":401}".utf8)),"explicit course denial never triggers automatic retry")
         let unavailable=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/courseapi/test")!,statusCode:502,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"text/html"])!
         check(!authenticationExpired(unavailable,Data("<!doctype html>gateway unavailable".utf8)),"server HTML errors are not misidentified as authentication failures")

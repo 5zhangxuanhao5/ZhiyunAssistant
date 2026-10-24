@@ -224,7 +224,11 @@ func campusBearer(_ cookies:[HTTPCookie])->String? {
     return nil
 }
 func authenticationExpired(_ response:HTTPURLResponse,_ data:Data)->Bool {
-    guard response.statusCode != 403 else{return false}
+    if response.statusCode==403 {
+        // An identity endpoint has no per-course access decision. Its denial
+        // means the saved login is no longer accepted, even before JWT expiry.
+        return response.url?.host=="classroom.zju.edu.cn" && response.url?.path=="/userapi/v1/infosimple"
+    }
     if response.statusCode==401{return true}
     guard (200..<400).contains(response.statusCode) else{return false}
     if let row=try? JSONSerialization.jsonObject(with:data) as? [String:Any]{

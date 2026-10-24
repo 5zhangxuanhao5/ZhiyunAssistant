@@ -1,3 +1,4 @@
+import { ExpandedSlide } from '../components/ExpandedSlide';
 import { ChatStore } from '../services/ChatStore';
 import { SummaryCache } from '../services/SummaryCache';
 import { ReturnAction } from '../components/ReturnAction';
@@ -152,7 +153,6 @@ struct Index {
   @State workspaceWidth: number = 1000;
   @State workspaceHeight: number = 600;
   @State slideFullscreen: boolean = false;
-  @State slideZoom: number = 1;
   private savedLayouts: Record<string, PaneRect[]> = {};
   private layoutContext: string = '';
   private savedLayoutLocks: Record<string, boolean> = {};
@@ -1172,8 +1172,8 @@ struct Index {
   private transcriptReadingAt: number = -1;
   private transcriptReadingOffset: number = 0;
 
-  private openExpandedSlide(slide: Slide): void { NativeSelections.clear(); this.getUIContext().getFocusController().clearFocus(); this.focusedEditors.clear(); this.inputFocused = false; this.expandedSlideId = slide.id; this.slideZoom = 1; this.slideFullscreen = true; }
-  private turnExpandedSlide(direction: number): void { const index = this.groups.findIndex((group: PageGroup) => group.slide.id === this.expandedSlideId), nextIndex = manualPage(this.groups, Math.max(0, index), 1, direction, this.skipEmpty), next = this.groups[nextIndex]?.slide; if (!next || next.id === this.expandedSlideId) { this.skipHint(direction); return; } this.expandedSlideId = next.id; this.slideZoom = 1; this.queueImage(next); }
+  private openExpandedSlide(slide: Slide): void { NativeSelections.clear(); this.getUIContext().getFocusController().clearFocus(); this.focusedEditors.clear(); this.inputFocused = false; this.expandedSlideId = slide.id; this.slideFullscreen = true; }
+  private turnExpandedSlide(direction: number): void { const index = this.groups.findIndex((group: PageGroup) => group.slide.id === this.expandedSlideId), nextIndex = manualPage(this.groups, Math.max(0, index), 1, direction, this.skipEmpty), next = this.groups[nextIndex]?.slide; if (!next || next.id === this.expandedSlideId) { this.skipHint(direction); return; } this.expandedSlideId = next.id; this.queueImage(next); }
   private focusedEditors: Set<string> = new Set();
   private editorFocus(id: string, focused: boolean): void { if (focused) this.focusedEditors.add(id); else this.focusedEditors.delete(id); this.inputFocused = this.focusedEditors.size > 0; }
   private keyboard(event: KeyEvent): boolean {
@@ -1488,12 +1488,7 @@ struct Index {
   }
   @Builder
   private enlargedSlide() {
-    Stack({ alignContent: Alignment.TopEnd }) {
-      Image(this.imageUris[this.expandedSlideId] || '').id('expanded-slide').width('100%').height('100%').objectFit(ImageFit.Contain).scale({ x: this.slideZoom, y: this.slideZoom })
-        .parallelGesture(PinchGesture().onActionUpdate((event: GestureEvent) => this.slideZoom = Math.max(1, Math.min(5, event.scale))))
-        .gesture(GestureGroup(GestureMode.Exclusive, PanGesture({ direction: PanDirection.Horizontal, distance: 18 }).onActionEnd((event: GestureEvent) => { if (Math.abs(event.offsetX) > 50 && this.slideZoom === 1) this.turnExpandedSlide(event.offsetX > 0 ? -1 : 1); }), TapGesture({ count: 1 }).onAction(() => this.slideFullscreen = false)))
-      Button('返回课件').height(36).fontSize(12).backgroundColor('#252525').fontColor('#FFFFFF').margin(14).onClick(() => this.slideFullscreen = false)
-    }.width('100%').height('100%').backgroundColor('#000000').clip(true)
+    ExpandedSlide({ slideId: this.expandedSlideId, uri: this.imageUris[this.expandedSlideId] || '', onTurn: (direction: number) => this.turnExpandedSlide(direction), onClose: () => this.slideFullscreen = false })
   }
   build() {
     Stack() {

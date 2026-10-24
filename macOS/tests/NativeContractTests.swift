@@ -47,7 +47,7 @@ final class SyntheticCourseProtocol:URLProtocol {
             try app.saveIdentity("{\"id\":\"separate-process-fixture\",\"name\":\"Synthetic\"}")
             let cookie=HTTPCookie(properties:[.name:"_token",.value:"{i:0;s:6:\"_token\";i:1;s:18:\"cold-process-token\";}",.domain:"classroom.zju.edu.cn",.path:"/",.secure:"TRUE",HTTPCookiePropertyKey(rawValue:"HttpOnly"):"TRUE"])!
             var done=false;app.installCookies([cookie]){app.persistCookies{done=true}};try waitUntil({done})
-            guard FileManager.default.fileExists(atPath:credential.path) else{throw appError("Cold seed did not persist")}
+            guard SessionVault(root:root.appendingPathComponent("Session")).read() != nil else{throw appError("Cold seed did not persist")}
         }else{
             if mode=="--cold-session-logout"{try writeLogoutMarker(in:root)}
             var done=false;app.restoreCookies{done=true};try waitUntil({done});done=false
@@ -297,9 +297,9 @@ final class SyntheticCourseProtocol:URLProtocol {
         try firstLaunch.saveIdentity("{\"id\":\"cold-fixture\",\"name\":\"Fixture\"}")
         var savedSession=false
         firstLaunch.installCookies([bearerCookie,secureCookie]){firstLaunch.persistCookies{savedSession=true}}
-        try waitUntil({savedSession});check(durableCredentials[persistedSessionCredential] != nil,"session-only cookies are durably stored before completion")
-        savedSession=false;firstLaunch.persistCookies{savedSession=true};try waitUntil({savedSession});check(durableWrites==1,"identical cookie snapshot is written once")
-        let nextLaunch=App();nextLaunch.root=firstLaunch.root;nextLaunch.testKeychainOperation=durableBackend
+        try waitUntil({savedSession});check(SessionVault(root:firstLaunch.root.appendingPathComponent("Session")).read() != nil,"session-only cookies are durably stored before completion")
+        savedSession=false;firstLaunch.persistCookies{savedSession=true};try waitUntil({savedSession});check(durableWrites==0,"session snapshots avoid all signature-bound Keychain writes")
+        let nextLaunch=App();nextLaunch.root=firstLaunch.root;nextLaunch.testKeychainOperation={_,_,_,_,onError in onError(errSecInteractionNotAllowed);return nil}
         var coldReady=false;nextLaunch.restoreCookies{coldReady=true};try waitUntil({coldReady})
         var coldRequest:URLRequest?;coldReady=false;nextLaunch.cookieRequest(URL(string:"https://classroom.zju.edu.cn/courseapi/cold-test")!){coldRequest=$0;coldReady=true};try waitUntil({coldReady})
         check(coldRequest?.value(forHTTPHeaderField:"Authorization")=="Bearer synthetic-jwt","new process restores bearer without another official login")
@@ -316,6 +316,26 @@ final class SyntheticCourseProtocol:URLProtocol {
         }
 
 
+        let localMessages:[[String:Any]]=[["role":"system","content":"course timeline"],["role":"user","content":"remember earlier turn"],["role":"assistant","content":"earlier answer"],["role":"user","content":[["type":"text","text":"continue with this image"],["type":"image_url","image_url":["url":"data:image/png;base64,aW1hZ2U="]]]]]
+        let localRequest=try localGemmaRequest(base:URL(string:"http://127.0.0.1:11439")!,model:"gemma4:31b-mlx",messages:localMessages)
+        let localBody=try JSONSerialization.jsonObject(with:localRequest.httpBody!) as! [String:Any],localHistory=localBody["messages"] as! [[String:Any]]
+        check(localRequest.url?.path=="/api/chat" && localRequest.value(forHTTPHeaderField:"Authorization")==nil && localBody["keep_alive"] as? String=="5m","local inference uses loopback only, no cloud key, and server-side idle release")
+        check(localHistory.count==4 && localHistory[1]["content"] as? String=="remember earlier turn" && localHistory.last?["images"] as? [String]==["aW1hZ2U="],"resuming unloaded model retains ordered conversation and supports local image data")
+        let localEvents=NSMutableArray(),localStream=AIStream(localRequest,start:false,event:{localEvents.add($0)},done:{_,_ in})
+        localStream.consume(Data(#"{"message":{"content":"本地"},"done":false}"#.utf8));localStream.consume(Data([10]));localStream.consume(Data((#"{"message":{"content":"成功","tool_calls":[{"function":{"name":"navigate","arguments":{"page":"home"}}}]},"done":true,"prompt_eval_count":12,"eval_count":3}"#+"\n").utf8))
+        check(localStream.answer=="本地成功" && localEvents.count==2 && localStream.calls.count==1 && (localStream.calls[0]?["function"] as? [String:Any])?["arguments"] is String,"local NDJSON streams incremental text and normalizes tool arguments for the agent")
+        localStream.session.invalidateAndCancel()
+        let vaultRoot=isolated.appendingPathComponent("sealed-contract"),vault=SessionVault(root:vaultRoot),secret=Data("synthetic-session-secret".utf8)
+        try vault.save(secret);let ciphertext=try Data(contentsOf:vaultRoot.appendingPathComponent("session.sealed"))
+        check(!ciphertext.contains(secret) && vault.read()==secret,"protected snapshot is encrypted and decrypts across app instances")
+        check((try FileManager.default.attributesOfItem(atPath:vaultRoot.appendingPathComponent("session-key.bin").path))[.posixPermissions] as? Int==0o600,"session encryption key is owner-only")
+        var damaged=ciphertext;damaged[damaged.count-1] ^= 1;try damaged.write(to:vaultRoot.appendingPathComponent("session.sealed"));check(vault.read()==nil,"tampered session is rejected without unsafe fallback")
+        try vault.save(secret);vault.remove();check(vault.read()==nil && !FileManager.default.fileExists(atPath:vaultRoot.appendingPathComponent("session-key.bin").path),"logout removes encrypted snapshot and its key")
+        func jwt(_ exp:Double)->String { let data=try! JSONSerialization.data(withJSONObject:["exp":exp]);return "header."+data.base64EncodedString().replacingOccurrences(of:"=",with:"")+".signature" }
+        check(bearerNeedsRenewal(jwt(Date().addingTimeInterval(-60).timeIntervalSince1970)) && !bearerNeedsRenewal(jwt(Date().addingTimeInterval(3600).timeIntervalSince1970)),"JWT expiry identifies stale bearer rather than cookie presence")
+        check(officialSessionURL.host=="tgmedia.cmc.zju.edu.cn" && officialSessionURL.query!.contains("auth/login"),"background renewal enters official authentication rather than the public homepage")
+        let permissionURL=URL(string:"https://classroom.zju.edu.cn/courseapi/v2/course/video-and-live-promission-by-user-id")!
+        check(replayableCourseRead(permissionURL,body:"{}") && !replayableCourseRead(URL(string:"https://classroom.zju.edu.cn/unknown-post")!,body:"{}"),"only known read-only POST can retry after session renewal")
         let loginResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/login")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"text/html"])!
         let forbidden=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/courseapi/test")!,statusCode:403,httpVersion:"HTTP/1.1",headerFields:[:])!
         check(authenticationExpired(loginResponse,Data("<!doctype html>".utf8)),"HTML login page is recognized as expired session")
@@ -371,6 +391,22 @@ final class SyntheticCourseProtocol:URLProtocol {
         SyntheticCourseProtocol.beforeResponse=nil
         check(lateResult["status"] as? Int==200 && SyntheticCourseProtocol.hits["/contract-late-expiry"]==2 && retryHandshakes==1,"late parallel expiry reuses the already renewed token without another SSO handshake")
         check(SyntheticCourseProtocol.observed.last?.value(forHTTPHeaderField:"Authorization")=="Bearer parallel-fresh-token","late retry uses the current WebKit token rather than the rejected request token")
+        let permissionApp=App();permissionApp.root=isolated.appendingPathComponent("permission-post");permissionApp.testSkipCookiePersistence=true;permissionApp.testKeychainOperation={_,_,_,_,_ in nil}
+        permissionApp.network=URLSession(configuration:apiConfiguration,delegate:permissionApp,delegateQueue:nil)
+        var permissionReady=false;permissionApp.restoreCookies{permissionReady=true};try waitUntil({permissionReady})
+        var permissionRenewals=0;permissionApp.testSessionBootstrap={done in permissionRenewals+=1;done(true)}
+        SyntheticCourseProtocol.responses[permissionURL.path]=[(401,"{\"code\":401}",["Content-Type":"application/json"]),(200,"{\"code\":200,\"data\":{}}",["Content-Type":"application/json"])]
+        // Exercise the same request path as study entry, including its POST body.
+        let permissionConfiguration=WKWebViewConfiguration();permissionConfiguration.websiteDataStore=permissionApp.store
+        permissionApp.web=WKWebView(frame:.zero,configuration:permissionConfiguration)
+        var permissionPageReady=false;permissionApp.web.loadHTMLString("<script>window.native={receive:p=>{window.permissionReply=p}}</script>",baseURL:nil)
+        try waitUntil({!permissionApp.web.isLoading});permissionApp.performCourseRequest("permission-test",url:permissionURL,body:"{\"course_id\":\"fixture\",\"sub_ids\":[\"one\"]}")
+        var permissionReply:[String:Any]?
+        let permissionDeadline=Date().addingTimeInterval(10)
+        while permissionReply==nil && Date()<permissionDeadline{permissionPageReady=false;permissionApp.web.evaluateJavaScript("window.permissionReply"){value,_ in permissionReply=value as? [String:Any];permissionPageReady=true};try waitUntil({permissionPageReady})}
+        check((permissionReply?["value"] as? [String:Any])?["status"] as? Int==200 && permissionRenewals==1 && SyntheticCourseProtocol.hits[permissionURL.path]==2,"course permission read POST renews and replays once without logout")
+        let permissionRequests=SyntheticCourseProtocol.observed.filter{$0.url==permissionURL};check(permissionRequests.count==2 && permissionRequests[0].httpBody==permissionRequests[1].httpBody,"permission retry retains the original course and lesson scope")
+        permissionApp.network.invalidateAndCancel()
         var bridgeSecretReads=0,bridgeCookieWrites=0,bridgeKeychainOnBackground=true
         app.testKeychainOperation={name,data,remove,allowUI,onError in
             bridgeKeychainOnBackground = bridgeKeychainOnBackground && !Thread.isMainThread
@@ -403,6 +439,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         _ = try bridgeCall("secret",["text":"sk-synthetic-reconfigured-key-123456"])
         check(try bridgeCall("secret") as? String=="sk-synthetic-reconfigured-key-123456" && unexpectedCredentialReads==0,"in-app reconfiguration saves a usable key without touching session credentials")
         check(interactiveAttempts==0,"all credential routes suppress interactive backend access including writes")
+        app.storageQueue.sync{SessionVault(root:app.root.appendingPathComponent("Session")).remove()}
         var guardedCookieReads=0
         app.storageQueue.sync{app.credentialCache.invalidate()};app.testKeychainOperation={name,data,remove,allowUI,onError in if name=="cookies"{guardedCookieReads+=1;onError(errSecInteractionNotAllowed)};return nil}
         app.storageQueue.sync{_ = app.sessionKeychain("cookies")}

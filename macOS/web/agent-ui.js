@@ -442,15 +442,15 @@ export class GlobalAssistant {
     };
     const section = title => { const n = create('section', 'agent-settings-group'); n.append(create('h4', '', title)); return n; };
     const connection = section('连接与模型'), source = create('select'); source.setAttribute('aria-label', 'AI服务来源');
-    for (const [value, text] of [['auto', '自动 · 优先个人 API'], ['campus', '浙大校内网关'], ['personal', '个人 DeepSeek API']]) { const option = create('option', '', text); option.value = value; source.append(option); }
+    for (const [value, text] of [['auto', '自动 · 优先个人 API'], ['campus', '浙大校内网关'], ['personal', '个人 DeepSeek API'], ['local', '本地 Gemma']]) { const option = create('option', '', text); option.value = value; source.append(option); }
     source.value = this.options.provider();
     const sourceHint = create('p', 'agent-provider-hint');
     const describe = () => { const description = this.options.providerDescription(); sourceHint.textContent = description + (description.includes('校内') ? '。课件先经 OCR 转为文字，图示关系可能遗漏。' : ''); }; describe();
-    source.onchange = () => this.options.setProvider(source.value).then(() => { describe(); modelField.hidden = source.value === 'campus' || (source.value === 'auto' && !personalReady); effortField.hidden = modelField.hidden; }).catch(error => this.notice(error.message, 'error'));
+    source.onchange = () => this.options.setProvider(source.value).then(() => { describe(); modelField.hidden = ['campus','local'].includes(source.value) || (source.value === 'auto' && !personalReady); effortField.hidden = modelField.hidden; }).catch(error => this.notice(error.message, 'error'));
     const model = create('select'); model.setAttribute('aria-label', '助手模型');
     for (const [value, text] of [['deepseek-flash', 'DeepSeek Flash'], ['deepseek-v4-pro', 'DeepSeek Pro']]) { const option = create('option', '', text); option.value = value; model.append(option); }
     model.value = this.options.model(); model.onchange = () => this.options.setModel(model.value);
-    const modelField = field('个人 API 模型', model, '个人 API 的应用助手支持思考模式；校内网关使用学校指定模型。'); modelField.hidden = source.value === 'campus' || (source.value === 'auto' && !personalReady);
+    const modelField = field('个人 API 模型', model, '个人 API 的应用助手支持思考模式；校内网关使用学校指定模型。'); modelField.hidden = ['campus','local'].includes(source.value) || (source.value === 'auto' && !personalReady);
     const effort = create('select'); effort.setAttribute('aria-label', '助手思考强度'); for (const [value, label] of [['low', '快捷'], ['high', '均衡'], ['max', '深入']]) { const option = create('option', '', label); option.value = value; effort.append(option); } effort.value = this.options.effort?.() || 'high'; effort.onchange = () => this.options.setEffort?.(effort.value); const effortField = field('思考强度', effort, '均衡适合日常操作；深入适合复杂任务，耗时和用量可能增加。'); effortField.hidden = modelField.hidden; source.addEventListener('change', () => { effortField.hidden = modelField.hidden; });
     connection.append(field('服务来源', source), sourceHint, modelField, effortField); this.log.append(connection);
     const credentials = section('个人 DeepSeek API'), badge = create('span', 'agent-config-badge', personalReady ? '已配置' : '未配置'); badge.dataset.ready = String(personalReady); credentials.querySelector('h4').append(badge);

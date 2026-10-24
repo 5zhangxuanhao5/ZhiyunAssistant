@@ -29,3 +29,8 @@ secrets*.json
 
 # Authorized school services are injected by the release builder, never committed.
 **/CampusServices.json
+
+# Private encrypted local session state
+Session/
+session.sealed
+session-key.bin

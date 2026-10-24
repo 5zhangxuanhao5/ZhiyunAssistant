@@ -8,11 +8,12 @@ export class AIConnection {
     const status = await this.native.call('aiStatus');
     // Compatibility with older shells and isolated fixtures, never persist credentials.
     this.status = status && typeof status.personalReady === 'boolean' ? status : { personalReady: !!(await this.native.call('secret')), campusReady: false };
+    if (this.provider() === 'local') Object.assign(this.status, await this.native.call('localAIStatus'));
     return this.available();
   }
-  provider() { return ['personal', 'campus'].includes(this.preferences().aiProvider) ? this.preferences().aiProvider : 'auto'; }
+  provider() { return ['personal', 'campus', 'local'].includes(this.preferences().aiProvider) ? this.preferences().aiProvider : 'auto'; }
   effective() { return this.provider() === 'auto' ? this.status.personalReady ? 'personal' : 'campus' : this.provider(); }
-  available() { return this.effective() === 'personal' ? this.status.personalReady : this.status.campusReady; }
-  request() { return { provider: this.provider() }; }
-  description() { return this.effective() === 'campus' ? '浙大校内网关 · ' + CAMPUS_NOTICE : '个人 DeepSeek API'; }
+  available() { if(this.effective() === 'local') return !!this.status.localReady; return this.effective() === 'personal' ? this.status.personalReady : this.status.campusReady; }
+  request() { return { provider: this.provider(), ...(this.effective() === 'local' ? {localModel: this.preferences().localModel || this.status.localModels?.[0]} : {}) }; }
+  description() { if(this.effective() === 'local') return '本地 Gemma · 发消息时加载，空闲 5 分钟后释放内存；对话保留在本机'; return this.effective() === 'campus' ? '浙大校内网关 · ' + CAMPUS_NOTICE : '个人 DeepSeek API'; }
 }

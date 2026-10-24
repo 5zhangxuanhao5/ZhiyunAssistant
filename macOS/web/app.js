@@ -190,7 +190,7 @@ async function refreshAIAvailability() {
 }
 function aiProviderChoices(paneKey) {
   const wrap = el("div", { class: "ai-provider-choices" });
-  const picker = select([["auto", "自动 · 优先个人 API"], ["campus", "浙大校内网关"], ["personal", "个人 DeepSeek API"]], aiConnection.provider(), value => {
+  const picker = select([["auto", "自动 · 优先个人 API"], ["campus", "浙大校内网关"], ["personal", "个人 DeepSeek API"], ["local", "本地 Gemma"]], aiConnection.provider(), value => {
     prefs.aiProvider = value;
     save("prefs.json", prefs).catch(error => toast(error.message));
     hint.textContent = aiConnection.description() + (aiConnection.effective() === "campus" ? "。" + CAMPUS_LIMITS : "");
@@ -508,9 +508,9 @@ function privacy() {
         el("p", { text: "课程、笔记、进度、收藏和离线资源只存储在本机。普通缓存清理不删除笔记和离线下载。" }),
       ]),
       el("div", { class: "privacy-grid" }, [
-        card("lock", "校园登录", "校园账号密码由浙江大学官方认证页面处理，本应用不保存密码。登录会话通过本机 WebKit 与钥匙串中的受保护快照保存和恢复；会话失效时使用学校官方认证。"),
+        card("lock", "校园登录", "校园账号密码由浙江大学官方认证页面处理，本应用不保存密码。登录会话通过本机 WebKit 与仅本机用户可读取的加密快照保存和恢复；会话失效时使用学校官方认证。"),
         card("key", "密钥", "个人 DeepSeek 与校园服务密钥保存在本机仅你本人可读的文件中，应用更新后保留；不写入普通配置，也不会出现在页面中。"),
-        card("agent", "AI 与应用助手", "只有启用 AI 时，所选课程上下文和你的问题才会发送到所选 AI 服务（浙大校内网关或个人 DeepSeek API）。应用助手会按你的指令读取必要的页面状态并操作本应用，过程可随时停止。API 费用由你的账户承担。AI 回答可能有误，请结合课堂原文判断。"),
+        card("agent", "AI 与应用助手", "只有启用 AI 时，所选课程上下文和你的问题才会发送到所选 AI 服务（浙大校内网关、个人 DeepSeek API 或本机 Gemma；本地模式的推理不上传至这些云端 AI 服务）。应用助手会按你的指令读取必要的页面状态并操作本应用，过程可随时停止。API 费用由你的账户承担。AI 回答可能有误，请结合课堂原文判断。"),
         card("home", "独立工具", "本工具独立开发，不代表学校或智云课堂运营方；只访问账号允许的课程。断网不会自动退出登录。"),
       ]),
     ]),
@@ -4278,7 +4278,7 @@ function apiSetup(key) {
       el("h3", { text: apiReady ? "API设置" : "连接 AI 助手" }),
       el("p", {
         class: "hint",
-        text: "未接入个人 API 时默认使用本机预置的浙大校内网关，仅在浙大内网环境下可用。个人 API 可从 DeepSeek 开放平台获取，费用由个人 API 账户承担。密钥保存在 macOS 钥匙串。",
+        text: "未接入个人 API 时默认使用本机预置的浙大校内网关，仅在浙大内网环境下可用。个人 API 可从 DeepSeek 开放平台获取，费用由个人 API 账户承担。密钥仅保存在本机用户可读的文件中。本地 Gemma 无需密钥，需先安装 Ollama 和 Gemma。",
       }),
       input,
       select(
@@ -4649,6 +4649,7 @@ function renderSummary() {
         el("p", { class: "hint error-text", text: summaryErrors.get(key) }),
       );
     if (
+      aiConnection.effective() !== "local" &&
       (!live || index < groups.length - 1) &&
       !summaryBusy &&
       !summaryBatch &&
@@ -4658,6 +4659,7 @@ function renderSummary() {
   }
   if (
     value &&
+    aiConnection.effective() !== "local" &&
     phase(lesson, Date.now() / 1000) !== "ended" &&
     value.provisional &&
     index < groups.length - 1 &&
@@ -6759,7 +6761,7 @@ function getGlobalAssistant() {
     else if (["auto", "rows", "columns"].includes(command)) layoutControl.preset(command);
     return { locked: layoutControl.locked, rects: layoutControl.rects.map(r => ({ ...r })) };
   });
-  registry.register("set_ai_provider", "切换已配置的AI来源，或设置个人API模型。校内模式会显示内网与OCR局限说明；不能用此操作填写密钥。", { provider: choice(["auto", "campus", "personal"]), model: choice(["deepseek-flash", "deepseek-v4-pro"]), effort:choice(["low","high","max"]) }, ["provider"], async ({ provider, model, effort }, guard) => {
+  registry.register("set_ai_provider", "切换已配置的AI来源，或设置个人API模型。校内模式会显示内网与OCR局限说明；不能用此操作填写密钥。", { provider: choice(["auto", "campus", "personal", "local"]), model: choice(["deepseek-flash", "deepseek-v4-pro"]), effort:choice(["low","high","max"]) }, ["provider"], async ({ provider, model, effort }, guard) => {
     await refreshAIAvailability(); guard();
     if (provider === "personal" && !aiConnection.status.personalReady || provider === "campus" && !aiConnection.status.campusReady) throw new Error("该来源尚未配置，请在AI设置中完成连接");
     prefs.aiProvider = provider; if (model) prefs.agentModel = model; if(effort)prefs.agentEffort=effort;await save("prefs.json", prefs); guard();

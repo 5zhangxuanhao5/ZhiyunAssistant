@@ -61,7 +61,7 @@ test('background operations read notes and clear caches without navigating',asyn
 test('privacy opens as a compact sheet with the four data topics',async t=>{
  const{app,doc}=await start(t,['privacy']);app.privacy();
  assert.equal(doc.querySelector('#modalTitle').textContent,'隐私与数据');assert.ok(doc.querySelector('.modal-shell').classList.contains('compact'));
- assert.equal(doc.querySelectorAll('.privacy-card').length,4);assert.match(doc.querySelector('.privacy-page').textContent,/不保存密码.*钥匙串.*API 费用.*断网不会自动退出登录/s);
+ assert.equal(doc.querySelectorAll('.privacy-card').length,4);assert.match(doc.querySelector('.privacy-page').textContent,/不保存密码.*加密快照.*API 费用.*断网不会自动退出登录/s);
 });
 test('a course page lists its lessons from the first to the last, upcoming ones at the end',async t=>{
  const{r,app,doc}=await start(t,['openGroup']);const rows=[lessonAt(r,7,'next'),lessonAt(r,-14,'first'),lessonAt(r,-7,'second')].map(c=>({...c,courseId:'same'}));

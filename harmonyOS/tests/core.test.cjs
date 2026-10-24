@@ -1552,7 +1552,7 @@ test('lesson shortcuts do not open another dialog beneath modal selection or dow
  for(const flag of ['aiPagePicker','settingsCustomizeOpen','lessonDownloadOpen','privacyOpen','jumpingDialogOpen']){p[flag]=true;assert.equal(p.keyboard(event),false);p[flag]=false;}assert.equal(actions,0);
 });
 test('fullscreen slide navigation respects empty-transcript skipping and updates the displayed image',()=>{
- const p=indexLogicFixture(['turnExpandedSlide']);p.groups=timeline.groupPages([slide('a',0),slide('b',20),slide('c',40)],[{id:'a-line',t:10,text:'one'},{id:'c-line',t:50,text:'three'}]);p.expandedSlideId='a';p.skipEmpty=true;p.slideZoom=2;p.selected=0;p.chooseSlide=()=>assert.fail('fullscreen must not navigate the lecture');let image;p.queueImage=s=>image=s.id;p.skipHint=()=>{};p.turnExpandedSlide(1);assert.equal(image,'c');assert.equal(p.selected,0);assert.equal(p.expandedSlideId,'c');assert.equal(p.slideZoom,1);p.turnExpandedSlide(-1);assert.equal(p.expandedSlideId,'a');
+ const p=indexLogicFixture(['turnExpandedSlide']);p.groups=timeline.groupPages([slide('a',0),slide('b',20),slide('c',40)],[{id:'a-line',t:10,text:'one'},{id:'c-line',t:50,text:'three'}]);p.expandedSlideId='a';p.skipEmpty=true;p.selected=0;p.chooseSlide=()=>assert.fail('fullscreen must not navigate the lecture');let image;p.queueImage=s=>image=s.id;p.skipHint=()=>{};p.turnExpandedSlide(1);assert.equal(image,'c');assert.equal(p.selected,0);assert.equal(p.expandedSlideId,'c');p.turnExpandedSlide(-1);assert.equal(p.expandedSlideId,'a');
 });
 
  test('opening a slide fullscreen releases editor focus so arrows reach the displayed slide',()=>{
@@ -2159,4 +2159,20 @@ test('batch calendar can navigate empty dates while permission checking continue
 
 test('question timestamp navigation retains an undo point regardless of answer length or scroll position and undo restores the prior study state',()=>{
  const p=indexLogicFixture(['rememberJump','undoStudy','clearStudyReturn']);Object.assign(p,{course,selected:0,groups:[{slide:slide('a',0),lines:[]},{slide:slide('b',120),lines:[]}],following:false,followVideo:true,followTranscript:true,noteReferenceSequence:0});let position=45;p.learningTime=()=>position;p.jumpToTime=at=>{position=at;p.selected=at>=120?1:0};const ai=componentFixture('AiPanel');ai.turns=[{question:'本节内容',answer:'讲解。'.repeat(2000),at:45}];ai.scroller={currentOffset:()=>({yOffset:100})};ai.onJump=at=>{p.rememberJump('ai');p.jumpToTime(at);ai.returnVisible=p.returnOwner==='ai'};ai.onReturn=()=>{p.undoStudy();ai.returnVisible=p.returnOwner==='ai'};ai.jumpAnswer(0,125);assert.equal(position,125);assert.equal(ai.returnVisible,true);assert.equal(p.returnPoint.at,45);assert.equal(p.returnPoint.slideId,'a');ai.clearTextSelection();ai.questionFocused();assert.equal(ai.returnVisible,true,'focus restoration must not dismiss timestamp undo');ai.onReturn();assert.equal(position,45);assert.equal(p.selected,0);assert.equal(p.followVideo,true);assert.equal(p.followTranscript,true);assert.equal(ai.returnVisible,false);
+});
+
+const { PhotoViewport } = load('model/PhotoViewport');
+test('photo pinch keeps off-centre content beneath the fingers and accumulates across gestures',()=>{
+ const p=new PhotoViewport();p.resize(1000,800);p.image(1000,800);
+ p.beginPinch(700,500);p.pinch(2,700,500);
+ assert.equal(p.scale,2);assert.equal(p.x,-200);assert.equal(p.y,-100);
+ assert.equal(500+p.x+200*p.scale,700);
+ p.beginPinch(700,500);p.pinch(1.5,730,520);
+ assert.equal(p.scale,3);assert.equal(500+p.x+200*p.scale,730);assert.equal(400+p.y+100*p.scale,520);
+});
+test('zoomed photo pans on both axes, clamps to actual letterboxed image and resets at fit',()=>{
+ const p=new PhotoViewport();p.resize(1000,800);p.image(1600,900);p.beginPinch(500,400);p.pinch(2,500,400);
+ p.beginPan();p.pan(9000,-9000);assert.equal(p.x,500);assert.equal(p.y,-162.5);
+ p.beginPinch(500,400);p.pinch(.1,500,400);assert.equal(p.scale,1);assert.equal(p.x,0);assert.equal(p.y,0);
+ p.beginPinch(500,400);p.pinch(99,500,400);assert.equal(p.scale,8);p.resize(800,1000);assert.equal(p.scale,1);
 });

@@ -1,6 +1,6 @@
 {
   "name": "zhiyun-assistant-mac",
-  "version": "1.8.4",
+  "version": "1.8.5",
   "private": true,
   "description": "Native macOS shell with shared HarmonyOS classroom models",
   "engines": {

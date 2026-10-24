@@ -108,7 +108,7 @@ final class ServiceKeyStore {
         let data=try JSONEncoder().encode(rows),temp=folder.appendingPathComponent("."+url.lastPathComponent+"."+UUID().uuidString)
         // Owner-only from creation, then an atomic rename: the file is never readable by others.
         let fd=open(temp.path,O_WRONLY|O_CREAT|O_EXCL,0o600);guard fd>=0 else{throw appError("无法保存密钥")}
-        let written=data.withUnsafeBytes{bytes in write(fd,bytes.baseAddress,bytes.count)==bytes.count};close(fd)
+        let written=data.withUnsafeBytes{bytes in Darwin.write(fd,bytes.baseAddress,bytes.count)==bytes.count};close(fd)
         guard written,rename(temp.path,url.path)==0 else{try? fm.removeItem(at:temp);throw appError("无法保存密钥")}
     }
     func access(_ name:String,_ data:Data?,remove:Bool,onError:@escaping(OSStatus)->Void,legacy:Legacy)->Data?{
@@ -238,6 +238,47 @@ func authenticationExpired(_ response:HTTPURLResponse,_ data:Data)->Bool {
     let type=response.mimeType?.lowercased() ?? "",host=response.url?.host?.lowercased() ?? "",path=response.url?.path.lowercased() ?? ""
     return type.contains("text/html") && (host != "classroom.zju.edu.cn" || path.contains("login") || data.starts(with:Array("<!DOCTYPE".utf8)) || data.starts(with:Array("<!doctype".utf8)))
 }
+// Only known read-only POST endpoints may be replayed after authentication.
+func replayableCourseRead(_ url:URL,body:String)->Bool {
+    body.isEmpty || (url.host == "classroom.zju.edu.cn" && url.path == "/courseapi/v2/course/video-and-live-promission-by-user-id")
+}
+let officialSessionURL=URL(string:"https://tgmedia.cmc.zju.edu.cn/index.php?r=auth/login&auType=&tenant_code=112&forward=https%3A%2F%2Fclassroom.zju.edu.cn%2F")!
+func bearerNeedsRenewal(_ bearer:String?,now:Date=Date())->Bool {
+    guard let bearer=bearer else{return true};let parts=bearer.split(separator:".",omittingEmptySubsequences:false)
+    guard parts.count==3 else{return false};var payload=String(parts[1]).replacingOccurrences(of:"-",with:"+").replacingOccurrences(of:"_",with:"/")
+    payload+=String(repeating:"=",count:(4-payload.count%4)%4)
+    guard let bytes=Data(base64Encoded:payload),let json=try? JSONSerialization.jsonObject(with:bytes) as? [String:Any],let expiry=json["exp"] as? Double else{return false}
+    return expiry<=now.timeIntervalSince1970+30
+}
+// Ad-hoc app updates have different Keychain partitions. Keep an encrypted,
+// owner-only session snapshot independent of the executable signature. No campus
+// password is stored. Legacy Keychain snapshots are imported silently once.
+final class SessionVault {
+    let root:URL
+    init(root:URL){self.root=root}
+    private var keyURL:URL{root.appendingPathComponent("session-key.bin")}
+    private var dataURL:URL{root.appendingPathComponent("session.sealed")}
+    private func write(_ data:Data,to url:URL)throws {
+        try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        let temp=root.appendingPathComponent("."+UUID().uuidString+".tmp")
+        let fd=open(temp.path,O_WRONLY|O_CREAT|O_EXCL,0o600);guard fd>=0 else{throw appError("无法保存登录会话")}
+        defer{close(fd);try? FileManager.default.removeItem(at:temp)}
+        let written=data.withUnsafeBytes{bytes in Darwin.write(fd,bytes.baseAddress,bytes.count)==bytes.count}
+        guard written,rename(temp.path,url.path)==0 else{throw appError("无法保存登录会话")}
+    }
+    func read()->Data? {
+        guard let key=try? Data(contentsOf:keyURL),key.count==32,let data=try? Data(contentsOf:dataURL),data.count<=3*1024*1024,let box=try? AES.GCM.SealedBox(combined:data) else{return nil}
+        return try? AES.GCM.open(box,using:SymmetricKey(data:key))
+    }
+    func save(_ data:Data)throws {
+        guard data.count<=2*1024*1024 else{throw appError("会话数据过大")}
+        let bytes:Data
+        if let existing=try? Data(contentsOf:keyURL),existing.count==32{bytes=existing}
+        else{bytes=SymmetricKey(size:.bits256).withUnsafeBytes{Data($0)};try write(bytes,to:keyURL)}
+        let box=try AES.GCM.seal(data,using:SymmetricKey(data:bytes));guard let combined=box.combined else{throw appError("无法保存登录会话")};try write(combined,to:dataURL)
+    }
+    func remove(){try? FileManager.default.removeItem(at:dataURL);try? FileManager.default.removeItem(at:keyURL)}
+}
 func requestedByteRange(_ value:String?,size:Int)throws->(start:Int,end:Int,partial:Bool){
     guard size>=0 else{throw appError("文件大小无效")};guard let value=value else{return (0,max(0,size-1),false)}
     guard value.hasPrefix("bytes="),!value.contains(","),size>0 else{throw appError("请求范围无效",code:416)}
@@ -361,6 +402,66 @@ final class Download: NSObject, URLSessionDownloadDelegate {
         completionHandler(next)
     }
 }
+// Metadata reads never load weights. Only a submitted AI request may start Ollama.
+final class LocalGemmaService {
+    private let session:URLSession
+    private var ownedServer:Process?
+    init(){let config=URLSessionConfiguration.ephemeral;config.connectionProxyDictionary=[:];config.urlCache=nil;config.httpCookieStorage=nil;session=URLSession(configuration:config)}
+    static var executable:URL? { ["/Applications/Ollama.app/Contents/Resources/ollama","/opt/homebrew/bin/ollama","/usr/local/bin/ollama"].first{FileManager.default.isExecutableFile(atPath:$0)}.map{URL(fileURLWithPath:$0)} }
+    func discover(_ done:@escaping(URL?,[String])->Void){
+        func attempt(_ ports:[Int]) {
+            guard let port=ports.first else{done(nil,[]);return}
+            let base=URL(string:"http://127.0.0.1:\(port)")!;var request=URLRequest(url:base.appendingPathComponent("api/tags"));request.timeoutInterval=2
+            session.dataTask(with:request){data,response,_ in
+                if let response=response as? HTTPURLResponse,response.statusCode==200,let data=data,let row=try? JSONSerialization.jsonObject(with:data) as? [String:Any],let models=row["models"] as? [[String:Any]] {
+                    let names=models.compactMap{$0["name"] as? String}.filter{$0.lowercased().contains("gemma")}.sorted();done(base,names)
+                }else{attempt(Array(ports.dropFirst()))}
+            }.resume()
+        }
+        attempt([11439,11434])
+    }
+    func prepare(model:String?,done:@escaping(URL?,String?,String?)->Void){
+        func select(_ base:URL?,_ models:[String]){
+            guard let base=base else{done(nil,nil,"本地 Ollama 服务未能启动，请打开 Ollama 后重试");return}
+            let selected=(model?.isEmpty==false ? model:nil) ?? models.first(where:{$0=="gemma4:31b-mlx"}) ?? models.first
+            guard let selected=selected,models.contains(selected) else{done(nil,nil,"未找到已安装的 Gemma 模型，请先在 Ollama 中安装 Gemma，并在 AI 设置中选择");return};done(base,selected,nil)
+        }
+        discover{base,models in
+            if base != nil{select(base,models);return}
+            guard let executable=Self.executable else{done(nil,nil,"尚未安装 Ollama，请先安装本地服务和 Gemma 模型");return}
+            DispatchQueue.global(qos:.utility).async{
+                let server=Process();server.executableURL=executable;server.arguments=["serve"];server.standardOutput=FileHandle.nullDevice;server.standardError=FileHandle.nullDevice
+                do{try server.run();self.ownedServer=server}catch{done(nil,nil,"无法启动本地 Ollama 服务");return}
+                func wait(_ remaining:Int){self.discover{base,models in if base != nil || remaining==0{select(base,models)}else{DispatchQueue.global(qos:.utility).asyncAfter(deadline:.now()+0.3){wait(remaining-1)}}}}
+                wait(10)
+            }
+        }
+    }
+}
+func localGemmaRequest(base:URL,model:String,messages:[[String:Any]],tools:[[String:Any]]?=nil)throws->URLRequest{
+    guard base.scheme=="http",base.host=="127.0.0.1",[11434,11439].contains(base.port ?? 0),base.path.isEmpty,model.lowercased().contains("gemma") else{throw appError("本地模型地址无效")}
+    var toolNames=[String:String]()
+    for message in messages{for call in message["tool_calls"] as? [[String:Any]] ?? []{if let id=call["id"] as? String,let fn=call["function"] as? [String:Any],let name=fn["name"] as? String{toolNames[id]=name}}}
+    let converted=try messages.map{message -> [String:Any] in
+        var row=message
+        if let parts=message["content"] as? [[String:Any]] {
+            var text=[String](),images=[String]()
+            for part in parts {
+                if let value=part["text"] as? String{text.append(value)}
+                if part["type"] as? String=="image_url",let image=part["image_url"] as? [String:Any],let url=image["url"] as? String{
+                    guard url.hasPrefix("data:image/"),let comma=url.firstIndex(of:","),url[..<comma].hasSuffix(";base64") else{throw appError("本地模型只接收本机课件图片")};images.append(String(url[url.index(after:comma)...]))
+                }
+            }
+            row["content"]=text.joined(separator:"\n");if !images.isEmpty{row["images"]=images}
+        }
+        if let calls=row["tool_calls"] as? [[String:Any]]{row["tool_calls"]=try calls.map{call -> [String:Any] in var result=call;if var function=call["function"] as? [String:Any],let arguments=function["arguments"] as? String{function["arguments"]=try JSONSerialization.jsonObject(with:Data(arguments.utf8));result["function"]=function};return result}}
+        if let id=row["tool_call_id"] as? String,let name=toolNames[id]{row["tool_name"]=name};row.removeValue(forKey:"reasoning_content");return row
+    }
+    var body:[String:Any]=["model":model,"messages":converted,"stream":true,"keep_alive":"5m","think":false,"options":["num_ctx":32768,"num_predict":4096]]
+    if let tools=tools,!tools.isEmpty{body["tools"]=tools}
+    var request=URLRequest(url:base.appendingPathComponent("api/chat"));request.httpMethod="POST";request.timeoutInterval=600;request.setValue("application/json",forHTTPHeaderField:"Content-Type");request.httpBody=try JSONSerialization.data(withJSONObject:body);return request
+}
+
 final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate, URLSessionTaskDelegate, WKUIDelegate, NSToolbarDelegate, NSMenuItemValidation {
     var window: NSWindow!, web: WKWebView!, login: NSWindow?, loginWeb: WKWebView?
     var listener: NWListener!, origin="", token=UUID().uuidString, account="guest", downloads=[String:Download](), requests=[String:URLSessionDataTask](), cancelledRequests=Set<String>(),pendingRequests=Set<String>()
@@ -374,6 +475,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     var loggingOut=false, lastWebRecovery=Date.distantPast
     var sessionNeedsResume=false
     private var latestCookieSnapshot:Data?
+    private lazy var sessionVault=SessionVault(root:root.appendingPathComponent("Session",isDirectory:true))
+    private var sessionProbeActive=false
     private var loginCompletionPending=false,loginVisitedAuthentication=false
     private var cookieRestoreStarted=false,cookieRestoreComplete=false,cookieRestoreCallbacks=[()->Void](),credentialUIAllowed=false
     private var accountGeneration=UUID()
@@ -601,7 +704,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let generation=sessionGeneration
             guard let url=view.url else{finishSession(false,generation:generation);return}
             if url.host=="classroom.zju.edu.cn",!url.path.lowercased().contains("login") {
-                DispatchQueue.main.asyncAfter(deadline:.now()+0.2){guard self.sessionWeb === view,self.sessionGeneration==generation else{return};self.store.httpCookieStore.getAllCookies{cookies in self.finishSession(campusBearer(cookies) != nil,generation:generation)}}
+                verifyResumedSession(view,generation:generation)
             }else{
                 view.evaluateJavaScript("!!document.querySelector('input[type=password]')"){value,_ in if value as? Bool == true,self.sessionWeb === view,self.sessionGeneration==generation{self.finishSession(false,generation:generation)}}
             }
@@ -613,6 +716,26 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 completeOfficialLoginIfReady(view)
             }
         }
+    }
+    func verifyResumedSession(_ view:WKWebView,generation:UUID){
+        guard sessionWeb === view,sessionGeneration==generation,!sessionProbeActive else{return};sessionProbeActive=true
+        let paths=["/userapi/v1/infosimple","/courseapi/userapi/v1/infosimple"]
+        func probe(_ index:Int){
+            guard self.sessionWeb === view,self.sessionGeneration==generation,!self.loggingOut else{return}
+            if index==paths.count{self.finishSession(true,generation:generation);return}
+            let url=URL(string:"https://classroom.zju.edu.cn"+paths[index])!
+            self.cookieRequest(url){request in
+                self.network.dataTask(with:request){data,response,error in DispatchQueue.main.async {
+                    guard self.sessionWeb === view,self.sessionGeneration==generation else{return}
+                    guard error==nil,let response=response as? HTTPURLResponse,let data=data,(200..<300).contains(response.statusCode),!authenticationExpired(response,data),let json=try? JSONSerialization.jsonObject(with:data) as? [String:Any] else{self.diagnostic("Session service verification failed "+paths[index]);self.finishSession(false,generation:generation);return}
+                    let params=json["params"] as? [String:Any],code=json["code"] as? Int
+                    guard index != 0 || params?["id"] != nil else{self.finishSession(false,generation:generation);return}
+                    guard code==nil || code==0 || code==200 else{self.finishSession(false,generation:generation);return}
+                    self.absorbCookies(response){probe(index+1)}
+                }}.resume()
+            }
+        }
+        probe(0)
     }
     func completeOfficialLoginIfReady(_ view:WKWebView,attempt:Int=0){
         guard view === loginWeb,!loggingOut,!loginCompletionPending,view.url?.host=="classroom.zju.edu.cn",!(view.url?.path.lowercased().contains("login") ?? true) else{return}
@@ -718,7 +841,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             let group=DispatchGroup();for cookie in cookies{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}}
             group.notify(queue:.main){self.storageQueue.async{
                 let error={(status:OSStatus) in self.diagnostic("Session keychain removal failed: "+String(status))}
-                _=self.sessionKeychain(persistedSessionCredential,remove:true,onError:error);_=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error);self.credentialCache.invalidate();self.latestCookieSnapshot=nil;try? self.fm.removeItem(at:self.profileIdentityURL())
+                _=self.sessionKeychain(persistedSessionCredential,remove:true,onError:error);_=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error);self.credentialCache.invalidate();self.latestCookieSnapshot=nil;self.sessionVault.remove();try? self.fm.removeItem(at:self.profileIdentityURL())
                 DispatchQueue.main.async{self.account="guest";self.reply(id,true)}
             }}
         }
@@ -728,16 +851,18 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         let finish={self.cookieRestoreComplete=true;let callbacks=self.cookieRestoreCallbacks;self.cookieRestoreCallbacks.removeAll();callbacks.forEach{$0()}}
         store.httpCookieStore.getAllCookies{existing in
             if self.hasLogoutMarker(){let group=DispatchGroup();for cookie in existing{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}};group.notify(queue:.main){self.sessionNeedsResume=false;finish()};return}
-            if !self.hasLogoutMarker(),campusBearer(existing) != nil{self.sessionNeedsResume=false;self.persistCookies{finish()};return}
             self.storageQueue.async{
-                let current=self.hasLogoutMarker() ? nil:self.sessionKeychain(persistedSessionCredential)
-                let data=current ?? (self.hasLogoutMarker() ? Data():(self.sessionKeychain("cookies") ?? Data()))
-                self.latestCookieSnapshot=current;DispatchQueue.main.async{self.restoreCookies(from:data){finish()}}
+                let current=self.sessionVault.read() ?? self.sessionKeychain(persistedSessionCredential)
+                let data=current ?? (self.sessionKeychain("cookies") ?? Data())
+                // Existing WebKit cookies win, but restore missing session-only SSO
+                // cookies even when a classroom token already exists.
+                let saved=decodedCookies(data).filter{candidate in !existing.contains{$0.name==candidate.name && $0.domain==candidate.domain && $0.path==candidate.path}}
+                DispatchQueue.main.async{self.installCookies(saved){self.sessionNeedsResume=bearerNeedsRenewal(campusBearer(existing+saved));self.persistCookies{finish()}}}
             }
         }
     }
     func restoreCookies(from data:Data,done:@escaping()->Void){
-        let cookies=hasLogoutMarker() ? []:decodedCookies(data);sessionNeedsResume = !cookies.isEmpty && campusBearer(cookies)==nil;installCookies(cookies){self.cookieRestoreComplete=true;done()}
+        let cookies=hasLogoutMarker() ? []:decodedCookies(data);sessionNeedsResume = bearerNeedsRenewal(campusBearer(cookies));installCookies(cookies){self.cookieRestoreComplete=true;done()}
     }
     func persistCookies(_ done:(()->Void)?=nil){
         #if NATIVE_CONTRACT_TESTS
@@ -751,7 +876,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             guard !self.loggingOut,generation==self.accountGeneration,let data=try? encodedCookies(cookies),!cookies.isEmpty else{done?();return}
             self.storageQueue.async{
                 guard !self.loggingOut,generation==self.accountGeneration,!self.hasLogoutMarker() else{DispatchQueue.main.async{done?()};return}
-                if self.latestCookieSnapshot != data, self.sessionKeychain(persistedSessionCredential,data) != nil{self.latestCookieSnapshot=data}
+                if self.latestCookieSnapshot != data{do{try self.sessionVault.save(data);self.latestCookieSnapshot=data}catch{self.diagnostic("Session snapshot save failed")}}
                 DispatchQueue.main.async{done?()}
             }
         }
@@ -775,14 +900,14 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         if !sessionCallbacks.isEmpty{sessionCallbacks.append(done);return}
         if !force && !sessionNeedsResume{done(true);return}
         if Date().timeIntervalSince(sessionLastAttempt)<15{done(false);return}
-        sessionCallbacks.append(done);sessionNeedsResume=false;sessionLastAttempt=Date();let generation=UUID();sessionGeneration=generation
+        sessionCallbacks.append(done);sessionNeedsResume=false;sessionProbeActive=false;sessionLastAttempt=Date();let generation=UUID();sessionGeneration=generation
         let timeout=DispatchWorkItem{self.finishSession(false,generation:generation)};sessionDeadline=timeout;DispatchQueue.main.asyncAfter(deadline:.now()+10,execute:timeout)
         #if NATIVE_CONTRACT_TESTS
         if let bootstrap=testSessionBootstrap{bootstrap{ready in self.finishSession(ready,generation:generation)};return}
         #endif
         let config=WKWebViewConfiguration();config.websiteDataStore=store;config.preferences.javaScriptCanOpenWindowsAutomatically=false
         let view=WKWebView(frame:NSRect(x:0,y:0,width:800,height:600),configuration:config);view.navigationDelegate=self;view.uiDelegate=self;sessionWeb=view
-        view.load(URLRequest(url:URL(string:"https://classroom.zju.edu.cn/")!,cachePolicy:.reloadIgnoringLocalCacheData,timeoutInterval:8))
+        view.load(URLRequest(url:officialSessionURL,cachePolicy:.reloadIgnoringLocalCacheData,timeoutInterval:8))
     }
     private func finishSession(_ ready:Bool,generation:UUID){
         guard sessionGeneration==generation,!sessionCallbacks.isEmpty else{return};sessionDeadline?.cancel();sessionDeadline=nil;sessionWeb?.stopLoading();sessionWeb?.navigationDelegate=nil;sessionWeb?.uiDelegate=nil;sessionWeb=nil
@@ -790,7 +915,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         if ready{persistCookies()};callbacks.forEach{$0(ready && !loggingOut)}
     }
     func requiresSessionRecovery(_ done:@escaping(Bool)->Void){
-        storageQueue.async{let protected=self.credentialCache.requiresAuthorization([persistedSessionCredential,"cookies"])
+        storageQueue.async{let protected=self.sessionVault.read()==nil && self.credentialCache.requiresAuthorization([persistedSessionCredential,"cookies"])
             DispatchQueue.main.async{
                 guard protected else{done(false);return}
                 // Persistent storage permission is not online course permission. A
@@ -809,8 +934,9 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 self.pendingRequests.insert(id)
                 self.absorbCookies(response){
                     self.pendingRequests.remove(id);guard self.cancelledRequests.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
-                    let expired=authenticationExpired(response,data)
-                    if expired && body.isEmpty && !retried {
+                    let bearer=request.value(forHTTPHeaderField:"Authorization").map{String($0.dropFirst(7))}
+                    let expired=authenticationExpired(response,data) || (response.statusCode==403 && bearerNeedsRenewal(bearer))
+                    if expired && replayableCourseRead(url,body:body) && !retried {
                         self.pendingRequests.insert(id)
                         self.cookieRequest(url){current in
                             let retry: (Bool)->Void = {ready in
@@ -1045,6 +1171,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                     }catch{self.reply(id,nil,userError(error))}
                 }
             }
+        case "localAIStatus":
+            localGemma.discover{base,models in self.reply(id,["localReady":base != nil || LocalGemmaService.executable != nil,"localModels":models,"runningService":base != nil,"idleMinutes":5])}
         case "ai": startAI(id,p)
         case "cancelAI": if let key=p["id"] as? String { if pendingAI.contains(key){cancelledAI.insert(key)};streams[key]?.session.invalidateAndCancel();ocrOperations[key]?.invalidateAndCancel() };reply(id,true)
         default: reply(id,nil,"未知操作")
@@ -1060,7 +1188,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             DispatchQueue.main.async{
                 guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
                 self.storageQueue.async{
-                    let data=self.hasLogoutMarker() ? nil:self.sessionKeychain(persistedSessionCredential,allowUI:true)
+                    let data=self.hasLogoutMarker() ? nil:(self.sessionVault.read() ?? self.sessionKeychain(persistedSessionCredential,allowUI:true))
                     DispatchQueue.main.async{
                         guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
                         let resume={self.resumeOfficialSession(force:true){ready in
@@ -1069,7 +1197,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                         }}
                         if let data=data,!data.isEmpty{
                             self.restoreCookies(from:data){
-                                if campusBearer(decodedCookies(data)) != nil{self.reply(id,["ready":true,"authorizationRequired":false])}else{resume()}
+                                resume()
                             }
                         }else{resume()}
                     }
@@ -1080,8 +1208,23 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func startAI(_ id:String,_ params:[String:Any]){
         guard let messages=params["messages"] as? [[String:Any]],messages.count<(params["purpose"] as? String=="agent" ? 300:100) else{reply(id,nil,"问答内容无效");return}
         let provider=params["provider"] as? String ?? "auto"
-        guard ["auto","personal","campus"].contains(provider) else{reply(id,nil,"AI来源无效");return}
+        guard ["auto","personal","campus","local"].contains(provider) else{reply(id,nil,"AI来源无效");return}
         let owner=account,generation=accountGeneration;pendingAI.insert(id)
+        if provider=="local" {
+            event("aiStatus",["id":id,"message":"正在准备本地 Gemma…"])
+            localGemma.prepare(model:params["localModel"] as? String){base,model,error in DispatchQueue.main.async {
+                self.pendingAI.remove(id);guard !self.loggingOut,owner==self.account,generation==self.accountGeneration,self.cancelledAI.remove(id)==nil else{self.reply(id,nil,"请求已取消");return}
+                guard let base=base,let model=model else{self.reply(id,nil,error ?? "本地模型不可用");return}
+                do {
+                    let request=try localGemmaRequest(base:base,model:model,messages:messages,tools:params["tools"] as? [[String:Any]])
+                    #if NATIVE_CONTRACT_TESTS
+                    if let probe=self.testAIRequest{probe(request);self.reply(id,["answer":"synthetic","calls":[]]);return}
+                    #endif
+                    let stream=AIStream(request,event:{text in self.event("ai",["id":id,"delta":text])},done:{value,error in DispatchQueue.main.async{self.streams.removeValue(forKey:id);self.reply(id,value,error.map{"本地 Gemma："+$0})}});self.streams[id]=stream
+                }catch{self.reply(id,nil,userError(error))}
+            }}
+            return
+        }
         storageQueue.async{
             let personal=provider=="campus" ? "":String(data:self.sessionKeychain(owner+"-deepseek") ?? Data(),encoding:.utf8) ?? ""
             let campus=provider=="campus" || provider=="auto" && personal.isEmpty
@@ -1129,6 +1272,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         let stream=AIStream(req,event:{ value in self.event("ai",["id":id,"delta":value]) },done:{ value,error in DispatchQueue.main.async { self.streams.removeValue(forKey:id); self.reply(id,value,error.map{campus ? "校园网关："+$0+"。仅在浙大内网环境下可用":$0}) } }); streams[id]=stream
     }
     var streams=[String:AIStream]()
+    private let localGemma=LocalGemmaService()
     func serverFailure(_ message:String){
         let alert=NSAlert();alert.messageText="无法启动本机服务";alert.informativeText=message;alert.addButton(withTitle:"退出")
         alert.beginSheetModal(for:window){_ in NSApp.terminate(nil)}
@@ -1294,13 +1438,23 @@ func aiHTTPFailure(_ status:Int)->String? {
     }
 }
 final class AIStream:NSObject,URLSessionDataDelegate {
-    var session:URLSession!,buffer=Data(),status=0,answer="",reasoning="",finishReason:String?,calls=[Int:[String:Any]](),usage=[String:Any]();let event:(String)->Void,done:([String:Any],String?)->Void
-    init(_ request:URLRequest,start:Bool=true,event:@escaping(String)->Void,done:@escaping([String:Any],String?)->Void) {self.event=event;self.done=done;super.init();let c=URLSessionConfiguration.ephemeral;c.timeoutIntervalForRequest=120;session=URLSession(configuration:c,delegate:self,delegateQueue:nil);if start{session.dataTask(with:request).resume()}}
+    var session:URLSession!,buffer=Data(),status=0,answer="",reasoning="",serviceError:String?,finishReason:String?,calls=[Int:[String:Any]](),usage=[String:Any]();let event:(String)->Void,done:([String:Any],String?)->Void
+    init(_ request:URLRequest,start:Bool=true,event:@escaping(String)->Void,done:@escaping([String:Any],String?)->Void) {self.event=event;self.done=done;super.init();let c=URLSessionConfiguration.ephemeral;c.timeoutIntervalForRequest=request.url?.host=="127.0.0.1" ? 600:120;c.httpCookieStorage=nil;if request.url?.host=="127.0.0.1"{c.connectionProxyDictionary=[:]};session=URLSession(configuration:c,delegate:self,delegateQueue:nil);if start{session.dataTask(with:request).resume()}}
     func urlSession(_ session:URLSession,dataTask:URLSessionDataTask,didReceive response:URLResponse,completionHandler:@escaping(URLSession.ResponseDisposition)->Void){status=(response as? HTTPURLResponse)?.statusCode ?? 0;completionHandler(.allow)}
     func consume(_ data:Data) {
         buffer.append(data)
         while let range=buffer.range(of:Data([10])) {
             let line=String(data:buffer[..<range.lowerBound],encoding:.utf8) ?? "";buffer.removeSubrange(..<range.upperBound)
+            if line.hasPrefix("{"),let bytes=line.data(using:.utf8),let row=try? JSONSerialization.jsonObject(with:bytes) as? [String:Any] {
+                if let error=row["error"] as? String{serviceError=error}
+                if let message=row["message"] as? [String:Any] {
+                    if let content=message["content"] as? String{answer+=content;event(content)}
+                    if let thinking=message["thinking"] as? String{reasoning+=thinking}
+                    if let tools=message["tool_calls"] as? [[String:Any]]{for tool in tools{guard var function=tool["function"] as? [String:Any] else{continue};if let arguments=function["arguments"],!(arguments is String){function["arguments"]=String(data:(try? JSONSerialization.data(withJSONObject:arguments)) ?? Data("{}".utf8),encoding:.utf8) ?? "{}"};let i=calls.count;calls[i]=["id":tool["id"] as? String ?? "local-call-\(i)","type":"function","function":function]}}
+                }
+                if row["done"] as? Bool==true{finishReason=row["done_reason"] as? String ?? "stop";usage=["prompt_tokens":row["prompt_eval_count"] as? Int ?? 0,"completion_tokens":row["eval_count"] as? Int ?? 0]}
+                continue
+            }
             guard line.hasPrefix("data:"),let value=line.dropFirst(5).trimmingCharacters(in:.whitespacesAndNewlines).data(using:.utf8),let row=try? JSONSerialization.jsonObject(with:value) as? [String:Any] else{continue}
             if let u=row["usage"] as? [String:Any]{usage=u}
             guard let choices=row["choices"] as? [[String:Any]],let first=choices.first else{continue}
@@ -1318,7 +1472,7 @@ final class AIStream:NSObject,URLSessionDataDelegate {
     }
     func result()->[String:Any]{var value:[String:Any]=["answer":answer,"calls":calls.keys.sorted().compactMap{calls[$0]},"usage":usage,"reasoning_content":reasoning];if let reason=finishReason{value["finish_reason"]=reason};return value}
     func urlSession(_ session:URLSession,dataTask:URLSessionDataTask,didReceive data:Data){consume(data)}
-    func urlSession(_ session:URLSession,task:URLSessionTask,didCompleteWithError error:Error?){if !buffer.isEmpty{consume(Data([10]))};done(result(),error.map(aiNetworkFailure) ?? aiHTTPFailure(status));session.finishTasksAndInvalidate()}
+    func urlSession(_ session:URLSession,task:URLSessionTask,didCompleteWithError error:Error?){if !buffer.isEmpty{consume(Data([10]))};done(result(),error.map(aiNetworkFailure) ?? serviceError ?? aiHTTPFailure(status));session.finishTasksAndInvalidate()}
 }
 
 let application=NSApplication.shared
